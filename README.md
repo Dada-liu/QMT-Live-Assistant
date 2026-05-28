@@ -1,6 +1,6 @@
 # QMT Live Assistant
 
-基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。Python 服务器代码参考 `qka` 项目，UI 设计采用 Coinbase 风格。
+基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。Python 服务器代码参考 `qka` 项目，UI 设计采用 Coinbase 网站的风格。
 
 ## 功能
 
@@ -17,7 +17,7 @@
 
 - **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK
 - **前端**: 原生 HTML + CSS + JS（ES Module）
-- **设计**: Coinbase 设计系统
+- **设计**: Coinbase 设计风格
 
 ## 项目结构
 
@@ -54,6 +54,8 @@ QMT-live-assistant/
 ```
 
 ## 安装
+
+前提：安装了 python 环境和 QMT
 
 ```bash
 pip install -r requirements.txt

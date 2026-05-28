@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QMT Live Assistant</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="top-nav">
+    <div class="top-nav-logo">
+      <span class="logo-dot"></span>
+      QMT Live Assistant
+    </div>
+    <ul class="top-nav-links">
+      <li><a href="#account" class="active">账号监控</a></li>
+      <li><a href="#config">配置</a></li>
+      <li><a href="#converter">工具</a></li>
+    </ul>
+    <button class="theme-toggle" id="theme-toggle" title="切换主题">🌙</button>
+  </header>
+
+  <main class="main-content">
+
+    <!-- 账号监控 - 空状态 -->
+    <section id="account-empty" class="section">
+      <div class="card account-empty-card">
+        <div class="account-empty-icon">📡</div>
+        <h3 class="account-empty-title">未连接 QMT 服务器</h3>
+        <p class="account-empty-desc">请先配置并启动服务器，即可在此查看账户资产与交易信号。</p>
+        <button class="btn btn-primary" id="btn-goto-config">前往配置</button>
+      </div>
+    </section>
+
+    <!-- 服务器配置 -->
+    <section id="config" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">服务器配置</span>
+        <h2 class="section-title">连接 miniQMT</h2>
+        <p class="section-desc">填写券商账户和 QMT 路径信息，启动本地交易服务器。</p>
+      </div>
+      <div class="card">
+        <form id="config-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="account-id">券商账户ID</label>
+              <input class="form-input" type="text" id="account-id" name="account_id" placeholder="例如：1234567890" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="qmt-path">miniQMT 路径</label>
+              <input class="form-input" type="text" id="qmt-path" name="qmt_path" placeholder="例如：C:\国金QMT交易端模拟\userdata_mini" required>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="host">服务器地址</label>
+              <input class="form-input" type="text" id="host" name="host" value="0.0.0.0" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="port">服务器端口</label>
+              <input class="form-input" type="number" id="port" name="port" value="8000" required>
+            </div>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" type="submit" id="btn-start">启动服务器</button>
+            <button class="btn btn-secondary" type="button" id="btn-stop" disabled>停止服务器</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- 服务器信息 -->
+    <section id="server-info" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">服务器信息</span>
+        <h2 class="section-title">运行状态</h2>
+      </div>
+      <div class="card">
+        <div class="server-info-grid" id="server-info-grid">
+          <!-- dynamically filled -->
+        </div>
+        <div class="token-display" style="margin-top: var(--spacing-base);">
+          <span class="server-info-label" style="margin-bottom:0;white-space:nowrap;">访问 Token：</span>
+          <span class="token-value" id="token-display">--</span>
+          <button class="btn btn-secondary" id="btn-copy-token" style="padding:6px 14px;height:32px;font-size:13px;">复制</button>
+        </div>
+        <div class="btn-group" style="margin-top: var(--spacing-base);">
+          <button class="btn btn-primary" id="btn-test-connection">测试连接</button>
+        </div>
+        <div id="connection-result" class="connection-result hidden"></div>
+      </div>
+    </section>
+
+    <!-- 账户仪表板 -->
+    <section id="dashboard" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">账户仪表板</span>
+        <h2 class="section-title">资产概览</h2>
+      </div>
+      <div class="card-grid card-grid-4">
+        <div class="card dashboard-card">
+          <div class="dashboard-card-label">可用资金</div>
+          <div class="dashboard-card-value" id="dash-cash">--</div>
+        </div>
+        <div class="card dashboard-card">
+          <div class="dashboard-card-label">持仓市值</div>
+          <div class="dashboard-card-value" id="dash-market-value">--</div>
+        </div>
+        <div class="card dashboard-card">
+          <div class="dashboard-card-label">总资产</div>
+          <div class="dashboard-card-value" id="dash-total-asset">--</div>
+        </div>
+        <div class="card dashboard-card">
+          <div class="dashboard-card-label">当日盈亏</div>
+          <div class="dashboard-card-value" id="dash-daily-profit">--</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 信号监控 -->
+    <section id="monitor" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">信号监控</span>
+        <h2 class="section-title">实时信号</h2>
+        <p class="section-desc">监控远程策略服务器发送的交易信号和 miniQMT 回调事件。</p>
+      </div>
+      <div class="card">
+        <div class="btn-group" style="margin-bottom: var(--spacing-base);">
+          <button class="btn btn-secondary" id="btn-clear-signals">清空记录</button>
+        </div>
+        <div class="signal-list" id="signal-list">
+          <div class="signal-empty">暂无信号记录，启动服务器并测试连接后将在此显示。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 聚宽代码转换 -->
+    <section id="converter" class="section">
+      <div class="section-header">
+        <span class="section-label">代码转换</span>
+        <h2 class="section-title">聚宽 ↔ QMT 格式转换</h2>
+        <p class="section-desc">在聚宽代码格式（000001.XSHE）和 QMT 格式（000001.SZ）之间互相转换。</p>
+      </div>
+      <div class="card">
+        <div class="converter-layout">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">聚宽格式</label>
+            <input class="form-input" type="text" id="jq-code" placeholder="000001.XSHE">
+          </div>
+          <div class="converter-arrow">⇄</div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">QMT 格式</label>
+            <input class="form-input" type="text" id="qmt-code" placeholder="000001.SZ">
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <p class="footer-text">QMT Live Assistant &copy; 2026</p>
+  </footer>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

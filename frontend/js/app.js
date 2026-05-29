@@ -1,9 +1,10 @@
 import { UI } from './ui.js';
 import { api } from './api.js';
-import { getState, setState } from './state.js';
+import { getState, setState, getStoredToken } from './state.js';
 import { initConfigPanel } from './config-panel.js';
 import { initMonitor, startPolling, stopPolling, startStatusCheck, stopStatusCheck } from './monitor.js';
-import { initDashboard } from './dashboard.js';
+import { initDashboard, refreshDashboard } from './dashboard.js';
+import { Toast } from './toast.js';
 
 async function initApp() {
     UI.initTheme();
@@ -21,18 +22,50 @@ async function initApp() {
     document.getElementById('btn-goto-config').addEventListener('click', () => {
         UI.switchTab('config');
     });
+
+    document.getElementById('btn-connect-token').addEventListener('click', async () => {
+        const tokenInput = document.getElementById('connect-token-input');
+        const token = tokenInput.value.trim();
+        if (!token) {
+            Toast.warning('请输入 Token');
+            return;
+        }
+        try {
+            await api.testConnection(token);
+            setState('token', token);
+            setState('serverRunning', true);
+            UI.updateServerInfo({ running: true });
+            UI.disableForm(true);
+            UI.showSection('server-info');
+            UI.showSection('dashboard');
+            UI.showSection('monitor');
+            refreshDashboard();
+            startPolling();
+            Toast.success('连接成功！');
+        } catch (error) {
+            Toast.error(`连接失败: ${error.message}`);
+        }
+    });
 }
 
 async function checkServerStatus() {
+    const storedToken = getStoredToken();
     try {
         const result = await api.getServerInfo();
         if (result.data && result.data.running) {
             setState('serverRunning', true);
-            setState('token', result.data.token);
             UI.updateServerInfo(result.data);
             UI.disableForm(true);
-            startPolling();
-            UI.switchTab('account');
+
+            if (storedToken) {
+                setState('token', storedToken);
+                refreshDashboard();
+                startPolling();
+                UI.switchTab('account');
+            } else {
+                UI.switchTab('account');
+                UI.showConnectPrompt();
+            }
         }
     } catch (error) {
         // Server not running, normal state

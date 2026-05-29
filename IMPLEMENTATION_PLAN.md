@@ -210,10 +210,10 @@ graph TB
 ```mermaid
 graph LR
     subgraph "管理 API (main.py)"
-        START["POST /api/start-server"]
-        STOP["POST /api/stop-server"]
-        INFO["GET /api/server-info"]
-        HEALTH["GET /health"]
+        START["POST /api/start-server<br/>(公开，返回 Token)"]
+        STOP["POST /api/stop-server<br/>(需 X-Token)"]
+        INFO["GET /api/server-info<br/>(公开，不含 Token)"]
+        HEALTH["GET /health<br/>(公开)"]
     end
 
     subgraph "静态路由 (server.py)"
@@ -288,7 +288,7 @@ graph LR
 ### 6. `backend/server.py` — 核心服务器（qka 模式）
 `QMTServer` 类：
 - `__init__(self, account_id, mini_qmt_path, host, port, token=None)`
-- `generate_token()` — SHA256(MAC地址) 生成确定性 token
+- `generate_token()` — `secrets.token_hex(32)` 随机生成 64 字符安全 Token
 - `verify_token(x_token)` — FastAPI 依赖，校验 X-Token header
 - `init_trader()` — 调用 create_trader，设置 self.trader, self.account, self.callback
 - `convert_to_dict(obj)` — 递归转换 XtQuant 返回对象为 dict
@@ -316,8 +316,8 @@ graph LR
 - 创建 FastAPI app，配置 CORS 中间件
 - 挂载 `../frontend/` 到静态文件
 - `GET /` 提供 index.html
-- 管理 API：`POST /api/start-server`, `POST /api/stop-server`, `GET /api/server-info`
-- 后台线程运行 QMTServer
+- `verify_server_token()` — 全局 Token 校验依赖，用于 `/api/stop-server`
+- 管理 API：`POST /api/start-server`（返回 Token）、`POST /api/stop-server`（需 X-Token）、`GET /api/server-info`（不含 Token）
 - CLI 入口：argparse 支持 --account --qmt-path --host --port --token
 
 ### 9. `backend/mock_xtquant/__init__.py` — Mock 层
@@ -354,9 +354,11 @@ graph LR
 
 ### JS 模块设计
 
-**`state.js`** — 全局状态
+**`state.js`** — 全局状态 + Token 持久化
 ```
 serverRunning, token, serverInfo, signals[], theme, pollingInterval
+getStoredToken() — 从 sessionStorage 读取 Token
+setState('token', v) — 自动同步到 sessionStorage
 ```
 
 **`api.js`** — API 客户端

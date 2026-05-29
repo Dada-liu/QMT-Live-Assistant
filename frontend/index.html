@@ -28,10 +28,21 @@
     <!-- 账号监控 - 空状态 -->
     <section id="account-empty" class="section">
       <div class="card account-empty-card">
-        <div class="account-empty-icon">📡</div>
-        <h3 class="account-empty-title">未连接 QMT 服务器</h3>
-        <p class="account-empty-desc">请先配置并启动服务器，即可在此查看账户资产与交易信号。</p>
-        <button class="btn btn-primary" id="btn-goto-config">前往配置</button>
+        <div id="account-empty-content">
+          <div class="account-empty-icon">📡</div>
+          <h3 class="account-empty-title">未连接 QMT 服务器</h3>
+          <p class="account-empty-desc">请先配置并启动服务器，即可在此查看账户资产与交易信号。</p>
+          <button class="btn btn-primary" id="btn-goto-config">前往配置</button>
+        </div>
+        <div id="account-connect" class="hidden">
+          <div class="account-empty-icon">🔑</div>
+          <h3 class="account-empty-title">服务器已运行</h3>
+          <p class="account-empty-desc">输入 Token 以连接到正在运行的 QMT 服务器。</p>
+          <div class="connect-token-form">
+            <input class="form-input" type="text" id="connect-token-input" placeholder="请输入服务器 Token">
+            <button class="btn btn-primary" id="btn-connect-token">连接</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -43,7 +54,7 @@
         <p class="section-desc">填写券商账户和 QMT 路径信息，启动本地交易服务器。</p>
       </div>
       <div class="card">
-        <form id="config-form">
+        <form id="config-form" novalidate>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label" for="account-id">券商账户ID</label>
@@ -90,7 +101,6 @@
         <div class="btn-group" style="margin-top: var(--spacing-base);">
           <button class="btn btn-primary" id="btn-test-connection">测试连接</button>
         </div>
-        <div id="connection-result" class="connection-result hidden"></div>
       </div>
     </section>
 
@@ -165,6 +175,7 @@
     <p class="footer-text">QMT Live Assistant &copy; 2026</p>
   </footer>
 
+  <div id="toast-container"></div>
   <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

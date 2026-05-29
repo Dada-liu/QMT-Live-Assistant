@@ -11,7 +11,7 @@
 - 实时信号监控面板
 - 聚宽格式 ↔ QMT 格式代码转换
 - 亮/暗双主题切换
-- Token 认证保护所有 API 端点
+- 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
 
 ## 技术栈
 
@@ -87,21 +87,20 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 
 ## API 参考
 
-### 管理 API（仅前端模式）
+### 管理 API
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查 |
-| GET | `/api/server-info` | 服务器状态 |
-| POST | `/api/start-server` | 启动服务器 |
-| POST | `/api/stop-server` | 停止服务器 |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/health` | 无 | 健康检查 |
+| GET | `/api/server-info` | 无 | 服务器状态（不含 Token） |
+| POST | `/api/start-server` | 无 | 启动服务器，返回 Token |
+| POST | `/api/stop-server` | X-Token | 停止服务器 |
 
-### 交易 API（需要 X-Token）
+### 交易 API（需要 X-Token 头）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/test-connection` | 测试连接，返回资产数据 |
-| GET | `/api/server-status` | 交易服务器状态 |
 | GET | `/api/account-asset` | 账户资产 |
 | GET | `/api/signals` | 信号历史 |
 | POST | `/api/convert/jq-to-qmt` | 聚宽→QMT 转换 |
@@ -134,6 +133,14 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
   "strategy_name": "momentum-v1"
 }
 ```
+
+## Token 安全机制
+
+- Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同
+- 前端通过 Session Storage 存储 Token（页面刷新不丢失，关闭标签页即清除）
+- `/api/server-info` 不再返回 Token，仅在 `/api/start-server` 响应中返回一次
+- `/api/stop-server` 需要 X-Token 鉴权
+- 页面加载时若服务器在运行但无可用的 Token，需手动输入 Token 连接
 
 ## 运行测试
 

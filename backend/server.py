@@ -1,12 +1,11 @@
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 import inspect
+import secrets
 from typing import Any
 from collections import deque
 from backend.qmt_client import create_trader
 import uvicorn
-import uuid
-import hashlib
 
 
 class QMTServer:
@@ -27,10 +26,9 @@ class QMTServer:
         print(f"\n授权Token: {self.token}\n")
 
     def generate_token(self) -> str:
-        mac = uuid.getnode()
-        mac_str = str(mac)
-        token = hashlib.sha256(mac_str.encode()).hexdigest()
-        return token
+        secets_token = secrets.token_hex(32)
+        print("生成新的授权Token: " + secets_token)
+        return secets_token
 
     async def verify_token(self, x_token: str = Header(...)):
         if x_token != self.token:

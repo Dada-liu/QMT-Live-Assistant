@@ -1,19 +1,6 @@
-import { getState, setState } from './state.js';
+import { getState, setState, getStoredToken } from './state.js';
 
 export const UI = {
-    showMessage(elementId, text, type) {
-        const el = document.getElementById(elementId);
-        if (!el) return;
-        el.textContent = text;
-        el.className = `connection-result ${type}`;
-        el.classList.remove('hidden');
-    },
-
-    clearMessage(elementId) {
-        const el = document.getElementById(elementId);
-        if (!el) return;
-        el.classList.add('hidden');
-    },
 
     updateServerInfo(data) {
         const grid = document.getElementById('server-info-grid');
@@ -41,9 +28,10 @@ export const UI = {
           </div>
         `;
 
-        if (data.token) {
-            document.getElementById('token-display').textContent = data.token;
-            setState('token', data.token);
+        const storedToken = data.token || getStoredToken();
+        if (storedToken) {
+            document.getElementById('token-display').textContent = storedToken;
+            if (data.token) setState('token', data.token);
         }
     },
 
@@ -52,7 +40,6 @@ export const UI = {
         if (grid) grid.innerHTML = '';
         const tokenEl = document.getElementById('token-display');
         if (tokenEl) tokenEl.textContent = '--';
-        this.clearMessage('connection-result');
         setState('token', null);
         setState('signals', []);
         this.renderSignals();
@@ -184,6 +171,16 @@ export const UI = {
         setState('theme', saved);
     },
 
+    showConnectPrompt() {
+        document.getElementById('account-empty-content').classList.add('hidden');
+        document.getElementById('account-connect').classList.remove('hidden');
+    },
+
+    hideConnectPrompt() {
+        document.getElementById('account-empty-content').classList.remove('hidden');
+        document.getElementById('account-connect').classList.add('hidden');
+    },
+
     showSection(sectionId) {
         document.getElementById(sectionId).classList.remove('hidden');
     },
@@ -200,10 +197,17 @@ export const UI = {
         switch (tabName) {
             case 'account':
                 if (getState('serverRunning')) {
-                    this.showSection('dashboard');
-                    this.showSection('monitor');
+                    if (getStoredToken()) {
+                        this.showSection('dashboard');
+                        this.showSection('monitor');
+                        this.hideConnectPrompt();
+                    } else {
+                        this.showSection('account-empty');
+                        this.showConnectPrompt();
+                    }
                 } else {
                     this.showSection('account-empty');
+                    this.hideConnectPrompt();
                 }
                 break;
             case 'config':

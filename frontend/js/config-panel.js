@@ -2,6 +2,8 @@ import { api } from './api.js';
 import { UI } from './ui.js';
 import { getState, setState } from './state.js';
 import { startPolling, stopPolling } from './monitor.js';
+import { refreshDashboard } from './dashboard.js';
+import { Toast } from './toast.js';
 
 export function initConfigPanel() {
     const form = document.getElementById('config-form');
@@ -18,15 +20,13 @@ export function initConfigPanel() {
         };
 
         if (!config.account_id) {
-            alert('请输入券商账户ID');
+            Toast.warning('请输入券商账户ID');
             return;
         }
         if (!config.qmt_path) {
-            alert('请输入miniQMT路径');
+            Toast.warning('请输入miniQMT路径');
             return;
         }
-
-        UI.clearMessage('connection-result');
 
         try {
             const result = await api.startServer(config);
@@ -37,11 +37,12 @@ export function initConfigPanel() {
             setState('serverRunning', true);
             setState('token', data.token);
 
-            UI.showMessage('connection-result', '服务器启动成功！', 'success');
+            Toast.success('服务器启动成功！');
             UI.switchTab('account');
+            refreshDashboard();
             startPolling();
         } catch (error) {
-            UI.showMessage('connection-result', `启动失败: ${error.message}`, 'error');
+            Toast.error(`启动失败: ${error.message}`);
         }
     });
 
@@ -55,27 +56,25 @@ export function initConfigPanel() {
             UI.resetDashboard();
             stopPolling();
             UI.switchTab('account');
-            UI.showMessage('connection-result', '服务器已停止', 'info');
+            Toast.info('服务器已停止');
         } catch (error) {
-            alert(`停止失败: ${error.message}`);
+            Toast.error(`停止失败: ${error.message}`);
         }
     });
 
     document.getElementById('btn-test-connection').addEventListener('click', async () => {
         const token = getState('token');
         if (!token) {
-            UI.showMessage('connection-result', '请先启动服务器', 'error');
+            Toast.warning('请先启动服务器');
             return;
         }
-
-        UI.clearMessage('connection-result');
 
         try {
             const result = await api.testConnection(token);
             const data = result.data;
 
             UI.updateDashboard(data);
-            UI.showMessage('connection-result', '连接测试成功！资产数据已更新。', 'success');
+            Toast.success('连接测试成功！资产数据已更新。');
 
             UI.addSignal({
                 type: 'test',
@@ -87,7 +86,7 @@ export function initConfigPanel() {
                 message: '连接测试成功',
             });
         } catch (error) {
-            UI.showMessage('connection-result', `连接测试失败: ${error.message}`, 'error');
+            Toast.error(`连接测试失败: ${error.message}`);
             UI.addSignal({
                 type: 'test',
                 signal_id: 'conn-test',
@@ -104,10 +103,7 @@ export function initConfigPanel() {
         const token = getState('token');
         if (token) {
             navigator.clipboard.writeText(token).then(() => {
-                const btn = document.getElementById('btn-copy-token');
-                const originalText = btn.textContent;
-                btn.textContent = '已复制!';
-                setTimeout(() => { btn.textContent = originalText; }, 2000);
+                Toast.success('Token 已复制到剪贴板');
             });
         }
     });

@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -24,6 +24,12 @@ if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 server: QMTServer = None
+
+
+async def verify_server_token(x_token: str = Header(...)):
+    if server is None or x_token != server.token:
+        raise HTTPException(status_code=401, detail="无效的Token")
+    return x_token
 
 
 @app.get("/")
@@ -50,7 +56,6 @@ async def server_info():
                 "qmt_path": None,
                 "host": None,
                 "port": None,
-                "token": None,
             }
         }
     return {
@@ -61,7 +66,6 @@ async def server_info():
             "qmt_path": server.mini_qmt_path,
             "host": server.host,
             "port": server.port,
-            "token": server.token,
         }
     }
 
@@ -95,6 +99,7 @@ async def start_server(data: dict):
     return {
         "success": True,
         "data": {
+            "running": server.running,
             "account_id": account_id,
             "qmt_path": qmt_path,
             "host": host,
@@ -105,7 +110,7 @@ async def start_server(data: dict):
 
 
 @app.post("/api/stop-server")
-async def stop_server():
+async def stop_server(_token: str = Depends(verify_server_token)):
     global server
 
     if server is None:
@@ -129,13 +134,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.account and args.qmt_path:
-        srv = QMTServer(
+        server = QMTServer(
             account_id=args.account,
             mini_qmt_path=args.qmt_path,
             host=args.host,
             port=args.port,
             token=args.token,
         )
-        srv.run()
+        server.run()
     else:
         uvicorn.run(app, host=args.host, port=args.port)

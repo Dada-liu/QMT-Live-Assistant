@@ -1,4 +1,4 @@
-import { getState } from './state.js';
+import { getState, getStoredToken } from './state.js';
 
 const BASE_URL = '/';
 
@@ -34,8 +34,12 @@ class APIClient {
     }
 
     async stopServer() {
+        const token = getStoredToken();
+        const headers = {};
+        if (token) headers['X-Token'] = token;
         return this.request('api/stop-server', {
             method: 'POST',
+            headers,
         });
     }
 

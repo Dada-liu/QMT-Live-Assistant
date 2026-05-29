@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { UI } from './ui.js';
-import { getState, setState } from './state.js';
+import { getState, setState, getStoredToken } from './state.js';
+import { refreshDashboard } from './dashboard.js';
 
 let pollingTimer = null;
 
@@ -39,15 +40,22 @@ export function startStatusCheck() {
         try {
             const result = await api.getServerInfo();
             if (result.data && result.data.running && !getState('serverRunning')) {
-                // Server is running but UI doesn't know - auto recover
+                const storedToken = getStoredToken();
                 setState('serverRunning', true);
-                setState('token', result.data.token);
                 UI.updateServerInfo(result.data);
                 UI.disableForm(true);
-                UI.showSection('server-info');
-                UI.showSection('dashboard');
-                UI.showSection('monitor');
-                startPolling();
+
+                if (storedToken) {
+                    setState('token', storedToken);
+                    UI.showSection('server-info');
+                    UI.showSection('dashboard');
+                    UI.showSection('monitor');
+                    refreshDashboard();
+                    startPolling();
+                } else {
+                    UI.showSection('account-empty');
+                    UI.showConnectPrompt();
+                }
             }
         } catch (error) {
             // ignore

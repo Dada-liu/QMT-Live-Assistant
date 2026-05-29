@@ -6,6 +6,7 @@ from datetime import datetime
 from backend.qmt_client import jq_to_qmt
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, RESET, STOCK_BUY, STOCK_SELL
+from backend.qmt_xtconstant import FIX_PRICE, LATEST_PRICE
 
 
 class TradeSignal(BaseModel):
@@ -36,14 +37,17 @@ class SignalReceiver:
         strategy = signal.strategy_name or "remote_signal"
 
         try:
+            price_type = FIX_PRICE if price > 0 else LATEST_PRICE
+
             order_id = self.trader.order_stock(
                 self.account,
                 stock_code=qmt_code,
                 order_type=order_type,
                 order_volume=signal.quantity,
+                price_type=price_type,
                 price=price,
                 strategy_name=strategy,
-                remark=signal.stock_code
+                order_remark=signal.stock_code
             )
 
             signal_entry = {

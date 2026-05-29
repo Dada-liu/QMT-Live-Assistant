@@ -38,7 +38,6 @@ async function initApp() {
             UI.disableForm(true);
             UI.showSection('server-info');
             UI.showSection('dashboard');
-            UI.showSection('monitor');
             refreshDashboard();
             startPolling();
             Toast.success('连接成功！');

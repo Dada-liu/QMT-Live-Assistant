@@ -199,7 +199,6 @@ export const UI = {
                 if (getState('serverRunning')) {
                     if (getStoredToken()) {
                         this.showSection('dashboard');
-                        this.showSection('monitor');
                         this.hideConnectPrompt();
                     } else {
                         this.showSection('account-empty');
@@ -209,6 +208,9 @@ export const UI = {
                     this.showSection('account-empty');
                     this.hideConnectPrompt();
                 }
+                break;
+            case 'trade':
+                this.showSection('monitor');
                 break;
             case 'config':
                 this.showSection('config');

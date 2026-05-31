@@ -44,10 +44,12 @@ class TestServerToken:
         assert isinstance(token, str)
         assert len(token) == 64
 
-    def test_token_is_deterministic(self, server):
+    def test_generate_token_unique(self, server):
         token1 = server.generate_token()
         token2 = server.generate_token()
-        assert token1 == token2
+        assert token1 != token2
+        assert len(token1) == 64
+        assert len(token2) == 64
 
     def test_test_connection_with_valid_token(self, client, server):
         response = client.get(

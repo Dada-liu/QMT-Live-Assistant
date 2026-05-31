@@ -7,8 +7,12 @@
 - 连接 miniQMT 交易终端（迅投 XtQuant SDK）
 - 启动/停止本地交易服务器
 - 测试连接并获取账户资产（可用资金、持仓市值、总资产、当日盈亏）
-- 接收远程策略服务器的交易信号，自动下单
-- 实时信号监控面板
+- 多策略管理：创建多个交易策略，各自独立分配资金、跟踪持仓、接收信号
+- 策略概览：查看各策略的可用资金、总资产、当日盈亏、持仓明细
+- 接收远程策略服务器的交易信号，自动下单并更新策略持仓
+- 策略 Token 认证：每个策略拥有独立 Token，远程信号携带策略 Token 即可关联
+- 实时信号监控面板，支持按日期和策略筛选
+- 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
 - 聚宽格式 ↔ QMT 格式代码转换
 - 亮/暗双主题切换
 - 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
@@ -28,9 +32,11 @@ QMT-live-assistant/
 │   ├── server.py            # QMTServer 核心
 │   ├── qmt_client.py        # miniQMT 连接 + 代码转换
 │   ├── signal_handler.py    # 远程信号接收
+│   ├── strategy_manager.py  # 策略管理器（多策略支持）
 │   ├── utils.py             # 工具函数
 │   ├── logger.py            # 日志系统
 │   ├── constants.py         # 常量定义
+│   ├── qmt_xtconstant.py    # QMT 常量
 │   └── mock_xtquant/        # 非 Windows 平台的 mock
 ├── frontend/
 │   ├── index.html           # 单页应用
@@ -42,7 +48,9 @@ QMT-live-assistant/
 │       ├── ui.js            # UI 工具
 │       ├── config-panel.js  # 配置面板
 │       ├── monitor.js       # 信号监控
-│       └── dashboard.js     # 仪表板
+│       ├── dashboard.js     # 仪表板
+│       ├── strategy.js      # 策略管理面板
+│       └── toast.js         # Toast 通知
 ├── config/
 │   └── settings.py
 ├── tests/
@@ -85,6 +93,17 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 
 启动后控制台会打印 Token，远程信号服务器使用此 Token 调用 API。
 
+## 策略管理
+
+服务器启动后，可在「配置」tab 中管理策略：
+
+1. **创建策略**：设置策略名称、描述、分配金额（从 QMT 总资金中划拨）
+2. **获取 Token**：每个策略自动生成独立 Token，用于远程信号认证
+3. **信号关联**：远程服务器用策略 Token 调用 `/api/receive-signal`，信号自动关联到该策略
+4. **持仓跟踪**：买信号执行后自动扣减策略现金、增加持仓；卖信号反向操作
+5. **行情刷新**：点击「刷新行情」从 QMT 拉取实时数据，更新策略持仓市值和当日盈亏
+6. **策略概览**：在「QMT账号」tab 查看各策略的资产、持仓概览
+
 ## API 参考
 
 ### 管理 API
@@ -96,16 +115,27 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 | POST | `/api/start-server` | 无 | 启动服务器，返回 Token |
 | POST | `/api/stop-server` | X-Token | 停止服务器 |
 
-### 交易 API（需要 X-Token 头）
+### 策略管理 API（需要 X-Token 头，主 Token）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/strategies` | 列出所有策略及数据 |
+| POST | `/api/strategies` | 创建策略，返回策略及 Token |
+| PUT | `/api/strategies/{id}` | 编辑策略 |
+| DELETE | `/api/strategies/{id}` | 删除策略 |
+| POST | `/api/strategies/{id}/toggle` | 切换启用/禁用 |
+| POST | `/api/strategies/refresh` | 从 QMT 刷新策略持仓行情 |
+
+### 交易 API（需要 X-Token 头，主 Token 或策略 Token）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/test-connection` | 测试连接，返回资产数据 |
 | GET | `/api/account-asset` | 账户资产 |
-| GET | `/api/signals` | 信号历史 |
+| GET | `/api/signals` | 信号历史（支持 ?start_date=&end_date=&strategy_name=） |
 | POST | `/api/convert/jq-to-qmt` | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | QMT→聚宽 转换 |
-| POST | `/api/receive-signal` | 接收远程信号 |
+| POST | `/api/receive-signal` | 接收远程信号（支持策略 Token） |
 
 ### 动态端点（自动生成）
 
@@ -122,6 +152,8 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 
 远程策略服务器发送信号到 `/api/receive-signal`：
 
+**使用策略 Token（推荐）**：信号自动关联到对应策略，执行后自动更新策略持仓和资金。
+
 ```json
 {
   "signal_id": "sig-20260528-001",
@@ -134,9 +166,14 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 }
 ```
 
+请求头：`X-Token: <策略Token>`
+
 ## Token 安全机制
 
-- Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同
+- 服务器主 Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同
+- 每个策略自动生成独立 Token（`secrets.token_hex(16)`），用于远程信号认证
+- 策略 Token 可在「配置」tab 的策略列表中查看和复制
+- `/api/receive-signal` 同时支持主 Token 和策略 Token
 - 前端通过 Session Storage 存储 Token（页面刷新不丢失，关闭标签页即清除）
 - `/api/server-info` 不再返回 Token，仅在 `/api/start-server` 响应中返回一次
 - `/api/stop-server` 需要 X-Token 鉴权

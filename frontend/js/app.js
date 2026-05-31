@@ -4,6 +4,7 @@ import { getState, setState, getStoredToken } from './state.js';
 import { initConfigPanel } from './config-panel.js';
 import { initMonitor, startPolling, stopPolling, startStatusCheck, stopStatusCheck } from './monitor.js';
 import { initDashboard, refreshDashboard } from './dashboard.js';
+import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
 
 async function initApp() {
@@ -11,6 +12,7 @@ async function initApp() {
     initConfigPanel();
     initMonitor();
     initDashboard();
+    initStrategyPanel();
     initJqConverter();
     initTabNavigation();
     startStatusCheck();
@@ -40,6 +42,8 @@ async function initApp() {
             UI.showSection('dashboard');
             refreshDashboard();
             startPolling();
+            await loadStrategies();
+            populateStrategyDropdown();
             Toast.success('连接成功！');
         } catch (error) {
             Toast.error(`连接失败: ${error.message}`);
@@ -60,6 +64,8 @@ async function checkServerStatus() {
                 setState('token', storedToken);
                 refreshDashboard();
                 startPolling();
+                await loadStrategies();
+                populateStrategyDropdown();
                 UI.switchTab('account');
             } else {
                 UI.switchTab('account');

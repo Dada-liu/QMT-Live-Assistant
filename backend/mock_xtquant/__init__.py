@@ -66,7 +66,7 @@ class MockTrader:
     def query_stock_asset(self, account):
         return MockAsset()
 
-    def order_stock(self, account, stock_code, order_type, order_volume, price, strategy_name="", remark=""):
+    def order_stock(self, account, stock_code, order_type, order_volume, price_type, price, strategy_name="", order_remark=""):
         return 100001
 
     def cancel_order(self, account, order_id):

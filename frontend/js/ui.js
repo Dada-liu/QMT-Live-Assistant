@@ -190,7 +190,7 @@ export const UI = {
     },
 
     switchTab(tabName) {
-        const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'monitor', 'converter'];
+        const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter'];
 
         sections.forEach(id => this.hideSection(id));
 
@@ -199,6 +199,7 @@ export const UI = {
                 if (getState('serverRunning')) {
                     if (getStoredToken()) {
                         this.showSection('dashboard');
+                        this.showSection('strategy-overview');
                         this.hideConnectPrompt();
                     } else {
                         this.showSection('account-empty');
@@ -216,6 +217,9 @@ export const UI = {
                 this.showSection('config');
                 if (getState('serverRunning')) {
                     this.showSection('server-info');
+                    if (getStoredToken()) {
+                        this.showSection('strategy-management');
+                    }
                 }
                 break;
             case 'converter':
@@ -241,4 +245,76 @@ export const UI = {
             }
         });
     },
+
+    renderStrategyOverview(strategies) {
+        const grid = document.getElementById('strategy-overview-grid');
+        if (!grid) return;
+
+        if (!strategies || strategies.length === 0) {
+            grid.innerHTML = '<div class="card strategy-overview-card" style="grid-column:1/-1;"><div class="strategy-empty" style="padding:var(--spacing-xl);">暂无策略，请先在「配置」tab 中添加策略。</div></div>';
+            return;
+        }
+
+        const formatCurrency = (value) => {
+            if (value === undefined || value === null) return '--';
+            const num = parseFloat(value);
+            return '¥ ' + num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        };
+
+        const formatPnl = (value) => {
+            if (value === undefined || value === null) return '--';
+            const num = parseFloat(value);
+            const prefix = num >= 0 ? '+ ' : '- ';
+            return prefix + formatCurrency(Math.abs(num)).replace('¥ ', '');
+        };
+
+        grid.innerHTML = strategies.map(s => {
+            const pnlClass = (s.daily_pnl || 0) >= 0 ? 'up' : 'down';
+            const positionCount = s.positions ? s.positions.length : 0;
+            return `
+            <div class="card strategy-overview-card">
+                <div class="strategy-overview-header">
+                    <span class="strategy-overview-name">${escapeHtml(s.name)}</span>
+                    <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
+                </div>
+                <div class="strategy-overview-metrics">
+                    <div class="strategy-metric">
+                        <span class="strategy-metric-label">可用资金</span>
+                        <span class="strategy-metric-value">${formatCurrency(s.available_cash)}</span>
+                    </div>
+                    <div class="strategy-metric">
+                        <span class="strategy-metric-label">总资产</span>
+                        <span class="strategy-metric-value">${formatCurrency(s.total_asset)}</span>
+                    </div>
+                    <div class="strategy-metric">
+                        <span class="strategy-metric-label">当日盈亏</span>
+                        <span class="strategy-metric-value ${pnlClass}">${formatPnl(s.daily_pnl)}</span>
+                    </div>
+                </div>
+                <div class="strategy-overview-footer">
+                    <span class="strategy-meta">持仓 ${positionCount} 只</span>
+                    <span class="strategy-meta">信号 ${s.signal_count || 0} 次</span>
+                </div>
+                ${positionCount > 0 ? `
+                <div class="strategy-positions-mini">
+                    ${s.positions.map(p => `
+                        <div class="position-row">
+                            <span class="position-code">${escapeHtml(p.stock_code)}</span>
+                            <span class="position-qty">${p.quantity}股</span>
+                            <span class="position-value">${formatCurrency(p.market_value)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+                ` : ''}
+            </div>
+            `;
+        }).join('');
+    },
 };
+
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = String(str);
+    return div.innerHTML;
+}

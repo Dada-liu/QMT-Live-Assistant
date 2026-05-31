@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Path
 from pydantic import BaseModel
 import inspect
 import secrets
-from typing import Any
+from typing import Any, Optional
 from collections import deque
 from backend.qmt_client import create_trader
+from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
 import uvicorn
 
 
@@ -23,6 +24,7 @@ class QMTServer:
         self.signal_log = deque(maxlen=200)
         self._signal_receiver = None
         self.running = False
+        self.strategy_manager = StrategyManager()
         print(f"\n授权Token: {self.token}\n")
 
     def generate_token(self) -> str:
@@ -34,6 +36,14 @@ class QMTServer:
         if x_token != self.token:
             raise HTTPException(status_code=401, detail="无效的Token")
         return x_token
+
+    async def verify_any_token(self, x_token: str = Header(...)):
+        if x_token == self.token:
+            return x_token
+        strategy = self.strategy_manager.find_by_token(x_token)
+        if strategy and strategy.enabled:
+            return x_token
+        raise HTTPException(status_code=401, detail="无效的Token")
 
     def init_trader(self):
         self.trader, self.account, self.callback = create_trader(
@@ -126,8 +136,20 @@ class QMTServer:
                 raise HTTPException(status_code=500, detail=f"连接测试失败: {str(e)}")
 
         @app.get('/api/signals')
-        async def get_signals(token: str = Depends(self.verify_token)):
-            return {'success': True, 'data': list(self.signal_log)}
+        async def get_signals(
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            strategy_name: Optional[str] = None,
+            token: str = Depends(self.verify_token),
+        ):
+            signals = list(self.signal_log)
+            if strategy_name:
+                signals = [s for s in signals if s.get('strategy_name') == strategy_name]
+            if start_date:
+                signals = [s for s in signals if s.get('timestamp', '')[:10] >= start_date]
+            if end_date:
+                signals = [s for s in signals if s.get('timestamp', '')[:10] <= end_date]
+            return {'success': True, 'data': signals}
 
         @app.get('/api/account-asset')
         async def account_asset(token: str = Depends(self.verify_token)):
@@ -151,21 +173,98 @@ class QMTServer:
             return {'success': True, 'data': {'result': qmt_to_jq(code)}}
 
         @app.post('/api/receive-signal')
-        async def receive_signal_endpoint(request: dict, token: str = Depends(self.verify_token)):
+        async def receive_signal_endpoint(request: dict, x_token: str = Header(...)):
             from backend.signal_handler import TradeSignal, SignalReceiver
+
+            # 验证 token（同时支持主 token 和策略 token）
+            if x_token != self.token:
+                strategy = self.strategy_manager.find_by_token(x_token)
+                if not strategy or not strategy.enabled:
+                    raise HTTPException(status_code=401, detail="无效的Token")
+                request['strategy_name'] = strategy.name
+                request['_strategy_id'] = strategy.id
+
             if self._signal_receiver is None:
                 self._signal_receiver = SignalReceiver(
                     trader=self.trader,
                     account=self.account,
                     callback=self.callback,
                     signal_log=self.signal_log,
+                    strategy_manager=self.strategy_manager,
                 )
-            signal = TradeSignal(**request)
+
+            signal = TradeSignal(**{k: v for k, v in request.items() if not k.startswith('_')})
+            strategy_id = request.get('_strategy_id')
             try:
                 result = await self._signal_receiver.receive_signal(signal)
+
+                # 信号执行成功后更新策略持仓和记录
+                if strategy_id:
+                    price = signal.price if signal.price is not None and signal.price > 0 else 0
+                    self.strategy_manager.update_position(
+                        strategy_id, signal.stock_code,
+                        signal.direction, signal.quantity, price
+                    )
+                    self.strategy_manager.increment_signal_count(strategy_id)
+                    self.strategy_manager.add_trading_record(strategy_id, {
+                        "timestamp": signal.timestamp or "",
+                        "stock_code": signal.stock_code,
+                        "direction": signal.direction,
+                        "quantity": signal.quantity,
+                        "price": price,
+                        "order_id": str(result.get("data", {}).get("order_id", "")),
+                        "signal_id": signal.signal_id,
+                    })
+
                 return result
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # --- 策略管理 API ---
+
+        @app.get('/api/strategies')
+        async def list_strategies(token: str = Depends(self.verify_token)):
+            return {'success': True, 'data': self.strategy_manager.list_all()}
+
+        @app.post('/api/strategies')
+        async def create_strategy(data: StrategyCreate, token: str = Depends(self.verify_token)):
+            strategy = self.strategy_manager.create(data)
+            return {'success': True, 'data': strategy.model_dump()}
+
+        @app.put('/api/strategies/{strategy_id}')
+        async def update_strategy(
+            strategy_id: str = Path(...),
+            data: StrategyUpdate = None,
+            token: str = Depends(self.verify_token),
+        ):
+            strategy = self.strategy_manager.update(strategy_id, data)
+            if not strategy:
+                raise HTTPException(status_code=404, detail="策略不存在")
+            return {'success': True, 'data': strategy.model_dump()}
+
+        @app.delete('/api/strategies/{strategy_id}')
+        async def delete_strategy(
+            strategy_id: str = Path(...),
+            token: str = Depends(self.verify_token),
+        ):
+            if not self.strategy_manager.delete(strategy_id):
+                raise HTTPException(status_code=404, detail="策略不存在")
+            return {'success': True, 'data': {'message': '策略已删除'}}
+
+        @app.post('/api/strategies/{strategy_id}/toggle')
+        async def toggle_strategy(
+            strategy_id: str = Path(...),
+            token: str = Depends(self.verify_token),
+        ):
+            strategy = self.strategy_manager.toggle(strategy_id)
+            if not strategy:
+                raise HTTPException(status_code=404, detail="策略不存在")
+            return {'success': True, 'data': strategy.model_dump()}
+
+        @app.post('/api/strategies/refresh')
+        async def refresh_strategies(token: str = Depends(self.verify_token)):
+            self.strategy_manager.refresh_from_qmt(self.trader, self.account)
+            return {'success': True, 'data': self.strategy_manager.list_all()}
 
     def init_and_setup(self, target_app=None):
         self.init_trader()

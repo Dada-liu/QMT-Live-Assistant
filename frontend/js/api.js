@@ -5,8 +5,8 @@ const BASE_URL = '/';
 class APIClient {
     async request(url, options = {}) {
         const config = {
-            headers: { 'Content-Type': 'application/json', ...options.headers },
             ...options,
+            headers: { 'Content-Type': 'application/json', ...options.headers },
         };
 
         try {
@@ -81,6 +81,64 @@ class APIClient {
 
     async healthCheck() {
         return this.request('health');
+    }
+
+    // --- 策略管理 ---
+
+    async getStrategies(token) {
+        return this.request('api/strategies', {
+            headers: { 'X-Token': token },
+        });
+    }
+
+    async createStrategy(data, token) {
+        return this.request('api/strategies', {
+            method: 'POST',
+            headers: { 'X-Token': token },
+            body: JSON.stringify(data),
+        });
+    }
+
+    async updateStrategy(id, data, token) {
+        return this.request(`api/strategies/${id}`, {
+            method: 'PUT',
+            headers: { 'X-Token': token },
+            body: JSON.stringify(data),
+        });
+    }
+
+    async deleteStrategy(id, token) {
+        return this.request(`api/strategies/${id}`, {
+            method: 'DELETE',
+            headers: { 'X-Token': token },
+        });
+    }
+
+    async toggleStrategy(id, token) {
+        return this.request(`api/strategies/${id}/toggle`, {
+            method: 'POST',
+            headers: { 'X-Token': token },
+        });
+    }
+
+    async refreshStrategies(token) {
+        return this.request('api/strategies/refresh', {
+            method: 'POST',
+            headers: { 'X-Token': token },
+        });
+    }
+
+    // --- 筛选信号 ---
+
+    async getFilteredSignals(token, filters = {}) {
+        const params = new URLSearchParams();
+        if (filters.start_date) params.append('start_date', filters.start_date);
+        if (filters.end_date) params.append('end_date', filters.end_date);
+        if (filters.strategy_name) params.append('strategy_name', filters.strategy_name);
+        const query = params.toString();
+        return this.request(`api/signals${query ? '?' + query : ''}`, {
+            headers: { 'X-Token': token },
+        });
     }
 }
 

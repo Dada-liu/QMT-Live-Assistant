@@ -3,6 +3,7 @@ import { UI } from './ui.js';
 import { getState, setState } from './state.js';
 import { startPolling, stopPolling } from './monitor.js';
 import { refreshDashboard } from './dashboard.js';
+import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
 
 export function initConfigPanel() {
@@ -38,6 +39,8 @@ export function initConfigPanel() {
             setState('token', data.token);
 
             Toast.success('服务器启动成功！');
+            await loadStrategies();
+            populateStrategyDropdown();
             UI.switchTab('account');
             refreshDashboard();
             startPolling();

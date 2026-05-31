@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from backend.server import QMTServer
 from config.settings import settings
 
-app = FastAPI(title="QMT Live Assistant - ")
+app = FastAPI(title="QMT Live Assistant")
 
 app.add_middleware(
     CORSMiddleware,

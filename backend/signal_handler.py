@@ -21,12 +21,14 @@ class TradeSignal(BaseModel):
 
 
 class SignalReceiver:
-    def __init__(self, trader, account, callback, signal_log: deque, wechat_webhook: str = None):
+    def __init__(self, trader, account, callback, signal_log: deque,
+                 wechat_webhook: str = None, strategy_manager=None):
         self.trader = trader
         self.account = account
         self.callback = callback
         self.signal_log = signal_log
         self.wechat_webhook = wechat_webhook
+        self.strategy_manager = strategy_manager
 
     async def receive_signal(self, signal: TradeSignal) -> dict:
         qmt_code = jq_to_qmt(signal.stock_code)
@@ -34,7 +36,7 @@ class SignalReceiver:
         order_type = STOCK_BUY if signal.direction == "buy" else STOCK_SELL
 
         price = signal.price if signal.price is not None else 0
-        strategy = signal.strategy_name or "remote_signal"
+        strategy_name = signal.strategy_name or "remote_signal"
 
         try:
             price_type = FIX_PRICE if price > 0 else LATEST_PRICE
@@ -46,7 +48,7 @@ class SignalReceiver:
                 order_volume=signal.quantity,
                 price_type=price_type,
                 price=price,
-                strategy_name=strategy,
+                strategy_name=strategy_name,
                 order_remark=signal.stock_code
             )
 
@@ -59,7 +61,7 @@ class SignalReceiver:
                 "quantity": signal.quantity,
                 "price": price,
                 "order_type": signal.order_type,
-                "strategy_name": strategy,
+                "strategy_name": strategy_name,
                 "order_id": str(order_id),
                 "status": "submitted",
                 "timestamp": signal.timestamp or datetime.now().isoformat(),

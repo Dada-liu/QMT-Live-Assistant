@@ -127,8 +127,8 @@ async def list_docs():
             },
             {
                 "id": "jq-send-signal-to-qmt",
-                "title": "聚宽如何发送信号到 QMT",
-                "summary": "从聚宽研究/回测到云服务器部署，完整实现远程信号推送到 QMT-Live-Assistant。"
+                "title": "聚宽如何发送信号给 QMT-Live-Assistant",
+                "summary": "从聚宽回测、模拟盘，将信号推送到 QMT-Live-Assistant。"
             }
         ]
     }

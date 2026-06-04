@@ -1,4 +1,5 @@
 import { getState, setState, getStoredToken } from './state.js';
+import { Docs } from './docs.js';
 
 export const UI = {
 
@@ -223,6 +224,7 @@ export const UI = {
                 break;
             case 'docs':
                 this.showSection('docs');
+                Docs.loadFirstDoc();
                 break;
         }
 

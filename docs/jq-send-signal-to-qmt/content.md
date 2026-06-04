@@ -1,4 +1,4 @@
-# 在聚宽发送信号给 QMT-Live-Assistant
+# 聚宽如何发送信号给 QMT-Live-Assistant
 
 ## 1、整体思路
 
@@ -8,6 +8,7 @@
 
 
 ## 2、具体操作步骤
+
 
 ### 2.1 在研究环境新建文本文件
 
@@ -72,7 +73,10 @@ class QMTClient:
             raise Exception(f"调用 {method_name} 失败: {str(e)}")
 ```
 
+
+
 ### 2.2 在策略回测中发送信号
+
 
 1、引入在研究环境中的文件
 
@@ -87,7 +91,21 @@ class QMTClient:
 ![step-4](assets/step-4.png)
 
 
-完整使用示例如下：
+`/receive-signal` 接口的参数如下：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| signal_id | string | 是 | 信号唯一标识，用于去重 |
+| stock_code | string | 是 | 聚宽格式股票代码（如 000001.XSHE） |
+| direction | string | 是 | buy 或 sell |
+| quantity | number | 是 | 下单数量（股） |
+| price | number | 否 | 限价单价格，不填则为市价单 |
+| order_type | string | 是 | limit（限价）或 market（市价） |
+| strategy_name | string | 否 | 策略名称，用于前端展示 |
+
+
+
+**完整聚宽策略示例如下**：
 
 ```python
 # 导入函数库
@@ -111,8 +129,8 @@ def initialize(context):
     # -------------------------------
     # 2、初始化对象
 	g.client = QMTClient(
-	    base_url='http://62.234.223.195:8000', 
-	    token='b273c4ab3e94cdec9ac9a36e6eafc159c5b7f51dc6cd7f85de6d3'
+	    base_url='http://12.220.145.15:8000', 
+	    token='b273c4b3e94cdec9ac9a366eafc159c5b751dccd7f85de6d3'
 	    )
     # -------------------------------
     
@@ -133,25 +151,10 @@ def before_market_open(context):
     # 输出运行时间
     log.info('函数运行时间(before_market_open)：'+str(context.current_dt.time()))
 
-    # 给微信发送消息（添加模拟交易，并绑定微信生效）
-    # send_message('美好的一天~')
-
-    # 要操作的股票：平安银行（g.为全局变量）
-    g.security = '000001.XSHE'
-
 ## 开盘时运行函数
 def market_open(context):
     log.info('函数运行时间(market_open):'+str(context.current_dt.time()))
-    security = g.security
-    # 获取股票的收盘价
-    close_data = get_bars(security, count=5, unit='1d', fields=['close'])
-    # 取得过去五天的平均价格
-    MA5 = close_data['close'].mean()
-    # 取得上一时间点价格
-    current_price = close_data['close'][-1]
-    # 取得当前的现金
-    cash = context.portfolio.available_cash
-    
+
     # -------------------------------
     # 3、通过 receive-signal 接口发送买卖信号，接口具体参数见文档
     g.client.api(

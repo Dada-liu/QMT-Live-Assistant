@@ -768,24 +768,54 @@ a:hover { text-decoration: underline; }
   font-size: var(--text-body-sm);
   font-weight: 500;
   color: var(--color-body);
-  background: var(--color-surface-card);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--rounded-md);
+  background: transparent;
+  border: none;
+  border-radius: 0;
   cursor: pointer;
   text-align: left;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast);
 }
 
 .docs-nav-item:hover {
-  border-color: var(--color-primary);
   color: var(--color-primary);
 }
 
 .docs-nav-item.active {
-  background-color: rgba(0, 82, 255, 0.06);
-  border-color: var(--color-primary);
   color: var(--color-primary);
   font-weight: 600;
+}
+
+.docs-sub-nav {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  margin-bottom: var(--spacing-xs);
+  padding-left: var(--spacing-lg);
+}
+
+.docs-sub-item {
+  display: block;
+  width: 100%;
+  padding: 4px var(--spacing-sm);
+  font-family: var(--font-body);
+  font-size: var(--text-caption);
+  font-weight: 400;
+  color: var(--color-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--transition-fast);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.docs-sub-item:hover {
+  color: var(--color-primary);
 }
 
 .docs-content {

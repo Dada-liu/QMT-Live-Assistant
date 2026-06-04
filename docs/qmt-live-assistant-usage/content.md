@@ -6,12 +6,13 @@ QMT-Live-Assistant 适用于以下量化交易工作流：
 
 1. 在聚宽（JoinQuant）上进行研究、回测和模拟交易
 2. 策略信号需要转发到实盘 miniQMT 执行
-3. 一个 QMT 账号运行多个策略，需要独立管理各自的资金和持仓
-4. 远程策略服务器（如云服务器）需要将信号推送到本地交易终端
+
+```
+聚宽 → HTTP 信号 → QMT-Live-Assistant → miniQMT 下单
+```
 
 
-
-## 2、安装 QMT-Live-Assistant
+## 2、下载 QMT-Live-Assistant
 
 ### 前提条件
 
@@ -31,12 +32,14 @@ pip install -r requirements.txt
 
 
 
-## 3、启动服务器
+## 3、启动 QMT-Live-Assistant
 
 1、windows 下启动CMD，进入 QMT Live Assistant 项目根目录，执行如下启动命令
 ```bash
 python -m backend.main --port 8000
 ```
+
+详细教程见项目 README；
 
 2、浏览器打开 [http://localhost:8000](http://localhost:8000)
 
@@ -58,9 +61,7 @@ python -m backend.main --port 8000
 
 6、在 聚宽 配置，发送信号到 QMT Live Assistant
 
-
-
-
+具体内容见另一篇文章：【聚宽如何发送信号给 QMT-Live-Assistant】
 
 7、查看买卖日志
 
@@ -68,9 +69,9 @@ python -m backend.main --port 8000
 ![step-5](assets/step-5.png)
 
 
-## 4、在聚宽中配置，实现远程信号下单
+## 4、接口的具体实现
 
-### 信号格式
+### /receive-signal 接口格式
 
 远程策略服务器向 `POST /api/receive-signal` 发送 JSON：
 
@@ -92,7 +93,7 @@ python -m backend.main --port 8000
 
 服务器根据 Token 识别策略，下单后自动更新该策略的持仓和资金数据。
 
-### 信号字段说明
+### 接口各字段说明
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -106,16 +107,7 @@ python -m backend.main --port 8000
 
 
 
-## 5、监控信号
-
-在「买卖监控」标签页：
-
-- 实时展示所有信号记录，每 5 秒自动刷新
-- 每条信号显示：时间、策略、股票代码、方向、数量、价格、状态
-- 买入信号绿色标识，卖出信号红色标识
-
-
-## 6、安全注意事项
+## 5、安全注意事项
 
 - 服务器主 Token 每次启动随机生成，仅在 `/api/start-server` 响应中返回一次
 - 每个策略的 Token 独立生成，创建后立即展示一次，**务必复制保存**
@@ -125,7 +117,7 @@ python -m backend.main --port 8000
 
 
 
-## 7、常见问题
+## 6、常见问题
 
 **Q: 连接 QMT 失败？**
 - 确认 QMT 交易终端已登录

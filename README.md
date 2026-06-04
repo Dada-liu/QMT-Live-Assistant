@@ -1,6 +1,6 @@
 # QMT Live Assistant
 
-基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。Python 服务器代码参考 `qka` 项目，UI 设计采用 Coinbase 网站的风格。
+基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。UI 设计采用 Coinbase 网站的风格。
 
 ## 如何使用
 1. [QMT-Live-Assistant 使用指南](https://github.com/Dada-liu/QMT-Live-Assistant/blob/main/docs/qmt-live-assistant-usage/content.md)

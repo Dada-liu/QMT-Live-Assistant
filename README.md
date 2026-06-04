@@ -1,3 +1,5 @@
+➕V 一起探讨：hotpotdaxia
+
 # QMT Live Assistant
 
 基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。UI 设计采用 Coinbase 网站的风格。
@@ -162,3 +164,5 @@ pytest tests/ -v
 | `ACCOUNT_ID` | `` | 券商账户ID |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `WECHAT_WEBHOOK_URL` | `` | 企业微信通知 |
+
+

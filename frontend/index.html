@@ -20,6 +20,7 @@
       <li><a href="#trade">买卖监控</a></li>
       <li><a href="#config">配置</a></li>
       <li><a href="#converter">工具</a></li>
+      <li><a href="#docs">文档</a></li>
     </ul>
     <button class="theme-toggle" id="theme-toggle" title="切换主题">🌙</button>
   </header>
@@ -98,6 +99,10 @@
           <span class="server-info-label" style="margin-bottom:0;white-space:nowrap;">访问 Token：</span>
           <span class="token-value" id="token-display">--</span>
           <button class="btn btn-secondary" id="btn-copy-token" style="padding:6px 14px;height:32px;font-size:13px;">复制</button>
+          <button class="btn btn-secondary" id="btn-docs-tutorial" style="padding:6px 14px;height:32px;font-size:13px;">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid currentColor;font-size:11px;font-weight:700;line-height:1;">?</span>
+            聚宽如何发送信号到QMT教程
+          </button>
         </div>
         <div class="btn-group" style="margin-top: var(--spacing-base);">
           <button class="btn btn-primary" id="btn-test-connection">测试连接</button>
@@ -170,6 +175,25 @@
       </div>
     </section>
 
+    <!-- 文档 -->
+    <section id="docs" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">文档</span>
+        <h2 class="section-title">使用文档</h2>
+        <p class="section-desc">查阅 QMT-Live-Assistant 的安装配置、聚宽信号对接等详细教程。</p>
+      </div>
+      <div class="docs-layout">
+        <aside class="docs-sidebar">
+          <ul class="docs-nav" id="docs-nav">
+            <!-- dynamically filled -->
+          </ul>
+        </aside>
+        <div class="docs-content card" id="docs-content">
+          <div class="docs-placeholder">请从左侧选择文档查看</div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer class="footer">
@@ -177,6 +201,7 @@
   </footer>
 
   <div id="toast-container"></div>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

@@ -27,7 +27,6 @@ class QMTServer:
 
     def generate_token(self) -> str:
         secets_token = secrets.token_hex(32)
-        print("生成新的授权Token: " + secets_token)
         return secets_token
 
     async def verify_token(self, x_token: str = Header(...)):

@@ -82,6 +82,14 @@ class APIClient {
     async healthCheck() {
         return this.request('health');
     }
+
+    async getDocList() {
+        return this.request('api/docs');
+    }
+
+    async getDoc(docId) {
+        return this.request(`api/docs/${docId}`);
+    }
 }
 
 export const api = new APIClient();

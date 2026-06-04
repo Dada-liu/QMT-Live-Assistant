@@ -23,6 +23,12 @@ frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fronten
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
+docs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")
+if os.path.exists(docs_dir):
+    app.mount("/docs-assets", StaticFiles(directory=docs_dir), name="docs-assets")
+
+DOCS_ALLOWED = ['jq-send-signal-to-qmt', 'qmt-live-assistant-usage']
+
 server: QMTServer = None
 
 
@@ -107,6 +113,43 @@ async def start_server(data: dict):
             "token": server.token,
         }
     }
+
+
+@app.get("/api/docs")
+async def list_docs():
+    return {
+        "success": True,
+        "data": [
+            {
+                "id": "qmt-live-assistant-usage",
+                "title": "QMT-Live-Assistant 使用指南",
+                "summary": "了解如何安装、配置和使用 QMT-Live-Assistant 进行远程信号下单。"
+            },
+            {
+                "id": "jq-send-signal-to-qmt",
+                "title": "聚宽如何发送信号到 QMT",
+                "summary": "从聚宽研究/回测到云服务器部署，完整实现远程信号推送到 QMT-Live-Assistant。"
+            }
+        ]
+    }
+
+
+@app.get("/api/docs/{doc_name}")
+async def get_doc(doc_name: str):
+    if doc_name not in DOCS_ALLOWED:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    doc_path = os.path.join(docs_dir, doc_name, "content.md")
+    if not os.path.exists(doc_path):
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    with open(doc_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    print('doc: ', content)
+    content = content.replace(f"](assets/", f"](/docs-assets/{doc_name}/assets/")
+
+    return {"success": True, "data": {"name": doc_name, "content": content}}
 
 
 @app.post("/api/stop-server")

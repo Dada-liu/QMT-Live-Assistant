@@ -12,7 +12,7 @@ def server():
     srv = QMTServer(
         account_id="test_account",
         mini_qmt_path="/tmp/mock_qmt",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8001,
     )
     srv.init_trader()
@@ -113,7 +113,7 @@ class TestJqConversion:
 
 class TestCreateServerUtil:
     def test_create_server(self):
-        srv = create_server("test", "/tmp/mock", "127.0.0.1", 8002)
+        srv = create_server("test", "/tmp/mock", "0.0.0.0", 8002)
         assert isinstance(srv, QMTServer)
         assert srv.account_id == "test"
         assert srv.mini_qmt_path == "/tmp/mock"

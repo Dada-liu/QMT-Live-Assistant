@@ -2,6 +2,10 @@
 
 基于 Python 服务器 + 原生 HTML 前端的 miniQMT 量化交易助手。Python 服务器代码参考 `qka` 项目，UI 设计采用 Coinbase 网站的风格。
 
+## 如何使用
+1. [QMT-Live-Assistant 使用指南](https://github.com/Dada-liu/QMT-Live-Assistant/blob/main/docs/qmt-live-assistant-usage/content.md)
+2. [聚宽如何发送信号给 QMT-Live-Assistant](https://github.com/Dada-liu/QMT-Live-Assistant/blob/main/docs/jq-send-signal-to-qmt/content.md)
+
 ## 功能
 
 - 连接 miniQMT 交易终端（迅投 XtQuant SDK）

@@ -6,6 +6,7 @@ import { initMonitor, startPolling, stopPolling, startStatusCheck, stopStatusChe
 import { initDashboard, refreshDashboard } from './dashboard.js';
 import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
+import { Docs } from './docs.js';
 
 async function initApp() {
     UI.initTheme();
@@ -14,6 +15,7 @@ async function initApp() {
     initDashboard();
     initStrategyPanel();
     initJqConverter();
+    Docs.init();
     initTabNavigation();
     startStatusCheck();
 
@@ -24,6 +26,18 @@ async function initApp() {
     document.getElementById('btn-goto-config').addEventListener('click', () => {
         UI.switchTab('config');
     });
+
+    const btnDocsTutorial = document.getElementById('btn-docs-tutorial');
+    if (btnDocsTutorial) {
+        btnDocsTutorial.addEventListener('click', () => {
+            UI.switchTab('docs');
+            const nav = document.getElementById('docs-nav');
+            if (nav) {
+                const btn = nav.querySelector('[data-doc-id="jq-send-signal-to-qmt"]');
+                if (btn) btn.click();
+            }
+        });
+    }
 
     document.getElementById('btn-connect-token').addEventListener('click', async () => {
         const tokenInput = document.getElementById('connect-token-input');

@@ -1,4 +1,5 @@
 import { getState, setState, getStoredToken } from './state.js';
+import { Docs } from './docs.js';
 
 export const UI = {
 
@@ -190,7 +191,7 @@ export const UI = {
     },
 
     switchTab(tabName) {
-        const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter'];
+        const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter','docs'];
 
         sections.forEach(id => this.hideSection(id));
 
@@ -224,6 +225,10 @@ export const UI = {
                 break;
             case 'converter':
                 this.showSection('converter');
+                break;
+            case 'docs':
+                this.showSection('docs');
+                Docs.loadFirstDoc();
                 break;
         }
 

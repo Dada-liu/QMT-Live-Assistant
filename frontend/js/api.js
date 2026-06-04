@@ -83,6 +83,15 @@ class APIClient {
         return this.request('health');
     }
 
+    // --- 获取文档 ---
+    async getDocList() {
+        return this.request('api/docs');
+    }
+
+    async getDoc(docId) {
+        return this.request(`api/docs/${docId}`);
+    }
+
     // --- 策略管理 ---
 
     async getStrategies(token) {

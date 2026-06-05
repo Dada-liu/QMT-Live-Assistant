@@ -79,7 +79,25 @@ pip install -r requirements.txt
 
 ## 运行
 
-### 前端界面模式（推荐）
+### 原生桌面窗口模式（Windows 推荐）
+
+启动后弹出原生 WebView2 窗口，关闭窗口最小化到系统托盘：
+
+```bash
+python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\userdata_mini" --window
+```
+
+右键托盘图标可打开界面、复制 Token、退出服务。
+
+### 桌面壳 / 托盘模式
+
+系统托盘 + 自动打开浏览器：
+
+```bash
+python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\userdata_mini" --tray
+```
+
+### 前端界面模式
 
 启动管理界面，通过浏览器配置和监控：
 
@@ -94,10 +112,20 @@ python -m backend.main --port 8000
 跳过前端，直接启动交易服务器：
 
 ```bash
-python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模拟\userdata_mini" --port 8000
+python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\userdata_mini" --port 8000
 ```
 
 启动后控制台会打印 Token，远程信号服务器使用此 Token 调用 API。
+
+### 启动方式速查
+
+| 命令 | 模式 | 窗口 | 托盘 |
+|------|------|------|------|
+| `--window` | 原生桌面窗口 | WebView2 | 系统托盘 |
+| `--tray` | 桌面壳 | 外部浏览器 | 系统托盘 |
+| `--port 8000` | 前端界面 | 外部浏览器 | ✘ |
+| `--account … --qmt-path …` | CLI 服务 | ✘ | ✘ |
+
 
 ## 策略管理
 
@@ -109,6 +137,7 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端模
 4. **持仓跟踪**：买信号执行后自动扣减策略现金、增加持仓；卖信号反向操作
 5. **行情刷新**：点击「刷新行情」从 QMT 拉取实时数据，更新策略持仓市值和当日盈亏
 6. **策略概览**：在「QMT账号」tab 查看各策略的资产、持仓概览
+
 
 ## API 参考
 

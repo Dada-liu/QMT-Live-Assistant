@@ -7,3 +7,7 @@ xtquant>=1.0.0
 pytest>=7.4.4
 pytest-asyncio>=0.23.3
 httpx>=0.25.2
+pystray
+pillow>=10.0.0
+pywebview
+pyinstaller>=6.0.0

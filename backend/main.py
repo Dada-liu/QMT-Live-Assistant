@@ -1,5 +1,7 @@
 import argparse
 import os
+import sys
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,12 +21,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+
+def _get_frontend_dir() -> str:
+    """获取前端目录路径（兼容开发模式 + PyInstaller 打包模式）"""
+    if getattr(sys, 'frozen', False):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).resolve().parent.parent
+    frontend = base / "frontend"
+    if frontend.exists():
+        return str(frontend)
+    raise FileNotFoundError("前端目录不存在，请检查打包配置")
+
+
+def _get_docs_dir() -> str:
+    """获取文档目录路径"""
+    if getattr(sys, 'frozen', False):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).resolve().parent.parent
+    docs = base / "docs"
+    return str(docs) if docs.exists() else ""
+
+
+frontend_dir = _get_frontend_dir()
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
-docs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs")
-if os.path.exists(docs_dir):
+docs_dir = _get_docs_dir()
+if docs_dir and os.path.exists(docs_dir):
     app.mount("/docs-assets", StaticFiles(directory=docs_dir), name="docs-assets")
 
 DOCS_ALLOWED = ['jq-send-signal-to-qmt', 'qmt-live-assistant-usage']
@@ -165,6 +190,26 @@ async def stop_server(_token: str = Depends(verify_server_token)):
     return {"success": True, "data": {"message": "服务器已停止"}}
 
 
+def _start_tray_mode(host, port, token):
+    """桌面壳模式：托盘图标 + 自动打开浏览器"""
+    import uvicorn
+    from backend.tray import run_tray_mode
+
+    def on_exit():
+        if server:
+            server.stop()
+
+    run_tray_mode(host=host, port=port, token=token, on_exit=on_exit)
+    uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+def _start_window_mode(host, port, token):
+    """原生桌面窗口模式：pywebview + 托盘"""
+    from backend.window import WindowManager
+    wm = WindowManager(app=app, host=host, port=port, token=token)
+    wm.start()
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -174,7 +219,18 @@ if __name__ == "__main__":
     parser.add_argument("--account", default=settings.ACCOUNT_ID)
     parser.add_argument("--qmt-path", default=settings.MINI_QMT_PATH)
     parser.add_argument("--token", default=None)
+    parser.add_argument("--tray", action="store_true", help="启动系统托盘模式（桌面壳）")
+    parser.add_argument("--window", action="store_true",
+                        help="启动原生桌面窗口模式（需 pywebview）")
     args = parser.parse_args()
+
+    _is_frozen = getattr(sys, 'frozen', False)
+    _has_args = len(sys.argv) > 1
+    if _is_frozen and not _has_args:
+        if args.account and args.qmt_path:
+            args.window = True
+        else:
+            args.window = True
 
     if args.account and args.qmt_path:
         server = QMTServer(
@@ -184,6 +240,16 @@ if __name__ == "__main__":
             port=args.port,
             token=args.token,
         )
-        server.run()
+        server.init_and_setup(target_app=app)
+
+        if args.window:
+            _start_window_mode(args.host, args.port, server.token)
+        elif args.tray:
+            _start_tray_mode(args.host, args.port, server.token)
+        else:
+            uvicorn.run(app, host=server.host, port=server.port)
     else:
-        uvicorn.run(app, host=args.host, port=args.port)
+        if args.window:
+            _start_window_mode(args.host, args.port, None)
+        else:
+            uvicorn.run(app, host=args.host, port=args.port)

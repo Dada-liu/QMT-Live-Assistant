@@ -139,15 +139,14 @@ function renderStrategyList() {
     list.querySelectorAll('.btn-sm-copy').forEach(btn => {
         btn.addEventListener('click', () => {
             const token = btn.dataset.token;
-            navigator.clipboard.writeText(token).then(() => {
-                Toast.success('Token 已复制到剪贴板');
-            });
+            copyToClipboard(token);
         });
     });
 }
 
 function showStrategyModal(strategy = null) {
     const modal = document.getElementById('strategy-modal');
+    if (!modal) return;
     const title = document.getElementById('strategy-modal-title');
     const editId = document.getElementById('strategy-edit-id');
     const nameInput = document.getElementById('strategy-name');
@@ -156,60 +155,70 @@ function showStrategyModal(strategy = null) {
     const tokenResult = document.getElementById('strategy-token-result');
 
     if (strategy) {
-        title.textContent = '编辑策略';
-        editId.value = strategy.id;
-        nameInput.value = strategy.name || '';
-        descInput.value = strategy.description || '';
-        fundsInput.value = strategy.allocated_funds || 0;
-        tokenResult.classList.add('hidden');
+        if (title) title.textContent = '编辑策略';
+        if (editId) editId.value = strategy.id;
+        if (nameInput) nameInput.value = strategy.name || '';
+        if (descInput) descInput.value = strategy.description || '';
+        if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
+        if (tokenResult) tokenResult.classList.add('hidden');
     } else {
-        title.textContent = '添加策略';
-        editId.value = '';
-        nameInput.value = '';
-        descInput.value = '';
-        fundsInput.value = '';
-        tokenResult.classList.add('hidden');
+        if (title) title.textContent = '添加策略';
+        if (editId) editId.value = '';
+        if (nameInput) nameInput.value = '';
+        if (descInput) descInput.value = '';
+        if (fundsInput) fundsInput.value = '';
+        if (tokenResult) tokenResult.classList.add('hidden');
     }
 
     modal.style.display = 'flex';
-    nameInput.focus();
+    if (nameInput) nameInput.focus();
 }
 
 function hideStrategyModal() {
     const modal = document.getElementById('strategy-modal');
-    modal.style.display = 'none';
+    if (modal) modal.style.display = 'none';
 }
 
 export function initStrategyPanel() {
+    const el = (id) => {
+        const e = document.getElementById(id);
+        if (!e) console.error('[strategy] Element not found: #' + id);
+        return e;
+    };
+
     // Add strategy button
-    document.getElementById('btn-add-strategy').addEventListener('click', () => {
-        showStrategyModal(null);
-    });
+    const btnAdd = el('btn-add-strategy');
+    if (btnAdd) btnAdd.addEventListener('click', () => { showStrategyModal(null); });
 
     // Refresh button
-    document.getElementById('btn-refresh-strategies').addEventListener('click', async () => {
+    const btnRefresh = el('btn-refresh-strategies');
+    if (btnRefresh) btnRefresh.addEventListener('click', async () => {
         await refreshStrategies();
         Toast.success('行情已刷新');
     });
 
     // Cancel button
-    document.getElementById('btn-strategy-cancel').addEventListener('click', () => {
-        hideStrategyModal();
-    });
+    const btnCancel = el('btn-strategy-cancel');
+    if (btnCancel) btnCancel.addEventListener('click', () => { hideStrategyModal(); });
 
-    // Close modal on backdrop click
-    document.getElementById('strategy-modal').addEventListener('click', (e) => {
-        if (e.target === e.currentTarget) hideStrategyModal();
-    });
+    // Close button (top-left ×)
+    const btnClose = el('btn-strategy-modal-close');
+    if (btnClose) btnClose.addEventListener('click', () => { hideStrategyModal(); });
 
     // Strategy form submit
-    document.getElementById('strategy-form').addEventListener('submit', async (e) => {
+    const form = el('strategy-form');
+    if (form) form.addEventListener('submit', async (e) => {
         e.preventDefault();
 
-        const editId = document.getElementById('strategy-edit-id').value;
-        const name = document.getElementById('strategy-name').value.trim();
-        const description = document.getElementById('strategy-desc').value.trim();
-        const fundsStr = document.getElementById('strategy-funds').value.trim();
+        const editIdEl = document.getElementById('strategy-edit-id');
+        const nameEl = document.getElementById('strategy-name');
+        const descEl = document.getElementById('strategy-desc');
+        const fundsEl = document.getElementById('strategy-funds');
+
+        const editId = editIdEl ? editIdEl.value : '';
+        const name = nameEl ? nameEl.value.trim() : '';
+        const description = descEl ? descEl.value.trim() : '';
+        const fundsStr = fundsEl ? fundsEl.value.trim() : '';
         const allocated_funds = parseFloat(fundsStr) || 0;
 
         if (!name) {
@@ -231,9 +240,13 @@ export function initStrategyPanel() {
                 if (result.success && result.data) {
                     const strategyToken = result.data.token;
                     const tokenResult = document.getElementById('strategy-token-result');
-                    tokenResult.textContent = `策略 Token: ${strategyToken}`;
-                    tokenResult.classList.remove('hidden');
+                    if (tokenResult) {
+                        tokenResult.textContent = `策略 Token: ${strategyToken}`;
+                        tokenResult.classList.remove('hidden');
+                    }
                     Toast.success('策略已创建，请复制并保存 Token');
+                    hideStrategyModal();
+                    await loadStrategies();
                 }
             }
         } catch (error) {
@@ -263,4 +276,29 @@ function formatMoney(value) {
     if (value === undefined || value === null) return '--';
     const num = parseFloat(value);
     return '¥ ' + num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            Toast.success('Token 已复制到剪贴板');
+        }).catch(() => {
+            Toast.error('复制失败');
+        });
+        return;
+    }
+    // Fallback for non-secure context
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        Toast.success('Token 已复制到剪贴板');
+    } catch (e) {
+        Toast.error('复制失败');
+    }
+    document.body.removeChild(textarea);
 }

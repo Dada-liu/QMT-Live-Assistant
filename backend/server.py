@@ -8,10 +8,34 @@ from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
 import uvicorn
 
+_current_server = None
+
+
+async def _verify_token(x_token: str = Header(...)):
+    if _current_server is None:
+        raise HTTPException(status_code=401, detail="服务器未运行")
+    print(f"验证Token: {x_token}, 服务器Token: {_current_server.token}")
+    if x_token != _current_server.token:
+        raise HTTPException(status_code=401, detail="无效的Token")
+    return x_token
+
+
+async def _verify_any_token(x_token: str = Header(...)):
+    if _current_server is None:
+        raise HTTPException(status_code=401, detail="服务器未运行")
+    if x_token == _current_server.token:
+        return x_token
+    strategy = _current_server.strategy_manager.find_by_token(x_token)
+    if strategy and strategy.enabled:
+        return x_token
+    raise HTTPException(status_code=401, detail="无效的Token")
+
 
 class QMTServer:
     def __init__(self, account_id: str, mini_qmt_path: str,
                  host: str = "0.0.0.0", port: int = 8000, token: str = None):
+        global _current_server
+        _current_server = self
         self.account_id = account_id
         self.mini_qmt_path = mini_qmt_path
         self.host = host
@@ -32,17 +56,10 @@ class QMTServer:
         return secets_token
 
     async def verify_token(self, x_token: str = Header(...)):
-        if x_token != self.token:
-            raise HTTPException(status_code=401, detail="无效的Token")
-        return x_token
+        return await _verify_token(x_token)
 
     async def verify_any_token(self, x_token: str = Header(...)):
-        if x_token == self.token:
-            return x_token
-        strategy = self.strategy_manager.find_by_token(x_token)
-        if strategy and strategy.enabled:
-            return x_token
-        raise HTTPException(status_code=401, detail="无效的Token")
+        return await _verify_any_token(x_token)
 
     def init_trader(self):
         self.trader, self.account, self.callback = create_trader(
@@ -79,13 +96,13 @@ class QMTServer:
 
         RequestModel = type(f'{method_name}Request', (BaseModel,), class_fields)
 
-        async def endpoint(request: RequestModel, token: str = Depends(self.verify_token)):
+        async def endpoint(request: RequestModel, token: str = Depends(_verify_token)):
             try:
                 params = request.dict(exclude_unset=True)
                 if 'account' in param_names:
-                    params['account'] = self.account
-                result = getattr(self.trader, method_name)(**params)
-                converted_result = self.convert_to_dict(result)
+                    params['account'] = _current_server.account
+                result = getattr(_current_server.trader, method_name)(**params)
+                converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
@@ -115,21 +132,21 @@ class QMTServer:
             return {
                 'success': True,
                 'data': {
-                    'running': self.running,
-                    'account_id': self.account_id,
-                    'qmt_path': self.mini_qmt_path,
-                    'host': self.host,
-                    'port': self.port,
+                    'running': _current_server.running if _current_server else False,
+                    'account_id': _current_server.account_id if _current_server else None,
+                    'qmt_path': _current_server.mini_qmt_path if _current_server else None,
+                    'host': _current_server.host if _current_server else None,
+                    'port': _current_server.port if _current_server else None,
                 }
             }
 
         @app.get('/api/test-connection')
-        async def test_connection(token: str = Depends(self.verify_token)):
+        async def test_connection(token: str = Depends(_verify_token)):
             try:
-                if self.trader is None:
-                    self.init_trader()
-                result = self.trader.query_stock_asset(self.account)
-                converted_result = self.convert_to_dict(result)
+                if _current_server.trader is None:
+                    _current_server.init_trader()
+                result = _current_server.trader.query_stock_asset(_current_server.account)
+                converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"连接测试失败: {str(e)}")
@@ -139,9 +156,9 @@ class QMTServer:
             start_date: Optional[str] = None,
             end_date: Optional[str] = None,
             strategy_name: Optional[str] = None,
-            token: str = Depends(self.verify_token),
+            token: str = Depends(_verify_token),
         ):
-            signals = list(self.signal_log)
+            signals = list(_current_server.signal_log)
             if strategy_name:
                 signals = [s for s in signals if s.get('strategy_name') == strategy_name]
             if start_date:
@@ -151,10 +168,10 @@ class QMTServer:
             return {'success': True, 'data': signals}
 
         @app.get('/api/account-asset')
-        async def account_asset(token: str = Depends(self.verify_token)):
+        async def account_asset(token: str = Depends(_verify_token)):
             try:
-                result = self.trader.query_stock_asset(self.account)
-                converted_result = self.convert_to_dict(result)
+                result = _current_server.trader.query_stock_asset(_current_server.account)
+                converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
@@ -176,36 +193,36 @@ class QMTServer:
             from backend.signal_handler import TradeSignal, SignalReceiver
 
             # 验证 token（同时支持主 token 和策略 token）
-            if x_token != self.token:
-                strategy = self.strategy_manager.find_by_token(x_token)
+            if x_token != _current_server.token:
+                strategy = _current_server.strategy_manager.find_by_token(x_token)
                 if not strategy or not strategy.enabled:
                     raise HTTPException(status_code=401, detail="无效的Token")
                 request['strategy_name'] = strategy.name
                 request['_strategy_id'] = strategy.id
 
-            if self._signal_receiver is None:
-                self._signal_receiver = SignalReceiver(
-                    trader=self.trader,
-                    account=self.account,
-                    callback=self.callback,
-                    signal_log=self.signal_log,
-                    strategy_manager=self.strategy_manager,
+            if _current_server._signal_receiver is None:
+                _current_server._signal_receiver = SignalReceiver(
+                    trader=_current_server.trader,
+                    account=_current_server.account,
+                    callback=_current_server.callback,
+                    signal_log=_current_server.signal_log,
+                    strategy_manager=_current_server.strategy_manager,
                 )
 
             signal = TradeSignal(**{k: v for k, v in request.items() if not k.startswith('_')})
             strategy_id = request.get('_strategy_id')
             try:
-                result = await self._signal_receiver.receive_signal(signal)
+                result = await _current_server._signal_receiver.receive_signal(signal)
 
                 # 信号执行成功后更新策略持仓和记录
                 if strategy_id:
                     price = signal.price if signal.price is not None and signal.price > 0 else 0
-                    self.strategy_manager.update_position(
+                    _current_server.strategy_manager.update_position(
                         strategy_id, signal.stock_code,
                         signal.direction, signal.quantity, price
                     )
-                    self.strategy_manager.increment_signal_count(strategy_id)
-                    self.strategy_manager.add_trading_record(strategy_id, {
+                    _current_server.strategy_manager.increment_signal_count(strategy_id)
+                    _current_server.strategy_manager.add_trading_record(strategy_id, {
                         "timestamp": signal.timestamp or "",
                         "stock_code": signal.stock_code,
                         "direction": signal.direction,
@@ -222,21 +239,21 @@ class QMTServer:
         # --- 策略管理 API ---
 
         @app.get('/api/strategies')
-        async def list_strategies(token: str = Depends(self.verify_token)):
-            return {'success': True, 'data': self.strategy_manager.list_all()}
+        async def list_strategies(token: str = Depends(_verify_token)):
+            return {'success': True, 'data': _current_server.strategy_manager.list_all()}
 
         @app.post('/api/strategies')
-        async def create_strategy(data: StrategyCreate, token: str = Depends(self.verify_token)):
-            strategy = self.strategy_manager.create(data)
+        async def create_strategy(data: StrategyCreate, token: str = Depends(_verify_token)):
+            strategy = _current_server.strategy_manager.create(data)
             return {'success': True, 'data': strategy.model_dump()}
 
         @app.put('/api/strategies/{strategy_id}')
         async def update_strategy(
             strategy_id: str = Path(...),
             data: StrategyUpdate = None,
-            token: str = Depends(self.verify_token),
+            token: str = Depends(_verify_token),
         ):
-            strategy = self.strategy_manager.update(strategy_id, data)
+            strategy = _current_server.strategy_manager.update(strategy_id, data)
             if not strategy:
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': strategy.model_dump()}
@@ -244,26 +261,26 @@ class QMTServer:
         @app.delete('/api/strategies/{strategy_id}')
         async def delete_strategy(
             strategy_id: str = Path(...),
-            token: str = Depends(self.verify_token),
+            token: str = Depends(_verify_token),
         ):
-            if not self.strategy_manager.delete(strategy_id):
+            if not _current_server.strategy_manager.delete(strategy_id):
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': {'message': '策略已删除'}}
 
         @app.post('/api/strategies/{strategy_id}/toggle')
         async def toggle_strategy(
             strategy_id: str = Path(...),
-            token: str = Depends(self.verify_token),
+            token: str = Depends(_verify_token),
         ):
-            strategy = self.strategy_manager.toggle(strategy_id)
+            strategy = _current_server.strategy_manager.toggle(strategy_id)
             if not strategy:
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': strategy.model_dump()}
 
         @app.post('/api/strategies/refresh')
-        async def refresh_strategies(token: str = Depends(self.verify_token)):
-            self.strategy_manager.refresh_from_qmt(self.trader, self.account)
-            return {'success': True, 'data': self.strategy_manager.list_all()}
+        async def refresh_strategies(token: str = Depends(_verify_token)):
+            _current_server.strategy_manager.refresh_from_qmt(_current_server.trader, _current_server.account)
+            return {'success': True, 'data': _current_server.strategy_manager.list_all()}
 
     def init_and_setup(self, target_app=None):
         self.init_trader()
@@ -275,7 +292,9 @@ class QMTServer:
         uvicorn.run(self.app, host=self.host, port=self.port)
 
     def stop(self):
+        global _current_server
         self.running = False
+        _current_server = None
 
 
 def create_server(account_id: str, mini_qmt_path: str,

@@ -10,21 +10,34 @@ import { Docs } from './docs.js';
 
 async function initApp() {
     UI.initTheme();
-    initConfigPanel();
-    initMonitor();
-    initDashboard();
-    initStrategyPanel();
-    initJqConverter();
+
+    try { initConfigPanel(); } catch (e) { console.error('[init] initConfigPanel failed:', e); }
+    try { initMonitor(); } catch (e) { console.error('[init] initMonitor failed:', e); }
+    try { initDashboard(); } catch (e) { console.error('[init] initDashboard failed:', e); }
+    try { initStrategyPanel(); } catch (e) { console.error('[init] initStrategyPanel failed:', e); }
+    try { initJqConverter(); } catch (e) { console.error('[init] initJqConverter failed:', e); }
+
     Docs.init();
-    initTabNavigation();
+
+    try { initTabNavigation(); } catch (e) { console.error('[init] initTabNavigation failed:', e); }
+
     startStatusCheck();
 
     UI.switchTab('account');
 
     await checkServerStatus();
 
-    document.getElementById('btn-goto-config').addEventListener('click', () => {
+    document.getElementById('btn-goto-config')?.addEventListener('click', () => {
         UI.switchTab('config');
+    });
+
+    document.addEventListener('click', (e) => {
+        const link = e.target.closest('.js-goto-config-strategy');
+        if (!link) return;
+        e.preventDefault();
+        UI.switchTab('config');
+        const target = document.getElementById('strategy-management');
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
     });
 
     const btnDocsTutorial = document.getElementById('btn-docs-tutorial');
@@ -39,8 +52,9 @@ async function initApp() {
         });
     }
 
-    document.getElementById('btn-connect-token').addEventListener('click', async () => {
+    document.getElementById('btn-connect-token')?.addEventListener('click', async () => {
         const tokenInput = document.getElementById('connect-token-input');
+        if (!tokenInput) return;
         const token = tokenInput.value.trim();
         if (!token) {
             Toast.warning('请输入 Token');
@@ -118,6 +132,7 @@ function initJqConverter() {
 
     const jqInput = document.getElementById('jq-code');
     const qmtInput = document.getElementById('qmt-code');
+    if (!jqInput || !qmtInput) return;
 
     let debounceTimer;
 

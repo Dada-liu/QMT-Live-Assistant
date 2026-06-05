@@ -42,6 +42,7 @@ export const UI = {
         const tokenEl = document.getElementById('token-display');
         if (tokenEl) tokenEl.textContent = '--';
         setState('token', null);
+        setState('serverInfo', null);
         setState('signals', []);
         this.renderSignals();
     },
@@ -256,7 +257,7 @@ export const UI = {
         if (!grid) return;
 
         if (!strategies || strategies.length === 0) {
-            grid.innerHTML = '<div class="card strategy-overview-card" style="grid-column:1/-1;"><div class="strategy-empty" style="padding:var(--spacing-xl);">暂无策略，请先在「配置」tab 中添加策略。</div></div>';
+            grid.innerHTML = '<div class="card strategy-overview-card" style="grid-column:1/-1;"><div class="strategy-empty" style="padding:var(--spacing-xl);">暂无策略，请先在「<a href="#" class="js-goto-config-strategy">配置</a>」tab 中添加策略。</div></div>';
             return;
         }
 

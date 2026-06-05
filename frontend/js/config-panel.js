@@ -1,15 +1,20 @@
 import { api } from './api.js';
 import { UI } from './ui.js';
 import { getState, setState } from './state.js';
-import { startPolling, stopPolling } from './monitor.js';
+import { startPolling, stopPolling, stopStatusCheck } from './monitor.js';
 import { refreshDashboard } from './dashboard.js';
 import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
 
 export function initConfigPanel() {
-    const form = document.getElementById('config-form');
+    const el = (id) => {
+        const e = document.getElementById(id);
+        if (!e) console.error('[config-panel] Element not found: #' + id);
+        return e;
+    };
 
-    form.addEventListener('submit', async (e) => {
+    const form = el('config-form');
+    if (form) form.addEventListener('submit', async (e) => {
         e.preventDefault();
 
         const formData = new FormData(form);
@@ -49,23 +54,34 @@ export function initConfigPanel() {
         }
     });
 
-    document.getElementById('btn-stop').addEventListener('click', async () => {
+    const btnStop = el('btn-stop');
+    if (btnStop) btnStop.addEventListener('click', async () => {
+        if (!confirm('确定要停止服务器吗？停止后所有连接将断开。')) return;
+
+        let stopError = null;
         try {
             await api.stopServer();
+        } catch (error) {
+            stopError = error;
+        } finally {
             setState('serverRunning', false);
             UI.disableForm(false);
             UI.resetServerInfo();
             UI.clearSignals();
             UI.resetDashboard();
             stopPolling();
+            stopStatusCheck();
             UI.switchTab('account');
-            Toast.info('服务器已停止');
-        } catch (error) {
-            Toast.error(`停止失败: ${error.message}`);
+            if (stopError) {
+                Toast.error(`停止失败: ${stopError.message}`);
+            } else {
+                Toast.info('服务器已停止');
+            }
         }
     });
 
-    document.getElementById('btn-test-connection').addEventListener('click', async () => {
+    const btnTest = el('btn-test-connection');
+    if (btnTest) btnTest.addEventListener('click', async () => {
         const token = getState('token');
         if (!token) {
             Toast.warning('请先启动服务器');
@@ -102,20 +118,47 @@ export function initConfigPanel() {
         }
     });
 
-    document.getElementById('btn-copy-token').addEventListener('click', () => {
+    const btnCopy = el('btn-copy-token');
+    if (btnCopy) btnCopy.addEventListener('click', () => {
         const token = getState('token');
-        if (token) {
+        if (!token) {
+            Toast.warning('暂无可复制的 Token');
+            return;
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(token).then(() => {
                 Toast.success('Token 已复制到剪贴板');
+            }).catch(() => {
+                copyFallback(token);
             });
+        } else {
+            copyFallback(token);
         }
     });
 
-    document.getElementById('btn-clear-signals').addEventListener('click', () => {
+    function copyFallback(text) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            Toast.success('Token 已复制到剪贴板');
+        } catch (e) {
+            Toast.error('复制失败');
+        }
+        document.body.removeChild(textarea);
+    }
+
+    const btnClear = el('btn-clear-signals');
+    if (btnClear) btnClear.addEventListener('click', () => {
         UI.clearSignals();
     });
 
-    document.getElementById('theme-toggle').addEventListener('click', () => {
+    const themeToggle = el('theme-toggle');
+    if (themeToggle) themeToggle.addEventListener('click', () => {
         UI.toggleTheme();
     });
 }

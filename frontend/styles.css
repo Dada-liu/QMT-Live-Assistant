@@ -61,6 +61,14 @@
   --rounded-full: 9999px;
 
   --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --btn-shadow: 0 2px 4px rgba(0,0,0,0.06);
+  --btn-shadow-hover: 0 4px 8px rgba(0,0,0,0.10);
+  --btn-shadow-active: 0 1px 2px rgba(0,0,0,0.06);
+  --btn-shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --btn-shadow-sm-hover: 0 2px 4px rgba(0,0,0,0.08);
+  --btn-primary-shadow: 0 2px 4px rgba(0,82,255,0.20);
+  --btn-primary-shadow-hover: 0 4px 8px rgba(0,82,255,0.25);
+  --btn-primary-shadow-active: 0 1px 2px rgba(0,82,255,0.20);
   --transition-fast: 150ms ease;
   --transition-base: 250ms ease;
 }
@@ -80,6 +88,9 @@
   --color-surface-strong: #252830;
   --color-surface-dark: #000000;
   --shadow-card: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --btn-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  --btn-shadow-hover: 0 4px 8px rgba(0,0,0,0.4);
+  --btn-shadow-active: 0 1px 2px rgba(0,0,0,0.3);
 }
 
 /* --- Reset & Base --- */
@@ -314,20 +325,39 @@ a:hover { text-decoration: underline; }
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
+  box-shadow: var(--btn-shadow);
+}
+
+.btn:hover:not(:disabled) {
+  box-shadow: var(--btn-shadow-hover);
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  box-shadow: var(--btn-shadow-active);
+  transform: translateY(0);
 }
 
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .btn-primary {
   background-color: var(--color-primary);
   color: var(--color-on-primary);
+  box-shadow: var(--btn-primary-shadow);
 }
 
 .btn-primary:hover:not(:disabled) {
   background-color: var(--color-primary-active);
+  box-shadow: var(--btn-primary-shadow-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  box-shadow: var(--btn-primary-shadow-active);
 }
 
 .btn-secondary {
@@ -337,6 +367,11 @@ a:hover { text-decoration: underline; }
 
 .btn-secondary:hover:not(:disabled) {
   background-color: var(--color-hairline);
+  box-shadow: var(--btn-shadow-hover);
+}
+
+.btn-secondary:active:not(:disabled) {
+  box-shadow: var(--btn-shadow-active);
 }
 
 .btn-icon {
@@ -352,11 +387,13 @@ a:hover { text-decoration: underline; }
   align-items: center;
   justify-content: center;
   transition: all var(--transition-fast);
+  box-shadow: var(--btn-shadow-sm);
 }
 
 .btn-icon:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
+  box-shadow: var(--btn-shadow-sm-hover);
 }
 
 .btn-group {
@@ -925,11 +962,13 @@ a:hover { text-decoration: underline; }
   color: var(--color-body-strong);
   transition: all var(--transition-fast);
   white-space: nowrap;
+  box-shadow: var(--btn-shadow-sm);
 }
 
 .btn-sm:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
+  box-shadow: var(--btn-shadow-sm-hover);
 }
 
 .btn-sm-edit:hover {
@@ -951,6 +990,8 @@ a:hover { text-decoration: underline; }
 }
 
 .btn-sm-copy {
+  display: inline-flex;
+  align-items: center;
   font-size: var(--text-caption);
   padding: 2px 8px;
   height: 22px;
@@ -988,11 +1029,33 @@ a:hover { text-decoration: underline; }
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
 }
 
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-lg);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.modal-close:hover {
+  color: var(--color-ink);
+}
+
 .modal-title {
   font-size: var(--text-title-sm);
   font-weight: 600;
   color: var(--color-ink);
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: 0;
 }
 
 /* --- Signal Filter Bar --- */
@@ -1051,6 +1114,9 @@ a:hover { text-decoration: underline; }
 
 .docs-nav {
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xxs);
 }
 
 .docs-nav-item {

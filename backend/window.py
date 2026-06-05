@@ -94,7 +94,7 @@ class WindowManager:
 
         self._window.events.closing += self._on_closing
 
-        webview.start(gui='edgechromium')
+        webview.start(gui='edgechromium', debug=True)
 
     def _exit_app(self):
         if self._tray:

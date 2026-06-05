@@ -13,7 +13,7 @@ a = Analysis(
     datas=[
         (str(ROOT / 'frontend'), 'frontend'),
         (str(ROOT / 'docs'), 'docs'),
-        (str(ROOT / 'backend' / 'webview2'), 'backend/webview2'),
+        (str(ROOT / 'backend' / 'webview2'), 'webview2'), # 要注意不能写成 backend/webview2
     ],
     hiddenimports=[
         'fastapi',
@@ -42,6 +42,8 @@ a = Analysis(
         'webview.platforms.edgechromium',
         'backend',
         'backend.server',
+        'backend.window',
+        'backend.tray',
         'backend.qmt_client',
         'backend.signal_handler',
         'backend.strategy_manager',

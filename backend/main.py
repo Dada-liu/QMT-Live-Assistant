@@ -204,10 +204,18 @@ def _start_tray_mode(host, port, token):
 
 
 def _start_window_mode(host, port, token):
-    """原生桌面窗口模式：pywebview + 托盘"""
-    from backend.window import WindowManager
-    wm = WindowManager(app=app, host=host, port=port, token=token)
-    wm.start()
+    """原生桌面窗口模式：pywebview + 托盘，失败时降级到 tray 模式"""
+    import traceback
+    from backend.logger import logger
+
+    try:
+        from backend.window import WindowManager
+        wm = WindowManager(app=app, host=host, port=port, token=token)
+        wm.start()
+    except Exception as e:
+        logger.warning(f"窗口模式启动失败，降级到托盘模式: {e}")
+        traceback.print_exc()
+        _start_tray_mode(host, port, token)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
-import os
-import sys
 import threading
 import time
+import os,sys
+import webview
 
+from backend.logger import logger
 from pathlib import Path
-
 
 def _setup_webview2_runtime():
     """设置 WebView2 运行时路径，优先使用打包内置版本"""
@@ -16,14 +16,9 @@ def _setup_webview2_runtime():
     bundled = base / 'webview2'
     if bundled.exists() and (bundled / 'msedgewebview2.exe').exists():
         os.environ['WEBVIEW2_BROWSER_EXECUTABLE_FOLDER'] = str(bundled)
-
+        webview.settings["WEBVIEW2_RUNTIME_PATH"] = str(bundled)
 
 _setup_webview2_runtime()
-
-import webview
-
-from backend.logger import logger
-
 
 class WindowManager:
     """管理 pywebview 窗口 + 后台 uvicorn 的生命周期"""

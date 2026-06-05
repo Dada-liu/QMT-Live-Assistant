@@ -13,6 +13,7 @@ a = Analysis(
     datas=[
         (str(ROOT / 'frontend'), 'frontend'),
         (str(ROOT / 'docs'), 'docs'),
+        (str(ROOT / 'backend' / 'webview2'), 'backend/webview2'),
     ],
     hiddenimports=[
         'fastapi',

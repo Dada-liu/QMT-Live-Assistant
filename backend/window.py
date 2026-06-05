@@ -1,6 +1,24 @@
+import os
+import sys
 import threading
 import time
-import os
+
+from pathlib import Path
+
+
+def _setup_webview2_runtime():
+    """设置 WebView2 运行时路径，优先使用打包内置版本"""
+    if getattr(sys, 'frozen', False):
+        base = Path(sys._MEIPASS)
+    else:
+        base = Path(__file__).resolve().parent
+
+    bundled = base / 'webview2'
+    if bundled.exists() and (bundled / 'msedgewebview2.exe').exists():
+        os.environ['WEBVIEW2_BROWSER_EXECUTABLE_FOLDER'] = str(bundled)
+
+
+_setup_webview2_runtime()
 
 import webview
 

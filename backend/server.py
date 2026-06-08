@@ -298,6 +298,8 @@ class QMTServer:
         async def jukuan_order_endpoint(request: dict, x_token: str = Header(...)):
             try:
                 return await _jukuan_endpoint(request, x_token, 'jukuan_order')
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
@@ -305,6 +307,8 @@ class QMTServer:
         async def jukuan_order_target_endpoint(request: dict, x_token: str = Header(...)):
             try:
                 return await _jukuan_endpoint(request, x_token, 'jukuan_order_target')
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
@@ -312,6 +316,8 @@ class QMTServer:
         async def jukuan_order_value_endpoint(request: dict, x_token: str = Header(...)):
             try:
                 return await _jukuan_endpoint(request, x_token, 'jukuan_order_value')
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
@@ -319,6 +325,8 @@ class QMTServer:
         async def jukuan_order_target_value_endpoint(request: dict, x_token: str = Header(...)):
             try:
                 return await _jukuan_endpoint(request, x_token, 'jukuan_order_target_value')
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 

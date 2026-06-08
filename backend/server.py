@@ -175,6 +175,7 @@ class QMTServer:
             try:
                 result = _current_server.trader.query_stock_asset(_current_server.account)
                 converted_result = _current_server.convert_to_dict(result)
+                converted_result['daily_profit'] = _current_server.strategy_manager.daily_profit
                 return {'success': True, 'data': converted_result}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))

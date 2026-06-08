@@ -10,6 +10,37 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+def _fetch_preclose_from_xtdata(stock_codes):
+    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典"""
+    if not stock_codes:
+        return {}
+    try:
+        from xtquant import xtdata
+        codes = list(stock_codes)
+        xtdata.download_history_data2(codes, '1d', incrementally=True)
+        result = xtdata.get_market_data_ex(
+            field_list=['preClose'],
+            stock_list=codes,
+            period='1d',
+            start_time='',
+            end_time='',
+            count=1,
+            dividend_type='none',
+        )
+        if not result or 'preClose' not in result:
+            return {}
+        df = result['preClose']
+        preclose_map = {}
+        for code in codes:
+            if code in df.columns:
+                vals = df[code].dropna()
+                if len(vals) > 0:
+                    preclose_map[code] = float(vals.iloc[-1])
+        return preclose_map
+    except Exception:
+        return {}
+
+
 class Strategy(BaseModel):
     """策略抽象实体"""
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -49,6 +80,11 @@ class StrategyManager:
     def __init__(self):
         self._strategies: Dict[str, Strategy] = {}
         self._signal_counts: Dict[str, int] = {}
+        self._daily_profit: float = 0.0
+
+    @property
+    def daily_profit(self) -> float:
+        return self._daily_profit
 
     def create(self, data: StrategyCreate) -> Strategy:
         """创建新策略"""
@@ -208,13 +244,16 @@ class StrategyManager:
                     "volume": getattr(p, 'volume', 0) or getattr(p, 'amount', 0) or 0,
                     "market_value": getattr(p, 'market_value', 0.0) or 0.0,
                     "current_price": getattr(p, 'last_price', 0.0) or getattr(p, 'price', 0.0) or 0.0,
-                    "daily_pnl": getattr(p, 'income_today', 0.0) or getattr(p, 'profit', 0.0) or 0.0,
                 })
             elif isinstance(p, dict):
                 qmt_positions.append(p)
 
         if not qmt_positions:
             return
+
+        # 从行情模块获取所有持仓股票的前收盘价
+        stock_codes = {p["stock_code"] for p in qmt_positions if p["stock_code"]}
+        preclose_map = _fetch_preclose_from_xtdata(stock_codes)
 
         # 计算每个标的所有策略总持仓
         stock_total_qty: Dict[str, int] = {}
@@ -224,6 +263,7 @@ class StrategyManager:
                 stock_total_qty[code] = stock_total_qty.get(code, 0) + pos["quantity"]
 
         # 按比例分配 QMT 行情数据到各策略
+        global_daily_profit = 0.0
         for strategy in self._strategies.values():
             daily_pnl_total = 0.0
             updated_positions = []
@@ -235,13 +275,24 @@ class StrategyManager:
                     ratio = pos["quantity"] / total_qty
                     pos["current_price"] = qmt_pos["current_price"]
                     pos["market_value"] = round(qmt_pos["market_value"] * ratio, 2)
-                    pos["daily_pnl"] = round(qmt_pos["daily_pnl"] * ratio, 2)
-                    daily_pnl_total += pos["daily_pnl"]
+
+                    # 计算当日盈亏：(持仓市值 - 前收盘价 × 持仓数量)
+                    preclose = preclose_map.get(code)
+                    qty = pos["quantity"]
+                    if preclose is not None and preclose > 0 and qty > 0:
+                        pos_daily_pnl = round(pos["market_value"] - preclose * qty, 2)
+                    else:
+                        pos_daily_pnl = 0.0
+                    pos["daily_pnl"] = pos_daily_pnl
+                    daily_pnl_total += pos_daily_pnl
                 updated_positions.append(pos)
 
             strategy.positions = updated_positions
             strategy.daily_pnl = round(daily_pnl_total, 2)
+            global_daily_profit += daily_pnl_total
             strategy.total_asset = strategy.available_cash + sum(
                 p.get("market_value", 0) for p in updated_positions
             )
             strategy.updated_at = datetime.now().isoformat()
+
+        self._daily_profit = round(global_daily_profit, 2)

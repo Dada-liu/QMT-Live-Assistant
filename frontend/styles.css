@@ -599,7 +599,6 @@ a:hover { text-decoration: underline; }
 
 .dashboard-card-change {
   font-family: var(--font-mono);
-  font-size: var(--text-caption);
   margin-top: var(--spacing-xxs);
 }
 

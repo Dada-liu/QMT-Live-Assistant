@@ -106,10 +106,13 @@ class MyXtQuantTraderCallback:
 
 
 def create_trader(account_id, mini_qmt_path, signal_log=None):
+    is_real_xtquant = False
+
     if sys.platform == 'win32':
         try:
             from xtquant.xttrader import XtQuantTrader
             from xtquant.xttype import StockAccount
+            is_real_xtquant = True
         except ImportError:
             from backend.mock_xtquant import MockTrader as XtQuantTrader, MockStockAccount as StockAccount
     else:
@@ -120,9 +123,13 @@ def create_trader(account_id, mini_qmt_path, signal_log=None):
     xt_trader.start()
     connect_result = xt_trader.connect()
 
-    if sys.platform == 'win32':
+    if is_real_xtquant:
         if connect_result == 0:
             logger.debug(f"{GREEN}【miniQMT连接成功】{RESET} 路径:{mini_qmt_path}")
+        else:
+            raise ConnectionError(
+                f"miniQMT连接失败，connect() 返回 {connect_result}，请检查miniQMT是否已启动"
+            )
     else:
         logger.debug(f"{GREEN}【Mock miniQMT连接成功】{RESET} 路径:{mini_qmt_path}")
 

@@ -125,7 +125,13 @@ async def start_server(data: dict):
         port=port,
     )
 
-    server.init_and_setup(target_app=app)
+    try:
+        server.init_and_setup(target_app=app)
+    except ConnectionError as e:
+        return {
+            "success": False,
+            "detail": f"QMT连接失败: {str(e)}",
+        }
 
     return {
         "success": True,
@@ -248,7 +254,11 @@ if __name__ == "__main__":
             port=args.port,
             token=args.token,
         )
-        server.init_and_setup(target_app=app)
+        try:
+            server.init_and_setup(target_app=app)
+        except ConnectionError as e:
+            print(f"QMT连接失败: {e}")
+            sys.exit(1)
 
         if args.window:
             _start_window_mode(args.host, args.port, server.token)

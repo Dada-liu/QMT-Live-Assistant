@@ -4,8 +4,10 @@ import inspect
 import secrets
 from typing import Any, Optional
 from collections import deque
+from datetime import datetime
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
+from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 
 _current_server = None
@@ -47,6 +49,7 @@ class QMTServer:
         self.token = token if token else self.generate_token()
         self.signal_log = deque(maxlen=200)
         self._signal_receiver = None
+        self._jukuan_handler = None
         self.running = False
         self.strategy_manager = StrategyManager()
         print(f"\n授权Token: {self.token}\n")
@@ -236,6 +239,88 @@ class QMTServer:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # --- 聚宽风格下单 API ---
+
+        def _resolve_strategy(request: dict, x_token: str):
+            """解析 token，返回 (strategy_name, strategy_id)，非策略 token 返回 (None, None)"""
+            if x_token == _current_server.token:
+                return None, None
+            strategy = _current_server.strategy_manager.find_by_token(x_token)
+            if not strategy or not strategy.enabled:
+                raise HTTPException(status_code=401, detail="无效的Token")
+            return strategy.name, strategy.id
+
+        def _get_jukuan_handler():
+            if _current_server._jukuan_handler is None:
+                _current_server._jukuan_handler = JukuanOrderHandler(
+                    trader=_current_server.trader,
+                    account=_current_server.account,
+                    signal_log=_current_server.signal_log,
+                    strategy_manager=_current_server.strategy_manager,
+                )
+            return _current_server._jukuan_handler
+
+        async def _jukuan_endpoint(request: dict, x_token: str, method_name: str):
+            strategy_name, strategy_id = _resolve_strategy(request, x_token)
+            handler = _get_jukuan_handler()
+
+            security = request.get('security', '').strip()
+            if not security:
+                raise HTTPException(status_code=400, detail="请提供 security 参数")
+
+            amount = request.get('amount', 0)
+            value = request.get('value', 0)
+            side = request.get('side', 'long')
+
+            method = getattr(handler, method_name)
+            if method_name in ('jukuan_order', 'jukuan_order_target'):
+                result = method(security, amount, side=side)
+            else:
+                result = method(security, value, side=side)
+
+            # 策略记账
+            if strategy_id and result.get('order_id'):
+                _current_server.strategy_manager.increment_signal_count(strategy_id)
+                _current_server.strategy_manager.add_trading_record(strategy_id, {
+                    'timestamp': datetime.now().isoformat(),
+                    'stock_code': security,
+                    'direction': result.get('direction', 'none'),
+                    'quantity': result.get('quantity', 0),
+                    'price': 0,
+                    'order_id': str(result.get('order_id', '')),
+                    'method': method_name,
+                })
+
+            return {'success': True, 'data': result}
+
+        @app.post('/api/jukuan_order')
+        async def jukuan_order_endpoint(request: dict, x_token: str = Header(...)):
+            try:
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order')
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post('/api/jukuan_order_target')
+        async def jukuan_order_target_endpoint(request: dict, x_token: str = Header(...)):
+            try:
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target')
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post('/api/jukuan_order_value')
+        async def jukuan_order_value_endpoint(request: dict, x_token: str = Header(...)):
+            try:
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_value')
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post('/api/jukuan_order_target_value')
+        async def jukuan_order_target_value_endpoint(request: dict, x_token: str = Header(...)):
+            try:
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target_value')
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+
         # --- 策略管理 API ---
 
         @app.get('/api/strategies')
@@ -283,7 +368,11 @@ class QMTServer:
             return {'success': True, 'data': _current_server.strategy_manager.list_all()}
 
     def init_and_setup(self, target_app=None):
-        self.init_trader()
+        try:
+            self.init_trader()
+        except Exception:
+            self.setup_routes(target_app=target_app)
+            raise
         self.setup_routes(target_app=target_app)
         self.running = True
 

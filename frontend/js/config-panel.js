@@ -36,6 +36,10 @@ export function initConfigPanel() {
 
         try {
             const result = await api.startServer(config);
+            if (!result.success) {
+                Toast.error(result.detail || '服务器启动失败');
+                return;
+            }
             const data = result.data;
 
             UI.updateServerInfo(data);

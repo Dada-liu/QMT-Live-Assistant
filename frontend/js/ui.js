@@ -26,6 +26,7 @@ export const UI = {
     },
 
     updateServerInfo(data) {
+        if (!data) return;
         const grid = document.getElementById('server-info-grid');
         if (!grid) return;
 

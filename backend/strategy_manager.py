@@ -239,11 +239,17 @@ class StrategyManager:
         qmt_positions = []
         for p in qmt_positions_raw:
             if hasattr(p, '__dir__'):
+                vol = getattr(p, 'volume', 0) or 0
+                mv = getattr(p, 'market_value', 0.0) or 0.0
+                if vol > 0 and mv > 0:
+                    cur_price = mv / vol
+                else:
+                    cur_price = getattr(p, 'avg_price', 0.0) or 0.0
                 qmt_positions.append({
                     "stock_code": getattr(p, 'stock_code', ''),
-                    "volume": getattr(p, 'volume', 0) or getattr(p, 'amount', 0) or 0,
-                    "market_value": getattr(p, 'market_value', 0.0) or 0.0,
-                    "current_price": getattr(p, 'last_price', 0.0) or getattr(p, 'price', 0.0) or 0.0,
+                    "volume": vol,
+                    "market_value": mv,
+                    "current_price": cur_price,
                 })
             elif isinstance(p, dict):
                 qmt_positions.append(p)

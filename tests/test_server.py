@@ -299,21 +299,23 @@ class TestJukuanOrderAPI:
         assert response.status_code == 200
         assert response.json()["success"] is True
 
-    def test_jukuan_order_value_no_position(self, client, server):
+    def test_jukuan_order_value(self, client, server):
         response = client.post(
             "/api/jukuan_order_value",
             json={"security": "000001.XSHE", "value": 5000},
             headers={"X-Token": server.token},
         )
-        assert response.status_code == 500
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
-    def test_jukuan_order_target_value_no_position(self, client, server):
+    def test_jukuan_order_target_value(self, client, server):
         response = client.post(
             "/api/jukuan_order_target_value",
             json={"security": "000001.XSHE", "value": 10000},
             headers={"X-Token": server.token},
         )
-        assert response.status_code == 500
+        assert response.status_code == 200
+        assert response.json()["success"] is True
 
     def test_jukuan_order_requires_auth(self, client):
         response = client.post(

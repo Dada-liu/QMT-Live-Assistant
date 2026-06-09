@@ -35,6 +35,23 @@ class MockOrder:
         self.order_time = 1750000000.0
 
 
+class MockPosition:
+    def __init__(self, stock_code="000001.SZ", volume=100, market_value=1250.0,
+                 avg_price=12.0, can_use_volume=100):
+        self.account_type = 2
+        self.account_id = "test_account"
+        self.stock_code = stock_code
+        self.volume = volume
+        self.can_use_volume = can_use_volume
+        self.open_price = avg_price
+        self.market_value = market_value
+        self.frozen_volume = 0
+        self.on_road_volume = 0
+        self.yesterday_volume = 0
+        self.avg_price = avg_price
+        self.direction = 0
+
+
 class MockAsset:
     def __init__(self):
         self.account_id = "test_account"
@@ -79,7 +96,7 @@ class MockTrader:
         return [MockTrade()]
 
     def query_stock_positions(self, account):
-        return []
+        return [MockPosition()]
 
     def query_all_orders(self, account):
         return [MockOrder()]

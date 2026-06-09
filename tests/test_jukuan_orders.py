@@ -99,7 +99,8 @@ class TestJukuanOrderTarget:
         mock_pos = MagicMock()
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
-        mock_pos.last_price = 10.0
+        mock_pos.market_value = 1200.0
+        mock_pos.avg_price = 12.0
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()
@@ -140,7 +141,8 @@ class TestJukuanOrderValue:
         mock_pos = MagicMock()
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
-        mock_pos.last_price = 10.0
+        mock_pos.market_value = 1000.0
+        mock_pos.avg_price = 10.0
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()
@@ -180,7 +182,8 @@ class TestJukuanOrderTargetValue:
         mock_pos = MagicMock()
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
-        mock_pos.last_price = 10.0
+        mock_pos.market_value = 1000.0
+        mock_pos.avg_price = 10.0
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()

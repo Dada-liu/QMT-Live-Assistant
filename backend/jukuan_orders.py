@@ -37,9 +37,15 @@ def _get_position_info(trader, account, jq_code: str) -> dict:
         pos_code = getattr(pos, 'stock_code', '')
         if pos_code != qmt_code:
             continue
+        volume = getattr(pos, 'volume', 0) or 0
+        market_value = getattr(pos, 'market_value', 0.0) or 0.0
+        if volume > 0 and market_value > 0:
+            price = market_value / volume
+        else:
+            price = getattr(pos, 'avg_price', 0.0) or 0.0
         return {
-            'volume': getattr(pos, 'volume', 0) or getattr(pos, 'amount', 0) or 0,
-            'price': getattr(pos, 'last_price', 0.0) or getattr(pos, 'price', 0.0) or 0.0,
+            'volume': volume,
+            'price': price,
             'found': True,
         }
 

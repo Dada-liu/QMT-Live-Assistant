@@ -6,7 +6,7 @@ from typing import Any, Optional
 from collections import deque
 from datetime import datetime
 from backend.qmt_client import create_trader
-from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
+from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, _fetch_preclose_from_xtdata, _fetch_stock_names_from_xtdata
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 
@@ -175,7 +175,60 @@ class QMTServer:
             try:
                 result = _current_server.trader.query_stock_asset(_current_server.account)
                 converted_result = _current_server.convert_to_dict(result)
-                converted_result['daily_profit'] = _current_server.strategy_manager.daily_profit
+
+                # 查询全部 QMT 持仓并计算每日盈亏
+                positions = []
+                daily_profit = 0.0
+                try:
+                    qmt_positions_raw = _current_server.trader.query_stock_positions(_current_server.account)
+                    stock_codes = set()
+                    qmt_positions = []
+                    for p in qmt_positions_raw:
+                        code = getattr(p, 'stock_code', '')
+                        vol = getattr(p, 'volume', 0) or 0
+                        mv = getattr(p, 'market_value', 0.0) or 0.0
+                        open_pr = getattr(p, 'open_price', 0.0) or 0.0
+                        can_use = getattr(p, 'can_use_volume', 0) or 0
+                        if code and vol > 0:
+                            qmt_positions.append({
+                                "stock_code": code,
+                                "volume": vol,
+                                "market_value": mv,
+                                "open_price": open_pr,
+                                "can_use_volume": can_use,
+                            })
+                            stock_codes.add(code)
+
+                    # 获取股票名称
+                    name_map = _fetch_stock_names_from_xtdata(stock_codes)
+                    for pos in qmt_positions:
+                        pos["stock_name"] = name_map.get(pos["stock_code"], "")
+
+                    # 获取前收盘价计算每日盈亏 + 总盈亏
+                    preclose_map = _fetch_preclose_from_xtdata(stock_codes)
+                    for pos in qmt_positions:
+                        preclose = preclose_map.get(pos["stock_code"])
+                        if preclose is not None and preclose > 0:
+                            pos_daily_pnl = round(pos["market_value"] - preclose * pos["volume"], 2)
+                        else:
+                            pos_daily_pnl = 0.0
+
+                        pos["daily_pnl"] = pos_daily_pnl
+                        daily_profit += pos_daily_pnl
+
+                        # 总盈亏 = 市值 - 成本价 * 数量
+                        op = pos.get("open_price", 0)
+                        if op > 0 and pos["volume"] > 0:
+                            pos["total_pnl"] = round(pos["market_value"] - op * pos["volume"], 2)
+                        else:
+                            pos["total_pnl"] = 0.0
+
+                        positions.append(pos)
+                except Exception:
+                    pass
+
+                converted_result['daily_profit'] = round(daily_profit, 2)
+                converted_result['positions'] = positions
                 return {'success': True, 'data': converted_result}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
@@ -338,8 +391,11 @@ class QMTServer:
 
         @app.post('/api/strategies')
         async def create_strategy(data: StrategyCreate, token: str = Depends(_verify_token)):
-            strategy = _current_server.strategy_manager.create(data)
-            return {'success': True, 'data': strategy.model_dump()}
+            try:
+                strategy = _current_server.strategy_manager.create(data)
+                return {'success': True, 'data': strategy.model_dump()}
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
         @app.put('/api/strategies/{strategy_id}')
         async def update_strategy(
@@ -347,10 +403,13 @@ class QMTServer:
             data: StrategyUpdate = None,
             token: str = Depends(_verify_token),
         ):
-            strategy = _current_server.strategy_manager.update(strategy_id, data)
-            if not strategy:
-                raise HTTPException(status_code=404, detail="策略不存在")
-            return {'success': True, 'data': strategy.model_dump()}
+            try:
+                strategy = _current_server.strategy_manager.update(strategy_id, data)
+                if not strategy:
+                    raise HTTPException(status_code=404, detail="策略不存在")
+                return {'success': True, 'data': strategy.model_dump()}
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
         @app.delete('/api/strategies/{strategy_id}')
         async def delete_strategy(

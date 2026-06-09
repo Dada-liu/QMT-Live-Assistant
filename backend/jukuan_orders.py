@@ -42,7 +42,7 @@ def _get_position_info(trader, account, jq_code: str) -> dict:
         if volume > 0 and market_value > 0:
             price = market_value / volume
         else:
-            price = getattr(pos, 'avg_price', 0.0) or 0.0
+            price = getattr(pos, 'open_price', 0.0) or 0.0
         return {
             'volume': volume,
             'price': price,

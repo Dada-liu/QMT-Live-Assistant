@@ -144,7 +144,7 @@ function renderStrategyList() {
     });
 }
 
-function showStrategyModal(strategy = null) {
+async function showStrategyModal(strategy = null) {
     const modal = document.getElementById('strategy-modal');
     if (!modal) return;
     const title = document.getElementById('strategy-modal-title');
@@ -171,7 +171,105 @@ function showStrategyModal(strategy = null) {
     }
 
     modal.style.display = 'flex';
+
+    // 加载账户持仓用于分配
+    await loadAccountPositionsForAssign(strategy);
+
     if (nameInput) nameInput.focus();
+}
+
+async function loadAccountPositionsForAssign(strategy) {
+    const group = document.getElementById('strategy-positions-group');
+    const loading = document.getElementById('strategy-positions-loading');
+    const empty = document.getElementById('strategy-positions-empty');
+    const tableWrapper = document.getElementById('strategy-positions-table-wrapper');
+    const tbody = document.getElementById('strategy-positions-tbody');
+
+    if (!group || !tbody) return;
+
+    group.style.display = '';
+    loading.style.display = '';
+    if (empty) empty.style.display = 'none';
+    if (tableWrapper) tableWrapper.style.display = 'none';
+
+    const token = getState('token');
+    if (!token) {
+        loading.style.display = 'none';
+        return;
+    }
+
+    try {
+        const result = await api.getAccountAsset(token);
+        if (!result.success || !result.data) {
+            loading.style.display = 'none';
+            return;
+        }
+
+        const accountPositions = result.data.positions || [];
+        if (accountPositions.length === 0) {
+            loading.style.display = 'none';
+            if (empty) empty.style.display = '';
+            return;
+        }
+
+        // 当前策略已有持仓映射（编辑模式）
+        const strategyPosMap = {};
+        if (strategy && strategy.positions) {
+            strategy.positions.forEach(p => {
+                strategyPosMap[p.stock_code] = p.quantity;
+            });
+        }
+
+        // 计算其他策略已分配的数量
+        const assignedByOthers = {};
+        const allStrategies = getStrategies();
+        allStrategies.forEach(s => {
+            if (strategy && s.id === strategy.id) return;
+            if (s.positions) {
+                s.positions.forEach(p => {
+                    assignedByOthers[p.stock_code] = (assignedByOthers[p.stock_code] || 0) + p.quantity;
+                });
+            }
+        });
+
+        tbody.innerHTML = accountPositions.map(pos => {
+            const code = pos.stock_code || '';
+            const name = pos.stock_name || '';
+            const totalVolume = pos.volume || 0;
+            const alreadyAssigned = assignedByOthers[code] || 0;
+            const available = Math.max(0, totalVolume - alreadyAssigned);
+            const currentAssigned = strategyPosMap[code] || 0;
+            const price = pos.current_price || pos.open_price || 0;
+
+            return `
+                <tr class="position-assign-row" data-stock-code="${escapeHtml(code)}">
+                    <td>
+                        <span class="position-assign-name">${escapeHtml(name || code)}</span>
+                        <span class="position-assign-code">${escapeHtml(code)}</span>
+                    </td>
+                    <td class="position-assign-available">${available.toLocaleString()}</td>
+                    <td>
+                        <input type="number"
+                               class="form-input position-assign-qty-input"
+                               data-stock-code="${escapeHtml(code)}"
+                               data-stock-name="${escapeHtml(name)}"
+                               data-current-price="${price}"
+                               data-max="${available}"
+                               value="${currentAssigned || ''}"
+                               placeholder="0"
+                               min="0"
+                               max="${available}"
+                               step="100">
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        loading.style.display = 'none';
+        if (tableWrapper) tableWrapper.style.display = '';
+    } catch (error) {
+        loading.style.display = 'none';
+    }
 }
 
 function hideStrategyModal() {
@@ -226,7 +324,47 @@ export function initStrategyPanel() {
             return;
         }
 
-        const data = { name, description, allocated_funds };
+        if (!fundsStr || allocated_funds <= 0) {
+            Toast.warning('请输入有效的分配金额（必须大于0）');
+            return;
+        }
+
+        // 收集分配的持仓
+        const positions = [];
+        const qtyInputs = document.querySelectorAll('.position-assign-qty-input');
+        for (const input of qtyInputs) {
+            const qty = parseInt(input.value, 10) || 0;
+            if (qty > 0) {
+                if (qty % 100 !== 0) {
+                    const label = input.dataset.stockName || input.dataset.stockCode;
+                    Toast.warning(`${label} 分配数量须为100的整数倍`);
+                    return;
+                }
+                const max = parseInt(input.dataset.max, 10) || 0;
+                if (qty > max) {
+                    const label = input.dataset.stockName || input.dataset.stockCode;
+                    Toast.warning(`${label} 分配数量不可超过可用数量(${max})`);
+                    return;
+                }
+                positions.push({
+                    stock_code: input.dataset.stockCode,
+                    stock_name: input.dataset.stockName || '',
+                    quantity: qty,
+                    current_price: parseFloat(input.dataset.currentPrice) || 0,
+                });
+            }
+        }
+
+        // 校验持仓总成本不超过分配金额
+        if (positions.length > 0) {
+            const totalCost = positions.reduce((sum, p) => sum + p.quantity * p.current_price, 0);
+            if (totalCost > allocated_funds) {
+                Toast.warning(`持仓总成本(${totalCost.toFixed(2)})超过分配金额(${allocated_funds.toFixed(2)})，请调整`);
+                return;
+            }
+        }
+
+        const data = { name, description, allocated_funds, positions };
         const token = getState('token');
 
         try {

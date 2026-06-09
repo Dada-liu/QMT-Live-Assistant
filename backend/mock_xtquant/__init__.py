@@ -37,18 +37,17 @@ class MockOrder:
 
 class MockPosition:
     def __init__(self, stock_code="000001.SZ", volume=100, market_value=1250.0,
-                 avg_price=12.0, can_use_volume=100):
+                 open_price=12.0, can_use_volume=100):
         self.account_type = 2
         self.account_id = "test_account"
         self.stock_code = stock_code
         self.volume = volume
         self.can_use_volume = can_use_volume
-        self.open_price = avg_price
+        self.open_price = open_price
         self.market_value = market_value
         self.frozen_volume = 0
         self.on_road_volume = 0
         self.yesterday_volume = 0
-        self.avg_price = avg_price
         self.direction = 0
 
 
@@ -56,8 +55,8 @@ class MockAsset:
     def __init__(self):
         self.account_id = "test_account"
         self.cash = 100000.00
-        self.market_value = 50000.00
-        self.total_asset = 150000.00
+        self.market_value = 451250.00
+        self.total_asset = 551250.00
         self.frozen_cash = 0.00
         self.fetch_balance = 100000.00
 
@@ -96,7 +95,11 @@ class MockTrader:
         return [MockTrade()]
 
     def query_stock_positions(self, account):
-        return [MockPosition()]
+        return [
+            MockPosition("000001.SZ", volume=500, market_value=6250.0, open_price=12.0, can_use_volume=500),
+            MockPosition("600519.SH", volume=200, market_value=360000.0, open_price=1750.0, can_use_volume=200),
+            MockPosition("300750.SZ", volume=1000, market_value=85000.0, open_price=82.0, can_use_volume=800),
+        ]
 
     def query_all_orders(self, account):
         return [MockOrder()]
@@ -109,3 +112,26 @@ class MockData:
     @staticmethod
     def set_qmt_data_dir(path):
         pass
+
+    @staticmethod
+    def download_history_data2(stock_list, period, start_time='', end_time='', incrementally=True):
+        pass
+
+    @staticmethod
+    def get_market_data_ex(field_list=None, stock_list=None, period=None,
+                           start_time=None, end_time=None, count=None,
+                           dividend_type=None, fill_data=None):
+        return {}
+
+    @staticmethod
+    def get_instrument_detail(stock_code):
+        names = {
+            "000001.SZ": "平安银行",
+            "600519.SH": "贵州茅台",
+            "300750.SZ": "宁德时代",
+        }
+        return {
+            "InstrumentName": names.get(stock_code, ""),
+            "ExchangeID": stock_code.split(".")[-1] if "." in stock_code else "",
+            "InstrumentID": stock_code.split(".")[0] if "." in stock_code else stock_code,
+        }

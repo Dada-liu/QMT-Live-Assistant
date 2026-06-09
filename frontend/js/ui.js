@@ -3,6 +3,28 @@ import { Docs } from './docs.js';
 
 export const UI = {
 
+    _positionSortMode: null,
+    _positionData: [],
+    _selectedStrategyId: null,
+
+    initDashboardInteraction() {
+        const dashboard = document.getElementById('dashboard');
+        if (!dashboard) return;
+
+        dashboard.addEventListener('click', (e) => {
+            const card = e.target.closest('.dashboard-card.clickable');
+            if (!card) return;
+
+            const sortMode = card.dataset.sort;
+            if (UI._positionSortMode === sortMode) {
+                UI._positionSortMode = null;
+            } else {
+                UI._positionSortMode = sortMode;
+            }
+            UI._renderPositionList();
+        });
+    },
+
     updateServerInfo(data) {
         const grid = document.getElementById('server-info-grid');
         if (!grid) return;
@@ -147,6 +169,109 @@ export const UI = {
         } else {
             dailyProfit.title = dailyProfit.textContent;
         }
+
+        // 存储持仓数据用于排序展示
+        this._positionData = data.positions || [];
+        this._renderPositionList();
+
+        // 标记可点击卡片
+        const mvCard = document.getElementById('dash-market-value').closest('.dashboard-card');
+        const dpCard = dailyProfit.closest('.dashboard-card');
+        if (mvCard) {
+            mvCard.classList.add('clickable');
+            mvCard.dataset.sort = 'market_value';
+        }
+        if (dpCard) {
+            dpCard.classList.add('clickable');
+            dpCard.dataset.sort = 'daily_pnl';
+        }
+    },
+
+    _renderPositionList() {
+        const container = document.getElementById('position-list-container');
+        const list = document.getElementById('position-list');
+        const hint = document.getElementById('position-sort-hint');
+        if (!container || !list || !hint) return;
+
+        const positions = this._positionData;
+        const sortMode = this._positionSortMode;
+
+        if (!sortMode || !positions || positions.length === 0) {
+            container.classList.add('hidden');
+            this._highlightActiveSortCard(null);
+            return;
+        }
+
+        // 排序
+        const sorted = [...positions].sort((a, b) => {
+            if (sortMode === 'market_value') {
+                return (b.market_value || 0) - (a.market_value || 0);
+            }
+            return (a.daily_pnl || 0) - (b.daily_pnl || 0);
+        });
+
+        hint.textContent = sortMode === 'market_value' ? '按市值排序' : '按盈亏排序（亏损在前）';
+
+        const norm = sorted.map(p => ({
+            stock_code: p.stock_code,
+            stock_name: p.stock_name || '',
+            volume: p.volume || 0,
+            canUse: p.can_use_volume || 0,
+            openPrice: p.open_price || 0,
+            currentPrice: p.market_value && p.volume ? p.market_value / p.volume : 0,
+            marketValue: p.market_value || 0,
+            totalPnl: p.total_pnl || 0,
+            dailyPnl: p.daily_pnl || 0,
+        }));
+
+        list.innerHTML = _buildPositionRows(norm, { showTotalPnl: true, showCanUse: true });
+        container.classList.remove('hidden');
+        this._highlightActiveSortCard(sortMode);
+    },
+
+    _renderStrategyPositionList(strategy) {
+        const container = document.getElementById('strategy-position-list-container');
+        const list = document.getElementById('strategy-position-list');
+        const title = document.getElementById('strategy-position-title');
+        if (!container || !list || !title) return;
+
+        const positions = strategy.positions || [];
+        if (positions.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+
+        title.textContent = `${strategy.name} - 持仓明细`;
+
+        const norm = positions.map(p => ({
+            stock_code: p.stock_code,
+            stock_name: p.stock_name || '',
+            volume: p.quantity || 0,
+            canUse: 0,
+            openPrice: p.avg_cost || 0,
+            currentPrice: p.current_price || 0,
+            marketValue: p.market_value || 0,
+            totalPnl: 0,
+            dailyPnl: p.daily_pnl || 0,
+        }));
+
+        list.innerHTML = _buildPositionRows(norm, { showTotalPnl: false, showCanUse: false });
+        container.classList.remove('hidden');
+    },
+
+    _hideStrategyPositionList() {
+        const container = document.getElementById('strategy-position-list-container');
+        if (container) container.classList.add('hidden');
+    },
+
+    _highlightActiveSortCard(activeSort) {
+        document.querySelectorAll('#dashboard .dashboard-card.clickable').forEach(card => {
+            if (activeSort && card.dataset.sort === activeSort) {
+                card.classList.add('active');
+            } else {
+                card.classList.remove('active');
+            }
+        });
     },
 
     disableForm(disable) {
@@ -250,6 +375,11 @@ export const UI = {
                 el.className = 'dashboard-card-value';
             }
         });
+        this._positionSortMode = null;
+        this._positionData = [];
+        const container = document.getElementById('position-list-container');
+        if (container) container.classList.add('hidden');
+        this._highlightActiveSortCard(null);
     },
 
     renderStrategyOverview(strategies) {
@@ -258,6 +388,7 @@ export const UI = {
 
         if (!strategies || strategies.length === 0) {
             grid.innerHTML = '<div class="card strategy-overview-card" style="grid-column:1/-1;"><div class="strategy-empty" style="padding:var(--spacing-xl);">暂无策略，请先在「<a href="#" class="js-goto-config-strategy">配置</a>」tab 中添加策略。</div></div>';
+            this._hideStrategyPositionList();
             return;
         }
 
@@ -274,11 +405,15 @@ export const UI = {
             return prefix + formatCurrency(Math.abs(num)).replace('¥ ', '');
         };
 
+        const selectedId = this._selectedStrategyId;
+
         grid.innerHTML = strategies.map(s => {
             const pnlClass = (s.daily_pnl || 0) >= 0 ? 'up' : 'down';
             const positionCount = s.positions ? s.positions.length : 0;
+            const isActive = selectedId === s.id;
             return `
-            <div class="card strategy-overview-card">
+            <div class="card strategy-overview-card clickable${isActive ? ' active' : ''}"
+                 data-strategy-id="${s.id}">
                 <div class="strategy-overview-header">
                     <span class="strategy-overview-name">${escapeHtml(s.name)}</span>
                     <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
@@ -301,22 +436,111 @@ export const UI = {
                     <span class="strategy-meta">持仓 ${positionCount} 只</span>
                     <span class="strategy-meta">信号 ${s.signal_count || 0} 次</span>
                 </div>
-                ${positionCount > 0 ? `
-                <div class="strategy-positions-mini">
-                    ${s.positions.map(p => `
-                        <div class="position-row">
-                            <span class="position-code">${escapeHtml(p.stock_code)}</span>
-                            <span class="position-qty">${p.quantity}股</span>
-                            <span class="position-value">${formatCurrency(p.market_value)}</span>
-                        </div>
-                    `).join('')}
-                </div>
-                ` : ''}
             </div>
             `;
         }).join('');
+
+        // 事件委托：点击策略卡片
+        grid.onclick = (e) => {
+            const card = e.target.closest('.strategy-overview-card.clickable');
+            if (!card) return;
+            const sid = card.dataset.strategyId;
+            if (this._selectedStrategyId === sid) {
+                this._selectedStrategyId = null;
+                this._hideStrategyPositionList();
+            } else {
+                this._selectedStrategyId = sid;
+                const strategy = strategies.find(s => s.id === sid);
+                if (strategy) this._renderStrategyPositionList(strategy);
+            }
+            this.renderStrategyOverview(strategies);
+        };
+
+        // 保持选中策略的持仓列表
+        if (selectedId) {
+            const strategy = strategies.find(s => s.id === selectedId);
+            if (strategy && strategy.positions && strategy.positions.length > 0) {
+                this._renderStrategyPositionList(strategy);
+            } else {
+                this._hideStrategyPositionList();
+            }
+        }
     },
 };
+
+function _buildPositionRows(positions, opts = {}) {
+    const { showTotalPnl = true, showCanUse = true } = opts;
+
+    const fmt = (v) => {
+        if (v === undefined || v === null) return '--';
+        return parseFloat(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+
+    const fmtPnl = (v) => {
+        if (v === undefined || v === null) return '--';
+        const n = parseFloat(v);
+        return (n >= 0 ? '+' : '') + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+
+    return positions.map(pos => {
+        const vol = pos.volume || 0;
+        const canUse = pos.canUse || 0;
+        const mv = pos.marketValue || 0;
+        const openPrice = pos.openPrice || 0;
+        const dailyPnl = pos.dailyPnl || 0;
+        const totalPnl = pos.totalPnl || 0;
+        const currentPrice = pos.currentPrice || 0;
+
+        const dailyClass = dailyPnl >= 0 ? 'up' : 'down';
+        const totalClass = totalPnl >= 0 ? 'up' : 'down';
+
+        const codeDisplay = pos.stock_name
+            ? `${escapeHtml(pos.stock_name)}(${escapeHtml(pos.stock_code)})`
+            : escapeHtml(pos.stock_code);
+
+        let row = `<div class="position-table-row">`;
+        row += `<span class="position-cell-code">${codeDisplay}</span>`;
+
+        if (showCanUse) {
+            row += `<span class="position-cell-stacked">
+                <span class="position-cell-main">${vol}</span>
+                <span class="position-cell-sub">${canUse}</span>
+            </span>`;
+        } else {
+            row += `<span>${vol}</span>`;
+        }
+
+        row += `<span class="position-cell-stacked">
+            <span class="position-cell-main">${fmt(openPrice)}</span>
+            <span class="position-cell-sub">${fmt(currentPrice)}</span>
+        </span>`;
+
+        row += `<span>${fmt(mv)}</span>`;
+
+        if (showTotalPnl) {
+            const costBasis = openPrice * vol;
+            const pnlPct = costBasis > 0
+                ? ((totalPnl >= 0 ? '+' : '') + (totalPnl / costBasis * 100).toFixed(2) + '%')
+                : null;
+            row += `<span class="position-cell-pnl position-cell-stacked ${totalClass}">
+                <span class="position-cell-main ${totalClass}">${fmtPnl(totalPnl)}</span>
+                ${pnlPct ? `<span class="position-cell-sub ${totalClass}">${pnlPct}</span>` : ''}
+            </span>`;
+        }
+
+        const prevDay = mv - dailyPnl;
+        const dailyPct = prevDay > 0
+            ? ((dailyPnl >= 0 ? '+' : '') + (dailyPnl / prevDay * 100).toFixed(2) + '%')
+            : null;
+        row += `<span class="position-cell-pnl position-cell-stacked ${dailyClass}">
+            <span class="position-cell-main ${dailyClass}">${fmtPnl(dailyPnl)}</span>
+            ${dailyPct ? `<span class="position-cell-sub ${dailyClass}">${dailyPct}</span>` : ''}
+        </span>`;
+
+        row += `</div>`;
+        return row;
+    }).join('');
+}
 
 function escapeHtml(str) {
     if (!str) return '';

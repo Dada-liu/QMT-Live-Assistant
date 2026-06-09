@@ -3,7 +3,7 @@ import { UI } from './ui.js';
 import { getState } from './state.js';
 
 export function initDashboard() {
-    // Dashboard is updated via test-connection button and polling
+    UI.initDashboardInteraction();
 }
 
 export async function refreshDashboard() {

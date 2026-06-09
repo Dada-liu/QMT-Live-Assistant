@@ -41,6 +41,25 @@ def _fetch_preclose_from_xtdata(stock_codes):
         return {}
 
 
+def _fetch_stock_names_from_xtdata(stock_codes):
+    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典"""
+    if not stock_codes:
+        return {}
+    try:
+        from xtquant import xtdata
+        name_map = {}
+        for code in stock_codes:
+            try:
+                detail = xtdata.get_instrument_detail(code)
+                if detail and 'InstrumentName' in detail:
+                    name_map[code] = detail['InstrumentName']
+            except Exception:
+                pass
+        return name_map
+    except Exception:
+        return {}
+
+
 class Strategy(BaseModel):
     """策略抽象实体"""
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -58,12 +77,21 @@ class Strategy(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
+class PositionAssignment(BaseModel):
+    """单条持仓分配"""
+    stock_code: str
+    stock_name: str = ""
+    quantity: int = Field(gt=0)
+    current_price: float = Field(gt=0)
+
+
 class StrategyCreate(BaseModel):
     """创建策略请求体"""
-    name: str
+    name: str = Field(min_length=1)
     description: str = ""
-    allocated_funds: float = 0.0
+    allocated_funds: float = Field(gt=0)
     enabled: bool = True
+    positions: List[PositionAssignment] = []
 
 
 class StrategyUpdate(BaseModel):
@@ -72,6 +100,7 @@ class StrategyUpdate(BaseModel):
     description: Optional[str] = None
     allocated_funds: Optional[float] = None
     enabled: Optional[bool] = None
+    positions: Optional[List[PositionAssignment]] = None
 
 
 class StrategyManager:
@@ -96,6 +125,28 @@ class StrategyManager:
             total_asset=data.allocated_funds,
             enabled=data.enabled,
         )
+        # 初始化分配持仓
+        if data.positions:
+            total_cost = 0.0
+            pos_list = []
+            for pa in data.positions:
+                cost = pa.quantity * pa.current_price
+                total_cost += cost
+                pos_list.append({
+                    "stock_code": pa.stock_code,
+                    "stock_name": pa.stock_name,
+                    "quantity": pa.quantity,
+                    "avg_cost": pa.current_price,
+                    "current_price": pa.current_price,
+                    "market_value": cost,
+                    "daily_pnl": 0.0,
+                })
+            if total_cost > data.allocated_funds:
+                raise ValueError(f"持仓总成本({total_cost:.2f})超过分配金额({data.allocated_funds:.2f})")
+            strategy.positions = pos_list
+            strategy.available_cash = data.allocated_funds - total_cost
+            strategy.total_asset = strategy.available_cash + total_cost
+
         self._strategies[strategy.id] = strategy
         self._signal_counts[strategy.id] = 0
         return strategy
@@ -126,6 +177,11 @@ class StrategyManager:
         if not strategy:
             return None
         update_data = data.model_dump(exclude_unset=True)
+
+        # 先处理 positions（在对 allocated_funds 之前），
+        # 因为 positions 变化会影响 available_cash 的计算基础
+        positions_value = update_data.pop("positions", None)
+
         for key, value in update_data.items():
             if key == "allocated_funds":
                 diff = value - strategy.allocated_funds
@@ -136,6 +192,54 @@ class StrategyManager:
                 )
             else:
                 setattr(strategy, key, value)
+
+        # 处理持仓重新分配
+        if positions_value is not None:
+            new_by_code = {}
+            new_total_cost = 0.0
+            for pa in positions_value:
+                code = pa["stock_code"]
+                cost = pa["quantity"] * pa["current_price"]
+                new_total_cost += cost
+                new_by_code[code] = {
+                    "stock_code": code,
+                    "stock_name": pa.get("stock_name", ""),
+                    "quantity": pa["quantity"],
+                    "avg_cost": pa["current_price"],
+                    "current_price": pa["current_price"],
+                    "market_value": cost,
+                    "daily_pnl": 0.0,
+                }
+
+            kept = []
+            removed_mv = 0.0
+            for pos in strategy.positions:
+                code = pos["stock_code"]
+                if code in new_by_code:
+                    old_mv = pos.get("market_value", 0)
+                    new_pos = new_by_code[code]
+                    new_mv = new_pos["market_value"]
+                    strategy.available_cash += (old_mv - new_mv)
+                    kept.append(new_pos)
+                    del new_by_code[code]
+                else:
+                    removed_mv += pos.get("market_value", 0)
+
+            strategy.available_cash += removed_mv
+
+            # 新增持仓
+            for new_pos in new_by_code.values():
+                strategy.available_cash -= new_pos["market_value"]
+                kept.append(new_pos)
+
+            if strategy.available_cash < 0:
+                raise ValueError("可用资金不足，无法完成持仓分配")
+
+            strategy.positions = kept
+            strategy.total_asset = strategy.available_cash + sum(
+                p.get("market_value", 0) for p in kept
+            )
+
         strategy.updated_at = datetime.now().isoformat()
         self._strategies[strategy_id] = strategy
         return strategy
@@ -199,7 +303,6 @@ class StrategyManager:
                     "stock_name": "",
                     "quantity": quantity,
                     "avg_cost": price,
-                    "current_price": price,
                     "market_value": cost,
                     "daily_pnl": 0.0,
                 })
@@ -207,11 +310,12 @@ class StrategyManager:
             strategy.available_cash += cost
             for pos in positions:
                 if pos["stock_code"] == stock_code:
+                    old_qty = pos["quantity"]
                     pos["quantity"] -= quantity
                     if pos["quantity"] <= 0:
                         positions = [p for p in positions if p["stock_code"] != stock_code]
                     else:
-                        pos["market_value"] = pos["quantity"] * pos["current_price"]
+                        pos["market_value"] = round(pos["market_value"] * pos["quantity"] / old_qty, 2)
                     break
 
         strategy.positions = positions
@@ -241,15 +345,10 @@ class StrategyManager:
             if hasattr(p, '__dir__'):
                 vol = getattr(p, 'volume', 0) or 0
                 mv = getattr(p, 'market_value', 0.0) or 0.0
-                if vol > 0 and mv > 0:
-                    cur_price = mv / vol
-                else:
-                    cur_price = getattr(p, 'avg_price', 0.0) or 0.0
                 qmt_positions.append({
                     "stock_code": getattr(p, 'stock_code', ''),
                     "volume": vol,
                     "market_value": mv,
-                    "current_price": cur_price,
                 })
             elif isinstance(p, dict):
                 qmt_positions.append(p)
@@ -279,7 +378,6 @@ class StrategyManager:
                 qmt_pos = next((p for p in qmt_positions if p["stock_code"] == code), None)
                 if qmt_pos and total_qty > 0:
                     ratio = pos["quantity"] / total_qty
-                    pos["current_price"] = qmt_pos["current_price"]
                     pos["market_value"] = round(qmt_pos["market_value"] * ratio, 2)
 
                     # 计算当日盈亏：(持仓市值 - 前收盘价 × 持仓数量)

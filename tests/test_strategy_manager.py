@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 from unittest.mock import patch, MagicMock
 from backend.strategy_manager import (
-    Strategy, StrategyCreate, StrategyUpdate, StrategyManager,
+    Strategy, StrategyCreate, StrategyUpdate, StrategyManager, PositionAssignment,
 )
 
 
@@ -44,11 +44,12 @@ class TestStrategyModel:
 
 class TestStrategyCreateModel:
     def test_minimal(self):
-        data = StrategyCreate(name="测试")
+        data = StrategyCreate(name="测试", allocated_funds=10000)
         assert data.name == "测试"
         assert data.description == ""
-        assert data.allocated_funds == 0.0
+        assert data.allocated_funds == 10000
         assert data.enabled is True
+        assert data.positions == []
 
     def test_full(self):
         data = StrategyCreate(
@@ -59,6 +60,18 @@ class TestStrategyCreateModel:
         )
         assert data.allocated_funds == 50000.0
         assert data.enabled is False
+
+    def test_allocated_funds_required(self):
+        with pytest.raises(Exception):
+            StrategyCreate(name="测试")
+
+    def test_allocated_funds_must_be_positive(self):
+        with pytest.raises(Exception):
+            StrategyCreate(name="测试", allocated_funds=0)
+
+    def test_name_must_not_be_empty(self):
+        with pytest.raises(Exception):
+            StrategyCreate(name="", allocated_funds=10000)
 
 
 class TestStrategyUpdateModel:
@@ -82,13 +95,13 @@ class TestStrategyManagerCRUD:
         return StrategyManager()
 
     def test_create(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1"))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         assert s.name == "策略1"
         assert s.id in mgr._strategies
         assert mgr._signal_counts[s.id] == 0
 
     def test_get_found(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1"))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         found = mgr.get(s.id)
         assert found is not None
         assert found.name == "策略1"
@@ -97,7 +110,7 @@ class TestStrategyManagerCRUD:
         assert mgr.get("nonexistent") is None
 
     def test_find_by_token(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1"))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         found = mgr.find_by_token(s.token)
         assert found is not None
         assert found.id == s.id
@@ -109,15 +122,15 @@ class TestStrategyManagerCRUD:
         assert mgr.list_all() == []
 
     def test_list_all_with_strategies(self, mgr):
-        mgr.create(StrategyCreate(name="A"))
-        mgr.create(StrategyCreate(name="B"))
+        mgr.create(StrategyCreate(name="A", allocated_funds=10000))
+        mgr.create(StrategyCreate(name="B", allocated_funds=10000))
         result = mgr.list_all()
         assert len(result) == 2
         assert all("signal_count" in d for d in result)
         assert result[0]["signal_count"] == 0
 
     def test_delete_existing(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1"))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         assert mgr.delete(s.id) is True
         assert mgr.get(s.id) is None
         assert mgr._signal_counts.get(s.id) is None
@@ -126,7 +139,7 @@ class TestStrategyManagerCRUD:
         assert mgr.delete("nonexistent") is False
 
     def test_toggle(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1", enabled=True))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000, enabled=True))
         toggled = mgr.toggle(s.id)
         assert toggled.enabled is False
         toggled = mgr.toggle(s.id)
@@ -136,11 +149,11 @@ class TestStrategyManagerCRUD:
         assert mgr.toggle("nonexistent") is None
 
     def test_is_enabled(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1", enabled=True))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000, enabled=True))
         assert mgr.is_enabled(s.id) is True
 
     def test_is_enabled_disabled(self, mgr):
-        s = mgr.create(StrategyCreate(name="策略1", enabled=False))
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000, enabled=False))
         assert mgr.is_enabled(s.id) is False
 
     def test_is_enabled_nonexistent(self, mgr):
@@ -192,7 +205,7 @@ class TestStrategyManagerSignals:
     @pytest.fixture
     def mgr(self):
         mgr = StrategyManager()
-        mgr.create(StrategyCreate(name="策略1"))
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         return mgr
 
     def _first_id(self, mgr):
@@ -281,7 +294,7 @@ class TestStrategyManagerTradingRecords:
     @pytest.fixture
     def mgr(self):
         mgr = StrategyManager()
-        mgr.create(StrategyCreate(name="策略1"))
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         return mgr
 
     def _first_id(self, mgr):
@@ -329,7 +342,7 @@ class TestStrategyManagerDailyProfit:
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
         mock_pos.market_value = 1200.0
-        mock_pos.last_price = 12.0
+        mock_pos.open_price = 12.0
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
@@ -338,7 +351,6 @@ class TestStrategyManagerDailyProfit:
             mgr.refresh_from_qmt(trader, account)
 
         s = mgr.get(s.id)
-        assert s.positions[0]["current_price"] == 12.0
         assert s.positions[0]["market_value"] == 1200.0
         assert s.positions[0]["daily_pnl"] == 200.0
         assert s.daily_pnl == 200.0
@@ -354,7 +366,7 @@ class TestStrategyManagerDailyProfit:
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
         mock_pos.market_value = 1200.0
-        mock_pos.last_price = 12.0
+        mock_pos.open_price = 12.0
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
@@ -366,3 +378,84 @@ class TestStrategyManagerDailyProfit:
         assert s.positions[0]["daily_pnl"] == 0.0
         assert s.daily_pnl == 0.0
         assert mgr.daily_profit == 0.0
+
+
+class TestStrategyManagerCreateWithPositions:
+    @pytest.fixture
+    def mgr(self):
+        return StrategyManager()
+
+    def test_create_with_positions(self, mgr):
+        s = mgr.create(StrategyCreate(
+            name="策略1",
+            allocated_funds=100000,
+            positions=[
+                PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=12.5),
+                PositionAssignment(stock_code="000002.SZ", stock_name="万科A", quantity=200, current_price=8.0),
+            ]
+        ))
+        assert len(s.positions) == 2
+        assert s.positions[0]["stock_code"] == "000001.SZ"
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["avg_cost"] == 12.5
+        assert s.positions[0]["market_value"] == 1250.0
+        assert s.positions[1]["stock_code"] == "000002.SZ"
+        assert s.positions[1]["quantity"] == 200
+        # 100*12.5 + 200*8.0 = 1250 + 1600 = 2850
+        assert s.available_cash == 100000 - 2850
+        assert s.total_asset == s.available_cash + 2850
+
+    def test_create_with_positions_exceeds_funds(self, mgr):
+        with pytest.raises(ValueError, match="超过分配金额"):
+            mgr.create(StrategyCreate(
+                name="超额策略",
+                allocated_funds=1000,
+                positions=[
+                    PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=50.0),
+                ]
+            ))
+
+    def test_create_no_positions(self, mgr):
+        s = mgr.create(StrategyCreate(name="空策略", allocated_funds=50000))
+        assert len(s.positions) == 0
+        assert s.available_cash == 50000
+        assert s.total_asset == 50000
+
+
+class TestStrategyManagerUpdatePositions:
+    @pytest.fixture
+    def mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(
+            name="原始",
+            allocated_funds=100000,
+            positions=[
+                PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=10.0),
+            ]
+        ))
+        return mgr
+
+    def _first_id(self, mgr):
+        return list(mgr._strategies.keys())[0]
+
+    def test_update_replace_positions(self, mgr):
+        sid = self._first_id(mgr)
+        s = mgr.update(sid, StrategyUpdate(positions=[
+            PositionAssignment(stock_code="000002.SZ", stock_name="万科A", quantity=50, current_price=20.0),
+        ]))
+        assert len(s.positions) == 1
+        assert s.positions[0]["stock_code"] == "000002.SZ"
+        assert s.positions[0]["quantity"] == 50
+
+    def test_update_positions_none_unchanged(self, mgr):
+        sid = self._first_id(mgr)
+        s = mgr.update(sid, StrategyUpdate(name="新名称"))
+        assert len(s.positions) == 1
+        assert s.name == "新名称"
+
+    def test_update_clear_positions(self, mgr):
+        sid = self._first_id(mgr)
+        s = mgr.update(sid, StrategyUpdate(positions=[]))
+        assert len(s.positions) == 0
+        # 移除持仓后退还市场价值
+        assert s.available_cash == 100000

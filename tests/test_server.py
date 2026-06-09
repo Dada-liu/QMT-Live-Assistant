@@ -79,6 +79,14 @@ class TestAccountAsset:
         data = response.json()
         assert data["success"] is True
         assert "data" in data
+        positions = data["data"].get("positions", [])
+        if positions:
+            pos = positions[0]
+            assert "stock_name" in pos
+            assert "open_price" in pos
+            assert "total_pnl" in pos
+            assert "can_use_volume" in pos
+            assert "current_price" not in pos
 
     def test_signals_endpoint(self, client, server):
         response = client.get(
@@ -151,7 +159,7 @@ class TestStrategyManagement:
     def test_create_and_list(self, client, server):
         client.post(
             "/api/strategies",
-            json={"name": "策略A"},
+            json={"name": "策略A", "allocated_funds": 10000},
             headers={"X-Token": server.token},
         )
         response = client.get(
@@ -164,7 +172,7 @@ class TestStrategyManagement:
     def test_update_strategy(self, client, server):
         create_resp = client.post(
             "/api/strategies",
-            json={"name": "原始名称"},
+            json={"name": "原始名称", "allocated_funds": 10000},
             headers={"X-Token": server.token},
         )
         sid = create_resp.json()["data"]["id"]
@@ -190,7 +198,7 @@ class TestStrategyManagement:
     def test_delete_strategy(self, client, server):
         create_resp = client.post(
             "/api/strategies",
-            json={"name": "待删除"},
+            json={"name": "待删除", "allocated_funds": 10000},
             headers={"X-Token": server.token},
         )
         sid = create_resp.json()["data"]["id"]
@@ -212,7 +220,7 @@ class TestStrategyManagement:
     def test_toggle_strategy(self, client, server):
         create_resp = client.post(
             "/api/strategies",
-            json={"name": "切换测试", "enabled": True},
+            json={"name": "切换测试", "allocated_funds": 10000, "enabled": True},
             headers={"X-Token": server.token},
         )
         sid = create_resp.json()["data"]["id"]

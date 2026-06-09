@@ -400,16 +400,29 @@ graph LR
 
 ### 7. `backend/strategy_manager.py` — 策略管理器
 
+`PositionAssignment` Pydantic 模型：
+- stock_code, stock_name, quantity（> 0）, current_price（> 0）
+- 用于创建/编辑策略时分配账户现有持仓
+
 `Strategy` Pydantic 模型：
-- id（自动生成 12 位 hex）、name、description、enabled
+- id（自动生成 12 位 hex）、name（必填）、description、enabled
 - token（自动生成 32 位 hex，用于远程信号认证）
-- allocated_funds（分配金额）、available_cash（可用资金）
+- allocated_funds（必填，> 0）、available_cash（可用资金）
 - total_asset（总资产）、daily_pnl（当日盈亏，从 QMT 行情 + xtdata preClose 计算）
-- positions（持仓数组：stock_code, quantity, avg_cost, current_price, market_value, daily_pnl）
+- positions（持仓数组：stock_code, stock_name, quantity, avg_cost, current_price, market_value, daily_pnl）
 - trading_records（买卖记录数组）
+
+`StrategyCreate` 模型：
+- name（必填，min_length=1）、description、allocated_funds（必填，> 0）、enabled
+- positions（可选 List[PositionAssignment]）— 创建时分配持仓
+
+`StrategyUpdate` 模型：
+- 所有字段可选，positions 为 Optional[List[PositionAssignment]]
 
 `StrategyManager` 类：
 - CRUD：create, get, list_all, update, delete, toggle
+- `create(data)` — 若提供了 positions，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
+- `update(id, data)` — 支持 positions 对账（新增/更新/移除持仓，调整 available_cash）
 - `find_by_token(token)` — 按 Token 查找策略
 - `update_position(...)` — 买/卖后更新持仓数量和可用资金
 - `add_trading_record(...)` — 添加买卖记录
@@ -420,6 +433,11 @@ graph LR
 - 调用 `xtdata.download_history_data2` + `get_market_data_ex` 获取日线 preClose 字段
 - 返回 `{stock_code: preClose}` 字典
 - 异常时静默降级返回空字典
+
+`_fetch_stock_names_from_xtdata(stock_codes)` 函数：
+- 调用 `xtdata.get_instrument_detail(code)` 获取合约基础信息中的 InstrumentName
+- 返回 `{stock_code: name}` 字典
+- 用于仪表板持仓列表展示"证券名(证券代码)"格式
 
 ### 8. `backend/server.py` — 核心服务器
 
@@ -435,7 +453,7 @@ graph LR
   - 策略 CRUD：GET/POST `/api/strategies`、PUT/DELETE `/api/strategies/{id}`、POST toggle、POST refresh
   - 聚宽下单：`/api/jukuan_order`、`/api/jukuan_order_target`、`/api/jukuan_order_value`、`/api/jukuan_order_target_value`
   - `GET /api/signals` — 支持 `start_date`、`end_date`、`strategy_name` 筛选
-  - `GET /api/account-asset` — 返回账户资产 + daily_profit
+  - `GET /api/account-asset` — 返回账户资产 + 持仓明细（含 stock_name、open_price、total_pnl 等字段）+ daily_profit
   - `POST /api/receive-signal` — 支持策略 Token，自动关联策略并更新持仓
   - `GET /api/docs`、`GET /api/docs/{name}` — 文档内容
 - `init_and_setup()` → `run()` → `stop()`
@@ -485,10 +503,11 @@ graph LR
 
 ### 14. `backend/mock_xtquant/__init__.py` — Mock 层
 
-- `MockTrader`: connect(), query_stock_asset() 返回模拟资产数据，query_stock_positions() 返回空列表
+- `MockTrader`: connect(), query_stock_asset() 返回模拟资产数据，query_stock_positions() 返回 3 只模拟持仓（平安银行、贵州茅台、宁德时代）
+- `MockPosition`: stock_code, volume, market_value, open_price, can_use_volume, frozen_volume 等
 - `MockAsset`: account_id, cash, market_value, total_asset, frozen_cash
 - `MockStockAccount`: account_id 属性
-- `MockData`: set_qmt_data_dir()
+- `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data_ex(), get_instrument_detail() — 返回模拟股票名称
 - `MockTraderCallback`: 基类
 
 ---
@@ -505,7 +524,7 @@ graph LR
   #server-info         — 服务器状态卡片（状态、Token、连接信息）
   #strategy-management — 策略管理（列表 + 添加/编辑/删除/启用禁用 + Token复制）
   #dashboard           — 账户仪表板（可用资金、持仓市值、总资产、当日盈亏）
-  #strategy-overview   — 策略概览（各策略资产卡片 + 持仓明细 + 刷新按钮）
+  #strategy-overview   — 策略概览（各策略资产卡片 + 点击展开持仓明细表 + 刷新按钮）
   #monitor             — 信号监控面板（筛选栏 + 实时信号列表）
   #converter           — 聚宽代码转换工具
   #docs                — 文档浏览（Markdown 渲染）
@@ -548,9 +567,13 @@ updateServerInfo(data), resetServerInfo(), renderSignals(), addSignal(signal),
 clearSignals(), updateDashboard(data), disableForm(disable),
 toggleTheme(), initTheme(), showConnectPrompt(), hideConnectPrompt(),
 showSection(), hideSection(), switchTab(tabName), resetDashboard(),
-renderStrategyOverview(strategies)
+renderStrategyOverview(strategies), _renderPositionList(),
+_renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 ```
-- `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数绿色 + 前缀，负数红色 - 前缀）
+- `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数绿色 + 前缀，负数红色 - 前缀）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
+- `_buildPositionRows()` — 可复用持仓表格行渲染函数，通过 opts 控制是否显示总盈亏列和可用数量列
+- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、信号数），卡片可点击选中，点击后在下方展示该策略持仓明细表（5列）
+- `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染
 
 **`config-panel.js`** — 配置面板
 - 表单提交处理（启动/停止服务器）
@@ -562,7 +585,9 @@ renderStrategyOverview(strategies)
 - `loadStrategies()` — 从 API 加载策略列表并渲染
 - `refreshStrategies()` — 调用刷新 API 更新行情数据（含当日盈亏）
 - 策略列表渲染：名称、描述、分配金额、可用资金、Token（可复制到剪贴板）、信号计数
-- 策略模态框：创建/编辑表单（名称、描述、分配金额）
+- 策略模态框：创建/编辑表单（名称必填、描述、分配金额必填、可选添加持仓）
+- `loadAccountPositionsForAssign(strategy)` — 获取账户持仓并渲染分配数量输入框（step=100），计算可用数量（账户总量 - 其他策略已分配量）
+- 表单校验：名称不能为空、分配金额必须 > 0、分配数量须为 100 的整数倍且不超过可用数量、持仓总成本不超过分配金额
 - 模态框特性：左上角关闭按钮、点击非模态区域不关闭
 - 创建成功后展示策略 Token
 - `populateStrategyDropdown()` — 填充信号筛选的策略下拉
@@ -576,6 +601,7 @@ renderStrategyOverview(strategies)
 
 **`dashboard.js`** — 仪表板
 - 4 张卡片：可用资金、持仓市值、总资产、当日盈亏
+- 点击「持仓市值」或「当日盈亏」卡片展开持仓明细表（6列，含总盈亏和当日盈亏百分比）
 - 数字使用 JetBrains Mono 字体
 - 连接成功后和连接测试后自动更新
 
@@ -653,7 +679,7 @@ renderStrategyOverview(strategies)
 2. **Mock 模式启动**：在 macOS 上 `python -m backend.main` 验证服务器启动成功
 3. **前端验证**：浏览器打开 `http://localhost:8000`，验证 UI 渲染和 API 交互
 4. **仪表板当日盈亏**：连接服务器后验证仪表板"当日盈亏"卡片正确显示数值和颜色（正数绿色、负数红色）
-5. **策略管理**：创建策略 → 获取 Token → 查看策略概览 → 编辑/删除策略
+5. **策略管理**：创建策略（名称和分配金额必填，可选分配账户持仓）→ 获取 Token → 点击策略概览卡片查看持仓明细 → 编辑/删除策略
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
 7. **信号测试**：用策略 Token 发送信号 → 验证策略持仓和资金自动更新
 8. **聚宽下单**：用策略 Token 调用聚宽风格下单 API → 验证自动下单和持仓更新

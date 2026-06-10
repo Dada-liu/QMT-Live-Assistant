@@ -244,19 +244,26 @@ export const UI = {
 
         title.textContent = `${strategy.name} - 持仓明细`;
 
-        const norm = positions.map(p => ({
-            stock_code: p.stock_code,
-            stock_name: p.stock_name || '',
-            volume: p.quantity || 0,
-            canUse: 0,
-            openPrice: p.avg_cost || 0,
-            currentPrice: p.current_price || 0,
-            marketValue: p.market_value || 0,
-            totalPnl: 0,
-            dailyPnl: p.daily_pnl || 0,
-        }));
+        const norm = positions.map(p => {
+            const qty = p.quantity || 0;
+            const avgCost = p.avg_cost || 0;
+            const mv = p.market_value || 0;
+            const currentPrice = qty > 0 ? mv / qty : 0;
+            const totalPnl = mv - avgCost * qty;
+            return {
+                stock_code: p.stock_code,
+                stock_name: p.stock_name || '',
+                volume: qty,
+                canUse: qty,
+                openPrice: avgCost,
+                currentPrice: currentPrice,
+                marketValue: mv,
+                totalPnl: totalPnl,
+                dailyPnl: p.daily_pnl || 0,
+            };
+        });
 
-        list.innerHTML = _buildPositionRows(norm, { showTotalPnl: false, showCanUse: false });
+        list.innerHTML = _buildPositionRows(norm, { showTotalPnl: true, showCanUse: true });
         container.classList.remove('hidden');
     },
 

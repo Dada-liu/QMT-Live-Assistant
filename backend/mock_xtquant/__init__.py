@@ -95,10 +95,11 @@ class MockTrader:
         return [MockTrade()]
 
     def query_stock_positions(self, account):
+        # 当前市值 = K线 close × volume，与 preClose 有差异以产生有意义当日盈亏
         return [
-            MockPosition("000001.SZ", volume=500, market_value=6250.0, open_price=12.0, can_use_volume=500),
-            MockPosition("600519.SH", volume=200, market_value=360000.0, open_price=1750.0, can_use_volume=200),
-            MockPosition("300750.SZ", volume=1000, market_value=85000.0, open_price=82.0, can_use_volume=800),
+            MockPosition("000001.SZ", volume=500, market_value=6275.0, open_price=12.0, can_use_volume=500),
+            MockPosition("600519.SH", volume=200, market_value=361000.0, open_price=1750.0, can_use_volume=200),
+            MockPosition("300750.SZ", volume=1000, market_value=85100.0, open_price=82.0, can_use_volume=800),
         ]
 
     def query_all_orders(self, account):
@@ -109,19 +110,60 @@ class MockTrader:
 
 
 class MockData:
+    # 模拟行情数据，key=股票代码，value=最新K线字典
+    _MOCK_KLINE = {
+        "000001.SZ": {"open": 12.45, "high": 12.58, "low": 12.40, "close": 12.55, "preClose": 12.50},
+        "600519.SH": {"open": 1795.0, "high": 1810.0, "low": 1790.0, "close": 1805.0, "preClose": 1800.0},
+        "300750.SZ": {"open": 84.50, "high": 85.20, "low": 84.00, "close": 85.10, "preClose": 85.00},
+    }
+    _MOCK_TIME = "20260609"
+
     @staticmethod
     def set_qmt_data_dir(path):
         pass
 
     @staticmethod
-    def download_history_data2(stock_list, period, start_time='', end_time='', incrementally=True):
+    def download_history_data2(stock_list, period, start_time='', end_time='', callback=None):
         pass
+
+    @staticmethod
+    def get_market_data(field_list=None, stock_list=None, period=None,
+                        start_time=None, end_time=None, count=None,
+                        dividend_type=None, fill_data=None):
+        """返回 {field: DataFrame(index=股票代码, columns=时间)}"""
+        import pandas as pd
+        if not stock_list:
+            stock_list = list(MockData._MOCK_KLINE.keys())
+        if not field_list:
+            field_list = ["open", "high", "low", "close", "preClose"]
+        result = {}
+        for field in field_list:
+            data = {}
+            for code in stock_list:
+                if code in MockData._MOCK_KLINE:
+                    data[code] = MockData._MOCK_KLINE[code].get(field, float("nan"))
+            if data:
+                result[field] = pd.DataFrame({MockData._MOCK_TIME: data})
+        return result
 
     @staticmethod
     def get_market_data_ex(field_list=None, stock_list=None, period=None,
                            start_time=None, end_time=None, count=None,
                            dividend_type=None, fill_data=None):
-        return {}
+        """返回 {股票代码: DataFrame(index=时间, columns=字段)}"""
+        import pandas as pd
+        if not stock_list:
+            stock_list = list(MockData._MOCK_KLINE.keys())
+        if not field_list:
+            field_list = ["open", "high", "low", "close", "preClose"]
+        result = {}
+        for code in stock_list:
+            if code in MockData._MOCK_KLINE:
+                row = {}
+                for field in field_list:
+                    row[field] = MockData._MOCK_KLINE[code].get(field, float("nan"))
+                result[code] = pd.DataFrame([row], index=[MockData._MOCK_TIME])
+        return result
 
     @staticmethod
     def get_instrument_detail(stock_code):

@@ -2798,6 +2798,79 @@ get_market_data(field_list=[], stock_list=[], period='1d', start_time='', end_ti
 - 备注
   - 获取lv2数据时需要数据终端有lv2数据权限
   - 时间范围为闭区间
+  - 与 get_market_data_ex 的核心区别：本接口返回 `{字段名: DataFrame}`（字段在外层），适合批量对比多股票同一字段；get_market_data_ex 返回 `{股票代码: DataFrame}`（股票在外层），适合单票分析
+
+
+#### 获取行情数据（按股票聚合）
+
+
+
+```python
+get_market_data_ex(field_list=[], stock_list=[], period='1d', start_time='', end_time='', count=-1, dividend_type='none', fill_data=True)
+
+```
+
+
+- 释义
+  - 从缓存获取行情数据，与 get_market_data 参数一致，区别在于返回结构：本接口按股票代码聚合，更适合单票分析场景
+- 参数
+  - field_list - list 数据字段列表，传空则为全部字段
+  - stock_list - list 合约代码列表
+  - period - string 周期
+  - start_time - string 起始时间
+  - end_time - string 结束时间
+  - count - int 数据个数
+  - dividend_type - string 除权方式
+  - fill_data - bool 是否向后填充空缺数据
+- 返回
+  - period为 1m 5m 1d 等K线周期时
+    - 返回dict { stock1 : value1, stock2 : value2, ... }
+    - stock1, stock2, ... ：合约代码
+    - value1, value2, ... ：pd.DataFrame 数据集，index为time_list，columns为field_list
+    - 各股票对应的DataFrame维度相同、字段相同
+  - period为 tick 分笔周期时
+    - 返回dict { stock1 : value1, stock2 : value2, ... }
+    - stock1, stock2, ... ：合约代码
+    - value1, value2, ... ：np.ndarray 数据集，按数据时间戳 time 增序排列
+- 备注
+  - 与 get_market_data 的核心区别：本接口返回 `{股票代码: DataFrame}`（股票在外层），更适合单票分别处理、计算指标等场景
+  - 获取lv2数据时需要数据终端有lv2数据权限
+  - 时间范围为闭区间
+- 示例
+
+```python
+from xtquant import xtdata
+
+codes = ["000001.SZ", "600000.SH"]
+period = "1d"
+start = "20260101"
+end = "20260609"
+
+# get_market_data：字段在外层，适合批量对比
+data1 = xtdata.get_market_data(
+    field_list=["open","high","low","close"],
+    stock_list=codes,
+    period=period,
+    start_time=start,
+    end_time=end
+)
+print(data1["close"].head())  # 直接拿所有股票的收盘价表
+
+# get_market_data_ex：股票在外层，适合单票分析（推荐）
+data2 = xtdata.get_market_data_ex(
+    field_list=["open","high","low","close"],
+    stock_list=codes,
+    period=period,
+    start_time=start,
+    end_time=end
+)
+print(data2["000001.SZ"].head())  # 直接拿单只股票的K线表
+```
+
+- 使用建议
+  - 推荐使用 get_market_data_ex 的场景（90%日常策略）：单只/多只股票分别处理、计算均线/MACD等技术指标、回测与信号生成
+  - 推荐使用 get_market_data 的场景：批量对比多股票同一字段（如全市场收盘价矩阵）、横截面分析
+  - 与 get_local_data 的区别：get_market_data / get_market_data_ex 包含本地数据 + 实时订阅数据（盘中会更新）；get_local_data 仅返回本地历史数据（不含实时）
 
 
 #### 获取本地行情数据

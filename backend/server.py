@@ -387,7 +387,9 @@ class QMTServer:
 
         @app.get('/api/strategies')
         async def list_strategies(token: str = Depends(_verify_token)):
-            return {'success': True, 'data': _current_server.strategy_manager.list_all()}
+            return {'success': True, 'data': _current_server.strategy_manager.list_all_enriched(
+                _current_server.trader, _current_server.account
+            )}
 
         @app.post('/api/strategies')
         async def create_strategy(data: StrategyCreate, token: str = Depends(_verify_token)):
@@ -432,8 +434,9 @@ class QMTServer:
 
         @app.post('/api/strategies/refresh')
         async def refresh_strategies(token: str = Depends(_verify_token)):
-            _current_server.strategy_manager.refresh_from_qmt(_current_server.trader, _current_server.account)
-            return {'success': True, 'data': _current_server.strategy_manager.list_all()}
+            return {'success': True, 'data': _current_server.strategy_manager.list_all_enriched(
+                _current_server.trader, _current_server.account
+            )}
 
     def init_and_setup(self, target_app=None):
         try:

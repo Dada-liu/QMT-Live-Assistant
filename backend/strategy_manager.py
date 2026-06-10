@@ -154,7 +154,7 @@ class StrategyManager:
             total_asset=data.allocated_funds,
             enabled=data.enabled,
         )
-        # 初始化分配持仓
+        # 初始化分配持仓（仅存储成本基准，行情数据实时获取）
         if data.positions:
             total_cost = 0.0
             pos_list = []
@@ -166,15 +166,11 @@ class StrategyManager:
                     "stock_name": pa.stock_name,
                     "quantity": pa.quantity,
                     "avg_cost": pa.current_price,
-                    "current_price": pa.current_price,
-                    "market_value": cost,
-                    "daily_pnl": 0.0,
                 })
             if total_cost > data.allocated_funds:
                 raise ValueError(f"持仓总成本({total_cost:.2f})超过分配金额({data.allocated_funds:.2f})")
             strategy.positions = pos_list
             strategy.available_cash = data.allocated_funds - total_cost
-            strategy.total_asset = strategy.available_cash + total_cost
 
         self._strategies[strategy.id] = strategy
         self._signal_counts[strategy.id] = 0
@@ -216,58 +212,45 @@ class StrategyManager:
                 diff = value - strategy.allocated_funds
                 strategy.allocated_funds = value
                 strategy.available_cash += diff
-                strategy.total_asset = strategy.available_cash + sum(
-                    p.get("market_value", 0) for p in strategy.positions
-                )
             else:
                 setattr(strategy, key, value)
 
-        # 处理持仓重新分配
+        # 处理持仓重新分配（基于成本价计算资金变动）
         if positions_value is not None:
             new_by_code = {}
-            new_total_cost = 0.0
             for pa in positions_value:
                 code = pa["stock_code"]
                 cost = pa["quantity"] * pa["current_price"]
-                new_total_cost += cost
                 new_by_code[code] = {
                     "stock_code": code,
                     "stock_name": pa.get("stock_name", ""),
                     "quantity": pa["quantity"],
                     "avg_cost": pa["current_price"],
-                    "current_price": pa["current_price"],
-                    "market_value": cost,
-                    "daily_pnl": 0.0,
                 }
 
             kept = []
-            removed_mv = 0.0
             for pos in strategy.positions:
                 code = pos["stock_code"]
                 if code in new_by_code:
-                    old_mv = pos.get("market_value", 0)
+                    old_cost = pos["avg_cost"] * pos["quantity"]
                     new_pos = new_by_code[code]
-                    new_mv = new_pos["market_value"]
-                    strategy.available_cash += (old_mv - new_mv)
+                    new_cost = new_pos["avg_cost"] * new_pos["quantity"]
+                    strategy.available_cash += (old_cost - new_cost)
                     kept.append(new_pos)
                     del new_by_code[code]
                 else:
-                    removed_mv += pos.get("market_value", 0)
-
-            strategy.available_cash += removed_mv
+                    strategy.available_cash += pos["avg_cost"] * pos["quantity"]
 
             # 新增持仓
             for new_pos in new_by_code.values():
-                strategy.available_cash -= new_pos["market_value"]
+                new_cost = new_pos["avg_cost"] * new_pos["quantity"]
+                strategy.available_cash -= new_cost
                 kept.append(new_pos)
 
             if strategy.available_cash < 0:
                 raise ValueError("可用资金不足，无法完成持仓分配")
 
             strategy.positions = kept
-            strategy.total_asset = strategy.available_cash + sum(
-                p.get("market_value", 0) for p in kept
-            )
 
         strategy.updated_at = datetime.now().isoformat()
         self._strategies[strategy_id] = strategy
@@ -306,7 +289,7 @@ class StrategyManager:
 
     def update_position(self, strategy_id: str, stock_code: str,
                         direction: str, quantity: int, price: float):
-        """更新策略持仓数量和可用资金（买卖信号执行后调用）"""
+        """更新策略持仓数量和可用资金（买卖信号执行后调用），行情数据由 list_all_enriched 实时计算"""
         strategy = self._strategies.get(strategy_id)
         if not strategy:
             return
@@ -323,7 +306,6 @@ class StrategyManager:
                     total_cost = pos["avg_cost"] * pos["quantity"] + cost
                     pos["quantity"] = total_qty
                     pos["avg_cost"] = round(total_cost / total_qty, 4) if total_qty > 0 else 0
-                    pos["market_value"] = total_qty * price
                     found = True
                     break
             if not found:
@@ -332,25 +314,17 @@ class StrategyManager:
                     "stock_name": "",
                     "quantity": quantity,
                     "avg_cost": price,
-                    "market_value": cost,
-                    "daily_pnl": 0.0,
                 })
         elif direction == "sell":
             strategy.available_cash += cost
             for pos in positions:
                 if pos["stock_code"] == stock_code:
-                    old_qty = pos["quantity"]
                     pos["quantity"] -= quantity
                     if pos["quantity"] <= 0:
                         positions = [p for p in positions if p["stock_code"] != stock_code]
-                    else:
-                        pos["market_value"] = round(pos["market_value"] * pos["quantity"] / old_qty, 2)
                     break
 
         strategy.positions = positions
-        strategy.total_asset = strategy.available_cash + sum(
-            p.get("market_value", 0) for p in positions
-        )
         strategy.updated_at = datetime.now().isoformat()
 
     def add_trading_record(self, strategy_id: str, record: dict):
@@ -362,70 +336,97 @@ class StrategyManager:
         records.append(record)
         strategy.trading_records = records
 
-    def refresh_from_qmt(self, trader, account):
-        """从 QMT 查询实时持仓行情，更新所有策略的持仓市值和当日盈亏"""
+    def list_all_enriched(self, trader, account) -> List[dict]:
+        """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）"""
+        if not self._strategies:
+            return []
+
+        # 从 QMT 获取实时持仓行情
+        qmt_positions = []
         try:
             qmt_positions_raw = trader.query_stock_positions(account)
+            for p in qmt_positions_raw:
+                if hasattr(p, '__dir__'):
+                    qmt_positions.append({
+                        "stock_code": getattr(p, 'stock_code', ''),
+                        "volume": getattr(p, 'volume', 0) or 0,
+                        "market_value": getattr(p, 'market_value', 0.0) or 0.0,
+                    })
+                elif isinstance(p, dict):
+                    qmt_positions.append(p)
         except Exception:
-            return
+            pass
 
-        qmt_positions = []
-        for p in qmt_positions_raw:
-            if hasattr(p, '__dir__'):
-                vol = getattr(p, 'volume', 0) or 0
-                mv = getattr(p, 'market_value', 0.0) or 0.0
-                qmt_positions.append({
-                    "stock_code": getattr(p, 'stock_code', ''),
-                    "volume": vol,
-                    "market_value": mv,
-                })
-            elif isinstance(p, dict):
-                qmt_positions.append(p)
+        # 收集所有策略涉及的股票代码，从行情模块批量获取前收盘价
+        all_codes = {pos["stock_code"] for s in self._strategies.values() for pos in s.positions if pos["stock_code"]}
+        preclose_map = _fetch_preclose_from_xtdata(all_codes)
 
-        if not qmt_positions:
-            return
+        # 构建 QMT 数据索引 {stock_code: {market_value, volume, current_price}}
+        qmt_index = {}
+        for p in qmt_positions:
+            code = p.get("stock_code", "")
+            if not code:
+                continue
+            vol = p.get("volume", 0)
+            mv = p.get("market_value", 0.0)
+            qmt_index[code] = {
+                "volume": vol,
+                "market_value": mv,
+                "current_price": round(mv / vol, 2) if vol > 0 else 0.0,
+            }
 
-        # 从行情模块获取所有持仓股票的前收盘价
-        stock_codes = {p["stock_code"] for p in qmt_positions if p["stock_code"]}
-        preclose_map = _fetch_preclose_from_xtdata(stock_codes)
-
-        # 计算每个标的所有策略总持仓
-        stock_total_qty: Dict[str, int] = {}
-        for strategy in self._strategies.values():
-            for pos in strategy.positions:
-                code = pos["stock_code"]
-                stock_total_qty[code] = stock_total_qty.get(code, 0) + pos["quantity"]
-
-        # 按比例分配 QMT 行情数据到各策略
         global_daily_profit = 0.0
-        for strategy in self._strategies.values():
+        result = []
+        for s in self._strategies.values():
+            d = s.model_dump()
+            d["signal_count"] = self._signal_counts.get(s.id, 0)
+
             daily_pnl_total = 0.0
-            updated_positions = []
-            for pos in strategy.positions:
+            enriched_positions = []
+            for pos in s.positions:
                 code = pos["stock_code"]
-                total_qty = stock_total_qty.get(code, 0)
-                qmt_pos = next((p for p in qmt_positions if p["stock_code"] == code), None)
-                if qmt_pos and total_qty > 0:
-                    ratio = pos["quantity"] / total_qty
-                    pos["market_value"] = round(qmt_pos["market_value"] * ratio, 2)
+                enriched = dict(pos)  # 拷贝原始字段：stock_code, stock_name, quantity, avg_cost
 
-                    # 计算当日盈亏：(持仓市值 - 前收盘价 × 持仓数量)
-                    preclose = preclose_map.get(code)
-                    qty = pos["quantity"]
-                    if preclose is not None and preclose > 0 and qty > 0:
-                        pos_daily_pnl = round(pos["market_value"] - preclose * qty, 2)
-                    else:
-                        pos_daily_pnl = 0.0
-                    pos["daily_pnl"] = pos_daily_pnl
-                    daily_pnl_total += pos_daily_pnl
-                updated_positions.append(pos)
+                qty = pos["quantity"]
+                qmt_data = qmt_index.get(code)
+                qmt_vol = qmt_data["volume"] if qmt_data else 0
 
-            strategy.positions = updated_positions
-            strategy.daily_pnl = round(daily_pnl_total, 2)
+                # 最新价：从 QMT 市值/数量计算
+                if qmt_data and qmt_data["current_price"] > 0:
+                    enriched["current_price"] = qmt_data["current_price"]
+                else:
+                    enriched["current_price"] = 0.0
+
+                # 计算市值：按策略占比分配 QMT 市值
+                if qmt_data and qmt_vol > 0:
+                    ratio = qty / qmt_vol
+                    enriched["market_value"] = round(qmt_data["market_value"] * ratio, 2)
+                else:
+                    enriched["market_value"] = round(enriched["current_price"] * qty, 2)
+                # 计算当日盈亏：(市值 - 前收盘价 × 数量)
+                preclose = preclose_map.get(code)
+                mv = enriched["market_value"]
+                if preclose is not None and preclose > 0 and qty > 0:
+                    pos_daily_pnl = round(mv - preclose * qty, 2)
+                else:
+                    pos_daily_pnl = 0.0
+                enriched["daily_pnl"] = pos_daily_pnl
+                daily_pnl_total += pos_daily_pnl
+
+                # 累计盈亏 = 市值 - 成本价 × 数量
+                avg_cost = pos.get("avg_cost", 0)
+                enriched["total_pnl"] = round(mv - avg_cost * qty, 2) if qty > 0 else 0.0
+
+                enriched_positions.append(enriched)
+
+            d["positions"] = enriched_positions
+            d["daily_pnl"] = round(daily_pnl_total, 2)
+            d["total_asset"] = round(s.available_cash + sum(
+                p["market_value"] for p in enriched_positions
+            ), 2)
+
             global_daily_profit += daily_pnl_total
-            strategy.total_asset = strategy.available_cash + sum(
-                p.get("market_value", 0) for p in updated_positions
-            )
-            strategy.updated_at = datetime.now().isoformat()
+            result.append(d)
 
         self._daily_profit = round(global_daily_profit, 2)
+        return result

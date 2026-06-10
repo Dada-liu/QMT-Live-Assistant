@@ -284,7 +284,8 @@ class TestStrategyManagerPositions:
         sid = self._first_id(mgr)
         mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
         s = mgr.get(sid)
-        assert s.total_asset == s.available_cash + s.positions[0]["market_value"]
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["avg_cost"] == 10.0
 
     def test_update_nonexistent_strategy(self, mgr):
         mgr.update_position("nonexistent", "000001.SZ", "buy", 100, 10.0)
@@ -317,22 +318,25 @@ class TestStrategyManagerDailyProfit:
         mgr = StrategyManager()
         assert mgr.daily_profit == 0.0
 
-    def test_refresh_from_qmt_empty_positions(self):
+    def test_list_all_enriched_empty(self):
         mgr = StrategyManager()
         trader = MagicMock()
         trader.query_stock_positions.return_value = []
         account = MagicMock()
-        mgr.refresh_from_qmt(trader, account)
+        result = mgr.list_all_enriched(trader, account)
+        assert result == []
         assert mgr.daily_profit == 0.0
 
-    def test_refresh_from_qmt_query_error(self):
+    def test_list_all_enriched_query_error(self):
         mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
         trader = MagicMock()
         trader.query_stock_positions.side_effect = Exception("查询失败")
         account = MagicMock()
-        mgr.refresh_from_qmt(trader, account)
+        result = mgr.list_all_enriched(trader, account)
+        assert len(result) == 1
 
-    def test_refresh_with_position_data(self):
+    def test_list_all_enriched_with_position_data(self):
         mgr = StrategyManager()
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
         mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
@@ -342,21 +346,21 @@ class TestStrategyManagerDailyProfit:
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
         mock_pos.market_value = 1200.0
-        mock_pos.open_price = 12.0
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
         with patch("backend.strategy_manager._fetch_preclose_from_xtdata",
                    return_value={"000001.SZ": 10.0}):
-            mgr.refresh_from_qmt(trader, account)
+            result = mgr.list_all_enriched(trader, account)
 
-        s = mgr.get(s.id)
-        assert s.positions[0]["market_value"] == 1200.0
-        assert s.positions[0]["daily_pnl"] == 200.0
-        assert s.daily_pnl == 200.0
+        d = result[0]
+        assert d["positions"][0]["market_value"] == 1200.0
+        assert d["positions"][0]["daily_pnl"] == 200.0
+        assert d["positions"][0]["current_price"] == 12.0  # 1200 / 100
+        assert d["daily_pnl"] == 200.0
         assert mgr.daily_profit == 200.0
 
-    def test_refresh_no_preclose_from_xtdata(self):
+    def test_list_all_enriched_no_preclose(self):
         mgr = StrategyManager()
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
         mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
@@ -366,17 +370,16 @@ class TestStrategyManagerDailyProfit:
         mock_pos.stock_code = "000001.SZ"
         mock_pos.volume = 100
         mock_pos.market_value = 1200.0
-        mock_pos.open_price = 12.0
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
         with patch("backend.strategy_manager._fetch_preclose_from_xtdata",
                    return_value={}):
-            mgr.refresh_from_qmt(trader, account)
+            result = mgr.list_all_enriched(trader, account)
 
-        s = mgr.get(s.id)
-        assert s.positions[0]["daily_pnl"] == 0.0
-        assert s.daily_pnl == 0.0
+        d = result[0]
+        assert d["positions"][0]["daily_pnl"] == 0.0
+        assert d["daily_pnl"] == 0.0
         assert mgr.daily_profit == 0.0
 
 
@@ -398,12 +401,10 @@ class TestStrategyManagerCreateWithPositions:
         assert s.positions[0]["stock_code"] == "000001.SZ"
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["avg_cost"] == 12.5
-        assert s.positions[0]["market_value"] == 1250.0
         assert s.positions[1]["stock_code"] == "000002.SZ"
         assert s.positions[1]["quantity"] == 200
         # 100*12.5 + 200*8.0 = 1250 + 1600 = 2850
         assert s.available_cash == 100000 - 2850
-        assert s.total_asset == s.available_cash + 2850
 
     def test_create_with_positions_exceeds_funds(self, mgr):
         with pytest.raises(ValueError, match="超过分配金额"):

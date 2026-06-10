@@ -96,7 +96,7 @@ graph TB
     MAIN --> TRAY
     WINDOW --> SVR
     TRAY --> SVR
-    STRAT -->|"xtdata.get_market_data_ex<br/>获取preClose计算当日盈亏"| XT
+    STRAT -->|"xtdata.get_market_data<br/>获取preClose/open计算成本与当日盈亏"| XT
 
     SVR <-->|"信号日志"| SIG
     STRAT <-->|"持仓/资金数据"| SVR
@@ -224,15 +224,15 @@ sequenceDiagram
     Note over 用户,QMT: === 行情刷新流程（含当日盈亏计算）===
     用户->>Frontend: 点击「刷新行情」
     Frontend->>Svr: POST /api/strategies/refresh
-    Svr->>Strat: refresh_from_qmt(trader, account)
+    Svr->>Strat: list_all_enriched(trader, account)
     Strat->>Client: trader.query_stock_positions(account)
     Client->>QMT: 查询持仓行情
-    QMT-->>Client: 持仓数据（含市值、数量）
-    Strat->>QMT: xtdata.get_market_data_ex<br/>获取 preClose（前收盘价）
+    QMT-->>Client: 持仓数据（含市值、数量、当前价=市值/数量）
+    Strat->>QMT: xtdata.get_market_data<br/>获取 preClose（前收盘价）
     QMT-->>Strat: 日线K线数据
-    Strat->>Strat: 计算当日盈亏<br/>daily_pnl = market_value - preClose × volume
-    Strat->>Strat: 按策略持仓比例分配
-    Strat-->>Svr: 更新后的策略列表
+    Strat->>Strat: 计算当日盈亏<br/>daily_pnl = market_value - preClose × quantity
+    Strat->>Strat: 按 QMT 总持仓比例分配市值到各策略
+    Strat-->>Svr: 富化后的策略列表（含current_price/market_value/daily_pnl/total_pnl）
     Svr-->>Frontend: 策略概览数据（含 daily_pnl）
 
     Note over 用户,QMT: === 仪表板资产查询 ===
@@ -409,7 +409,7 @@ graph LR
 - token（自动生成 32 位 hex，用于远程信号认证）
 - allocated_funds（必填，> 0）、available_cash（可用资金）
 - total_asset（总资产）、daily_pnl（当日盈亏，从 QMT 行情 + xtdata preClose 计算）
-- positions（持仓数组：stock_code, stock_name, quantity, avg_cost, current_price, market_value, daily_pnl）
+- positions（持久化字段：stock_code, stock_name, quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
 - trading_records（买卖记录数组）
 
 `StrategyCreate` 模型：
@@ -421,23 +421,25 @@ graph LR
 
 `StrategyManager` 类：
 - CRUD：create, get, list_all, update, delete, toggle
-- `create(data)` — 若提供了 positions，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
-- `update(id, data)` — 支持 positions 对账（新增/更新/移除持仓，调整 available_cash）
+- `create(data)` — 若提供了 positions，通过 `_fetch_open_prices_from_xtdata` 获取开盘价作为 avg_cost，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
+- `update(id, data)` — 支持 positions 对账；加仓时 avg_cost = (旧成本×旧量 + open_price×增量)/新量，减仓保留原成本，新增取 open_price
 - `find_by_token(token)` — 按 Token 查找策略
 - `update_position(...)` — 买/卖后更新持仓数量和可用资金
 - `add_trading_record(...)` — 添加买卖记录
-- `refresh_from_qmt(trader, account)` — 从 QMT 查询实时持仓，通过 xtdata 获取前收盘价（preClose），计算当日盈亏：`daily_pnl = market_value - preClose × volume`，按各策略持仓比例分配
+- `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取市值/数量 → 按策略占比分配 → 从 xtdata 获取 preClose → 计算 current_price (= 市值/数量)、market_value、daily_pnl (= 市值 - preClose×数量)、total_pnl (= 市值 - avg_cost×数量)；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
 - `daily_profit` property — 返回全局当日盈亏（所有策略汇总）
 
 `_fetch_preclose_from_xtdata(stock_codes)` 函数：
-- 调用 `xtdata.download_history_data2` + `get_market_data_ex` 获取日线 preClose 字段
-- 返回 `{stock_code: preClose}` 字典
-- 异常时静默降级返回空字典
+- 调用 `xtdata.download_history_data2` + `get_market_data` 获取日线 preClose 字段
+- 返回 `{stock_code: preClose}` 字典，无 xtquant 时 fallback 到 mock 数据
+
+`_fetch_open_prices_from_xtdata(stock_codes)` 函数：
+- 同上模式获取 `open` 字段，用于 create/update 时设定策略持仓成本价
+- 返回 `{stock_code: open}` 字典，无 xtquant 时 fallback 到 mock 数据
 
 `_fetch_stock_names_from_xtdata(stock_codes)` 函数：
 - 调用 `xtdata.get_instrument_detail(code)` 获取合约基础信息中的 InstrumentName
-- 返回 `{stock_code: name}` 字典
-- 用于仪表板持仓列表展示"证券名(证券代码)"格式
+- 返回 `{stock_code: name}` 字典，无 xtquant 时 fallback 到 mock 数据
 
 ### 8. `backend/server.py` — 核心服务器
 
@@ -507,7 +509,7 @@ graph LR
 - `MockPosition`: stock_code, volume, market_value, open_price, can_use_volume, frozen_volume 等
 - `MockAsset`: account_id, cash, market_value, total_asset, frozen_cash
 - `MockStockAccount`: account_id 属性
-- `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data_ex(), get_instrument_detail() — 返回模拟股票名称
+- `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data()（返回 {field: DataFrame}）, get_market_data_ex()（返回 {code: DataFrame}）, get_instrument_detail() — 内置 3 只模拟股票（平安银行、贵州茅台、宁德时代）的完整 K 线数据（open/high/low/close/preClose）
 - `MockTraderCallback`: 基类
 
 ---
@@ -537,7 +539,7 @@ graph LR
 - 按钮：pill 圆角（100px），44px 高度主按钮，带阴影增加立体感
 - 卡片：24px 圆角，32px 内边距
 - 字体：Inter（正文）、JetBrains Mono（数字）
-- 亮/暗双主题（`[data-theme="dark"]`）
+- 盈亏色值独立于系统状态色值：`--color-pnl-up: #cf202f`（涨红）、`--color-pnl-down: #05b169`（跌绿），系统成功/失败仍用 `--color-semantic-up/down`（绿/红）
 - 响应式：1024px / 768px / 480px 断点
 - 新增组件样式：策略概览卡片、信号筛选栏、策略列表项、模态框、小按钮、文档区域
 
@@ -570,10 +572,10 @@ showSection(), hideSection(), switchTab(tabName), resetDashboard(),
 renderStrategyOverview(strategies), _renderPositionList(),
 _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 ```
-- `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数绿色 + 前缀，负数红色 - 前缀）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
+- `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
 - `_buildPositionRows()` — 可复用持仓表格行渲染函数，通过 opts 控制是否显示总盈亏列和可用数量列
-- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、信号数），卡片可点击选中，点击后在下方展示该策略持仓明细表（5列）
-- `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染
+- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、信号数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）
+- `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染；现价使用 API 返回的实时 `current_price`，盈亏数据由后端计算
 
 **`config-panel.js`** — 配置面板
 - 表单提交处理（启动/停止服务器）
@@ -678,7 +680,7 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 1. **后端测试**：`pytest tests/ -v` 验证所有单元测试通过
 2. **Mock 模式启动**：在 macOS 上 `python -m backend.main` 验证服务器启动成功
 3. **前端验证**：浏览器打开 `http://localhost:8000`，验证 UI 渲染和 API 交互
-4. **仪表板当日盈亏**：连接服务器后验证仪表板"当日盈亏"卡片正确显示数值和颜色（正数绿色、负数红色）
+4. **仪表板当日盈亏**：连接服务器后验证仪表板"当日盈亏"卡片正确显示数值和颜色（正数红色、负数绿色，A 股习惯）
 5. **策略管理**：创建策略（名称和分配金额必填，可选分配账户持仓）→ 获取 Token → 点击策略概览卡片查看持仓明细 → 编辑/删除策略
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
 7. **信号测试**：用策略 Token 发送信号 → 验证策略持仓和资金自动更新

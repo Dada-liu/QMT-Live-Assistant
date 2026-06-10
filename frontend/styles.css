@@ -25,6 +25,8 @@
   --color-on-dark-soft: #a8acb3;
   --color-semantic-up: #05b169;
   --color-semantic-down: #cf202f;
+  --color-pnl-up: #cf202f;
+  --color-pnl-down: #05b169;
   --color-accent-yellow: #f4b000;
 
   --font-display: 'Inter', -apple-system, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -602,8 +604,8 @@ a:hover { text-decoration: underline; }
   margin-top: var(--spacing-xxs);
 }
 
-.dashboard-card-change.up { color: var(--color-semantic-up); }
-.dashboard-card-change.down { color: var(--color-semantic-down); }
+.dashboard-card-change.up { color: var(--color-pnl-up); }
+.dashboard-card-change.down { color: var(--color-pnl-down); }
 
 /* --- JQ Converter --- */
 .converter-layout {
@@ -825,8 +827,8 @@ a:hover { text-decoration: underline; }
   color: var(--color-ink);
 }
 
-.strategy-metric-value.up { color: var(--color-semantic-up); }
-.strategy-metric-value.down { color: var(--color-semantic-down); }
+.strategy-metric-value.up { color: var(--color-pnl-up); }
+.strategy-metric-value.down { color: var(--color-pnl-down); }
 
 .strategy-overview-footer {
   display: flex;
@@ -863,7 +865,7 @@ a:hover { text-decoration: underline; }
 
 #strategy-position-list-container .position-table-header,
 #strategy-position-list-container .position-table-row {
-  grid-template-columns: 1.6fr 1fr 1.1fr 1fr 1.1fr;
+  grid-template-columns: 1.4fr 1fr 1.1fr 1fr 1.1fr 1.1fr;
 }
 
 .position-list-header {
@@ -960,11 +962,11 @@ a:hover { text-decoration: underline; }
   color: var(--color-muted);
 }
 
-.position-cell-pnl .position-cell-main.up { color: var(--color-semantic-up); }
-.position-cell-pnl .position-cell-main.down { color: var(--color-semantic-down); }
+.position-cell-pnl .position-cell-main.up { color: var(--color-pnl-up); }
+.position-cell-pnl .position-cell-main.down { color: var(--color-pnl-down); }
 
-.position-cell-pnl .position-cell-sub.up { color: var(--color-semantic-up); }
-.position-cell-pnl .position-cell-sub.down { color: var(--color-semantic-down); }
+.position-cell-pnl .position-cell-sub.up { color: var(--color-pnl-up); }
+.position-cell-pnl .position-cell-sub.down { color: var(--color-pnl-down); }
 
 /* Clickable dashboard cards */
 .dashboard-card.clickable {

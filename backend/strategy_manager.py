@@ -89,6 +89,55 @@ def _fetch_stock_names_from_xtdata(stock_codes):
         return {}
 
 
+def _fetch_open_prices_from_xtdata(stock_codes):
+    """从 xtdata 获取开盘价，返回 {stock_code: open} 字典，无真实 xtquant 时 fallback 到 mock"""
+    if not stock_codes:
+        return {}
+    codes = list(stock_codes)
+    try:
+        from xtquant import xtdata
+        xtdata.download_history_data2(codes, '1d')
+        result = xtdata.get_market_data(
+            field_list=['open'],
+            stock_list=codes,
+            period='1d',
+            start_time='',
+            end_time='',
+            count=1,
+            dividend_type='none',
+        )
+        if not result or 'open' not in result:
+            return {}
+        df = result['open']
+        price_map = {}
+        for code in codes:
+            if code in df.index:
+                vals = df.loc[code].dropna()
+                if len(vals) > 0:
+                    price_map[code] = float(vals.iloc[-1])
+        return price_map
+    except ImportError:
+        from backend.mock_xtquant import MockData
+        result = MockData.get_market_data(
+            field_list=['open'],
+            stock_list=codes,
+            period='1d',
+            count=1,
+        )
+        df = result.get('open')
+        if df is None:
+            return {}
+        price_map = {}
+        for code in codes:
+            if code in df.index:
+                vals = df.loc[code].dropna()
+                if len(vals) > 0:
+                    price_map[code] = float(vals.iloc[-1])
+        return price_map
+    except Exception:
+        return {}
+
+
 class Strategy(BaseModel):
     """策略抽象实体"""
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -154,18 +203,21 @@ class StrategyManager:
             total_asset=data.allocated_funds,
             enabled=data.enabled,
         )
-        # 初始化分配持仓（仅存储成本基准，行情数据实时获取）
+        # 初始化分配持仓（成本价取 xtquant 开盘价，行情数据实时获取）
         if data.positions:
+            codes = [pa.stock_code for pa in data.positions]
+            open_prices = _fetch_open_prices_from_xtdata(codes)
             total_cost = 0.0
             pos_list = []
             for pa in data.positions:
-                cost = pa.quantity * pa.current_price
+                open_price = open_prices.get(pa.stock_code) or pa.current_price
+                cost = pa.quantity * open_price
                 total_cost += cost
                 pos_list.append({
                     "stock_code": pa.stock_code,
                     "stock_name": pa.stock_name,
                     "quantity": pa.quantity,
-                    "avg_cost": pa.current_price,
+                    "avg_cost": open_price,
                 })
             if total_cost > data.allocated_funds:
                 raise ValueError(f"持仓总成本({total_cost:.2f})超过分配金额({data.allocated_funds:.2f})")
@@ -215,36 +267,56 @@ class StrategyManager:
             else:
                 setattr(strategy, key, value)
 
-        # 处理持仓重新分配（基于成本价计算资金变动）
+        # 处理持仓重新分配（成本价结合 xtquant open_price 和已有成本综合计算）
         if positions_value is not None:
+            # 获取所有涉及股票的开盘价
+            codes = set(pa["stock_code"] for pa in positions_value)
+            codes.update(pos["stock_code"] for pos in strategy.positions)
+            open_prices = _fetch_open_prices_from_xtdata(codes)
+
             new_by_code = {}
             for pa in positions_value:
                 code = pa["stock_code"]
-                cost = pa["quantity"] * pa["current_price"]
+                open_price = open_prices.get(code) or pa.get("current_price", 0)
                 new_by_code[code] = {
                     "stock_code": code,
                     "stock_name": pa.get("stock_name", ""),
                     "quantity": pa["quantity"],
-                    "avg_cost": pa["current_price"],
+                    "avg_cost": open_price,
                 }
 
             kept = []
             for pos in strategy.positions:
                 code = pos["stock_code"]
                 if code in new_by_code:
-                    old_cost = pos["avg_cost"] * pos["quantity"]
+                    old_qty = pos["quantity"]
+                    old_avg = pos["avg_cost"]
                     new_pos = new_by_code[code]
-                    new_cost = new_pos["avg_cost"] * new_pos["quantity"]
+                    new_qty = new_pos["quantity"]
+                    open_price = open_prices.get(code) or new_pos["avg_cost"]
+
+                    if new_qty > old_qty:
+                        # 加仓：加权平均 (旧成本 × 旧数量 + 开盘价 × 增量) / 新数量
+                        new_pos["avg_cost"] = round(
+                            (old_qty * old_avg + (new_qty - old_qty) * open_price) / new_qty, 4
+                        )
+                    else:
+                        # 减仓或不变：保留原成本价
+                        new_pos["avg_cost"] = old_avg
+
+                    old_cost = old_qty * old_avg
+                    new_cost = new_pos["avg_cost"] * new_qty
                     strategy.available_cash += (old_cost - new_cost)
                     kept.append(new_pos)
                     del new_by_code[code]
                 else:
                     strategy.available_cash += pos["avg_cost"] * pos["quantity"]
 
-            # 新增持仓
+            # 新增持仓：成本价取 open_price
             for new_pos in new_by_code.values():
-                new_cost = new_pos["avg_cost"] * new_pos["quantity"]
-                strategy.available_cash -= new_cost
+                open_price = open_prices.get(new_pos["stock_code"]) or new_pos["avg_cost"]
+                new_pos["avg_cost"] = open_price
+                strategy.available_cash -= open_price * new_pos["quantity"]
                 kept.append(new_pos)
 
             if strategy.available_cash < 0:

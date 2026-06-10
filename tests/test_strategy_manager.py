@@ -389,32 +389,37 @@ class TestStrategyManagerCreateWithPositions:
         return StrategyManager()
 
     def test_create_with_positions(self, mgr):
-        s = mgr.create(StrategyCreate(
-            name="策略1",
-            allocated_funds=100000,
-            positions=[
-                PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=12.5),
-                PositionAssignment(stock_code="000002.SZ", stock_name="万科A", quantity=200, current_price=8.0),
-            ]
-        ))
+        with patch("backend.strategy_manager._fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.45, "000002.SZ": 8.10}):
+            s = mgr.create(StrategyCreate(
+                name="策略1",
+                allocated_funds=100000,
+                positions=[
+                    PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=12.5),
+                    PositionAssignment(stock_code="000002.SZ", stock_name="万科A", quantity=200, current_price=8.0),
+                ]
+            ))
         assert len(s.positions) == 2
         assert s.positions[0]["stock_code"] == "000001.SZ"
         assert s.positions[0]["quantity"] == 100
-        assert s.positions[0]["avg_cost"] == 12.5
+        assert s.positions[0]["avg_cost"] == 12.45  # xtquant open_price
         assert s.positions[1]["stock_code"] == "000002.SZ"
         assert s.positions[1]["quantity"] == 200
-        # 100*12.5 + 200*8.0 = 1250 + 1600 = 2850
-        assert s.available_cash == 100000 - 2850
+        assert s.positions[1]["avg_cost"] == 8.10  # xtquant open_price
+        # 100*12.45 + 200*8.10 = 1245 + 1620 = 2865
+        assert s.available_cash == 100000 - 2865
 
     def test_create_with_positions_exceeds_funds(self, mgr):
-        with pytest.raises(ValueError, match="超过分配金额"):
-            mgr.create(StrategyCreate(
-                name="超额策略",
-                allocated_funds=1000,
-                positions=[
-                    PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=50.0),
-                ]
-            ))
+        with patch("backend.strategy_manager._fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 50.0}):
+            with pytest.raises(ValueError, match="超过分配金额"):
+                mgr.create(StrategyCreate(
+                    name="超额策略",
+                    allocated_funds=1000,
+                    positions=[
+                        PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=50.0),
+                    ]
+                ))
 
     def test_create_no_positions(self, mgr):
         s = mgr.create(StrategyCreate(name="空策略", allocated_funds=50000))

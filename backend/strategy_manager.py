@@ -11,14 +11,14 @@ from pydantic import BaseModel, Field
 
 
 def _fetch_preclose_from_xtdata(stock_codes):
-    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典"""
+    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock"""
     if not stock_codes:
         return {}
+    codes = list(stock_codes)
     try:
         from xtquant import xtdata
-        codes = list(stock_codes)
-        xtdata.download_history_data2(codes, '1d', incrementally=True)
-        result = xtdata.get_market_data_ex(
+        xtdata.download_history_data2(codes, '1d')
+        result = xtdata.get_market_data(
             field_list=['preClose'],
             stock_list=codes,
             period='1d',
@@ -32,8 +32,26 @@ def _fetch_preclose_from_xtdata(stock_codes):
         df = result['preClose']
         preclose_map = {}
         for code in codes:
-            if code in df.columns:
-                vals = df[code].dropna()
+            if code in df.index:
+                vals = df.loc[code].dropna()
+                if len(vals) > 0:
+                    preclose_map[code] = float(vals.iloc[-1])
+        return preclose_map
+    except ImportError:
+        from backend.mock_xtquant import MockData
+        result = MockData.get_market_data(
+            field_list=['preClose'],
+            stock_list=codes,
+            period='1d',
+            count=1,
+        )
+        df = result.get('preClose')
+        if df is None:
+            return {}
+        preclose_map = {}
+        for code in codes:
+            if code in df.index:
+                vals = df.loc[code].dropna()
                 if len(vals) > 0:
                     preclose_map[code] = float(vals.iloc[-1])
         return preclose_map
@@ -42,7 +60,7 @@ def _fetch_preclose_from_xtdata(stock_codes):
 
 
 def _fetch_stock_names_from_xtdata(stock_codes):
-    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典"""
+    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典，无真实 xtquant 时 fallback 到 mock"""
     if not stock_codes:
         return {}
     try:
@@ -51,6 +69,17 @@ def _fetch_stock_names_from_xtdata(stock_codes):
         for code in stock_codes:
             try:
                 detail = xtdata.get_instrument_detail(code)
+                if detail and 'InstrumentName' in detail:
+                    name_map[code] = detail['InstrumentName']
+            except Exception:
+                pass
+        return name_map
+    except ImportError:
+        from backend.mock_xtquant import MockData
+        name_map = {}
+        for code in stock_codes:
+            try:
+                detail = MockData.get_instrument_detail(code)
                 if detail and 'InstrumentName' in detail:
                     name_map[code] = detail['InstrumentName']
             except Exception:

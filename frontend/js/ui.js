@@ -106,14 +106,14 @@ export const UI = {
             } else if (direction === 'sell' || direction.includes('卖出')) {
                 directionBadge = '<span class="badge badge-sell">卖出</span>';
             } else {
-                directionBadge = `<span class="badge badge-info">${direction}</span>`;
+                directionBadge = `<span class="badge badge-warning">${direction}</span>`;
             }
 
             let statusBadge = '';
             if (status === 'submitted') statusBadge = '<span class="badge badge-info">已提交</span>';
             else if (status === 'filled') statusBadge = '<span class="badge badge-success">已成交</span>';
             else if (status === 'error') statusBadge = '<span class="badge badge-error">失败</span>';
-            else statusBadge = `<span>${status}</span>`;
+            else statusBadge = `<span class="badge badge-warning">${status}</span>`;
 
             return `
               <div class="signal-item">

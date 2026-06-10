@@ -509,6 +509,7 @@ a:hover { text-decoration: underline; }
 .badge-info { background-color: rgba(0, 82, 255, 0.1); color: var(--color-primary); }
 .badge-error { background-color: rgba(207, 32, 47, 0.1); color: var(--color-semantic-down); }
 .badge-success { background-color: rgba(5, 177, 105, 0.1); color: var(--color-semantic-up); }
+.badge-warning { background-color: rgba(244, 176, 0, 0.1); color: var(--color-accent-yellow); }
 
 .signal-msg {
   color: var(--color-body);

@@ -1,141 +1,14 @@
-"""
-策略管理器 — 管理多个远程交易策略
-每个策略代表一个独立的交易策略，可独立启用/禁用，
-拥有独立的 token、资金分配、持仓跟踪和交易记录。
+"""策略管理器。
+
+管理多个远程交易策略，支持策略 CRUD、资金分配、持仓跟踪、
+交易记录，以及基于 QMT 实时行情的持仓富化和当日盈亏计算。
 """
 import uuid
 import secrets
 from datetime import datetime
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
-
-
-def _fetch_preclose_from_xtdata(stock_codes):
-    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock"""
-    if not stock_codes:
-        return {}
-    codes = list(stock_codes)
-    try:
-        from xtquant import xtdata
-        xtdata.download_history_data2(codes, '1d')
-        result = xtdata.get_market_data(
-            field_list=['preClose'],
-            stock_list=codes,
-            period='1d',
-            start_time='',
-            end_time='',
-            count=1,
-            dividend_type='none',
-        )
-        if not result or 'preClose' not in result:
-            return {}
-        df = result['preClose']
-        preclose_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    preclose_map[code] = float(vals.iloc[-1])
-        return preclose_map
-    except ImportError:
-        from backend.mock_xtquant import MockData
-        result = MockData.get_market_data(
-            field_list=['preClose'],
-            stock_list=codes,
-            period='1d',
-            count=1,
-        )
-        df = result.get('preClose')
-        if df is None:
-            return {}
-        preclose_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    preclose_map[code] = float(vals.iloc[-1])
-        return preclose_map
-    except Exception:
-        return {}
-
-
-def _fetch_stock_names_from_xtdata(stock_codes):
-    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典，无真实 xtquant 时 fallback 到 mock"""
-    if not stock_codes:
-        return {}
-    try:
-        from xtquant import xtdata
-        name_map = {}
-        for code in stock_codes:
-            try:
-                detail = xtdata.get_instrument_detail(code)
-                if detail and 'InstrumentName' in detail:
-                    name_map[code] = detail['InstrumentName']
-            except Exception:
-                pass
-        return name_map
-    except ImportError:
-        from backend.mock_xtquant import MockData
-        name_map = {}
-        for code in stock_codes:
-            try:
-                detail = MockData.get_instrument_detail(code)
-                if detail and 'InstrumentName' in detail:
-                    name_map[code] = detail['InstrumentName']
-            except Exception:
-                pass
-        return name_map
-    except Exception:
-        return {}
-
-
-def _fetch_open_prices_from_xtdata(stock_codes):
-    """从 xtdata 获取开盘价，返回 {stock_code: open} 字典，无真实 xtquant 时 fallback 到 mock"""
-    if not stock_codes:
-        return {}
-    codes = list(stock_codes)
-    try:
-        from xtquant import xtdata
-        xtdata.download_history_data2(codes, '1d')
-        result = xtdata.get_market_data(
-            field_list=['open'],
-            stock_list=codes,
-            period='1d',
-            start_time='',
-            end_time='',
-            count=1,
-            dividend_type='none',
-        )
-        if not result or 'open' not in result:
-            return {}
-        df = result['open']
-        price_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    price_map[code] = float(vals.iloc[-1])
-        return price_map
-    except ImportError:
-        from backend.mock_xtquant import MockData
-        result = MockData.get_market_data(
-            field_list=['open'],
-            stock_list=codes,
-            period='1d',
-            count=1,
-        )
-        df = result.get('open')
-        if df is None:
-            return {}
-        price_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    price_map[code] = float(vals.iloc[-1])
-        return price_map
-    except Exception:
-        return {}
+from backend.utils import fetch_preclose_from_xtdata, fetch_open_prices_from_xtdata, fetch_stock_names_from_xtdata
 
 
 class Strategy(BaseModel):
@@ -206,7 +79,7 @@ class StrategyManager:
         # 初始化分配持仓（成本价取 xtquant 开盘价，行情数据实时获取）
         if data.positions:
             codes = [pa.stock_code for pa in data.positions]
-            open_prices = _fetch_open_prices_from_xtdata(codes)
+            open_prices = fetch_open_prices_from_xtdata(codes)
             total_cost = 0.0
             pos_list = []
             for pa in data.positions:
@@ -272,7 +145,7 @@ class StrategyManager:
             # 获取所有涉及股票的开盘价
             codes = set(pa["stock_code"] for pa in positions_value)
             codes.update(pos["stock_code"] for pos in strategy.positions)
-            open_prices = _fetch_open_prices_from_xtdata(codes)
+            open_prices = fetch_open_prices_from_xtdata(codes)
 
             new_by_code = {}
             for pa in positions_value:
@@ -431,7 +304,7 @@ class StrategyManager:
 
         # 收集所有策略涉及的股票代码，从行情模块批量获取前收盘价
         all_codes = {pos["stock_code"] for s in self._strategies.values() for pos in s.positions if pos["stock_code"]}
-        preclose_map = _fetch_preclose_from_xtdata(all_codes)
+        preclose_map = fetch_preclose_from_xtdata(all_codes)
 
         # 构建 QMT 数据索引 {stock_code: {market_value, volume, current_price}}
         qmt_index = {}

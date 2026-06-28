@@ -1,3 +1,8 @@
+"""日志系统。
+
+提供控制台与文件日志处理器，支持按日轮转，
+并可选通过企业微信 Webhook 推送日志。
+"""
 import logging
 import requests
 import os

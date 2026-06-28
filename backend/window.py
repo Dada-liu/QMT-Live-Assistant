@@ -1,3 +1,8 @@
+"""原生桌面窗口管理器。
+
+基于 pywebview 创建 WebView2/WKWebView 窗口，
+并在后台启动 uvicorn 服务，与系统托盘协同工作。
+"""
 import threading
 import time
 import os,sys

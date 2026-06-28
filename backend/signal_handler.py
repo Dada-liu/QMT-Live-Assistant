@@ -1,3 +1,8 @@
+"""远程信号接收器。
+
+定义远程交易信号模型，将远程策略信号转换为 QMT 委托并执行，
+同时记录信号日志与交易结果。
+"""
 from typing import Optional, Literal
 from pydantic import BaseModel
 from collections import deque

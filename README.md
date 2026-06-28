@@ -20,6 +20,7 @@
 - 实时信号监控面板，支持按日期和策略筛选
 - 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
 - 聚宽格式 ↔ QMT 格式代码转换
+- 聚宽风格下单：支持按数量/金额/目标仓位下单，无持仓时自动通过 QMT 全推行情获取最新价
 - 亮/暗双主题切换
 - 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
 
@@ -62,7 +63,10 @@ QMT-live-assistant/
 ├── tests/
 │   ├── test_client.py
 │   ├── test_server.py
-│   └── test_signal_handler.py
+│   ├── test_signal_handler.py
+│   ├── test_strategy_manager.py
+│   ├── test_jukuan_orders.py
+│   └── test_utils.py
 ├── requirements.txt
 └── README.md
 ```

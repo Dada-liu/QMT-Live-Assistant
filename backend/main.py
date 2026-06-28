@@ -1,3 +1,8 @@
+"""FastAPI 应用入口与 CLI 启动器。
+
+负责注册 HTTP 路由、启动/停止 QMT 服务器、
+提供系统托盘模式与原生桌面窗口模式入口。
+"""
 import argparse
 import os
 import sys

@@ -1,3 +1,8 @@
+"""系统托盘管理器。
+
+提供托盘图标、右键菜单、Token 复制与浏览器打开功能，
+支持 Windows、macOS 和 Linux。
+"""
 import sys
 import subprocess
 import threading

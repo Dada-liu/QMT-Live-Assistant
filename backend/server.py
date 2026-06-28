@@ -1,3 +1,8 @@
+"""QMTServer 核心模块。
+
+注册所有 API 端点（管理、策略、交易、聚宽下单、信号），
+管理 QMT 连接、策略生命周期、Token 认证与信号日志。
+"""
 from fastapi import FastAPI, HTTPException, Header, Depends, Path
 from pydantic import BaseModel
 import inspect
@@ -6,7 +11,8 @@ from typing import Any, Optional
 from collections import deque
 from datetime import datetime
 from backend.qmt_client import create_trader
-from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, _fetch_preclose_from_xtdata, _fetch_stock_names_from_xtdata
+from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 
@@ -200,12 +206,12 @@ class QMTServer:
                             stock_codes.add(code)
 
                     # 获取股票名称
-                    name_map = _fetch_stock_names_from_xtdata(stock_codes)
+                    name_map = fetch_stock_names_from_xtdata(stock_codes)
                     for pos in qmt_positions:
                         pos["stock_name"] = name_map.get(pos["stock_code"], "")
 
                     # 获取前收盘价计算每日盈亏 + 总盈亏
-                    preclose_map = _fetch_preclose_from_xtdata(stock_codes)
+                    preclose_map = fetch_preclose_from_xtdata(stock_codes)
                     for pos in qmt_positions:
                         preclose = preclose_map.get(pos["stock_code"])
                         if preclose is not None and preclose > 0:

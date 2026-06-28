@@ -349,7 +349,7 @@ class TestStrategyManagerDailyProfit:
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
-        with patch("backend.strategy_manager._fetch_preclose_from_xtdata",
+        with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
                    return_value={"000001.SZ": 10.0}):
             result = mgr.list_all_enriched(trader, account)
 
@@ -373,7 +373,7 @@ class TestStrategyManagerDailyProfit:
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
-        with patch("backend.strategy_manager._fetch_preclose_from_xtdata",
+        with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
                    return_value={}):
             result = mgr.list_all_enriched(trader, account)
 
@@ -389,7 +389,7 @@ class TestStrategyManagerCreateWithPositions:
         return StrategyManager()
 
     def test_create_with_positions(self, mgr):
-        with patch("backend.strategy_manager._fetch_open_prices_from_xtdata",
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
                    return_value={"000001.SZ": 12.45, "000002.SZ": 8.10}):
             s = mgr.create(StrategyCreate(
                 name="策略1",
@@ -410,7 +410,7 @@ class TestStrategyManagerCreateWithPositions:
         assert s.available_cash == 100000 - 2865
 
     def test_create_with_positions_exceeds_funds(self, mgr):
-        with patch("backend.strategy_manager._fetch_open_prices_from_xtdata",
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
                    return_value={"000001.SZ": 50.0}):
             with pytest.raises(ValueError, match="超过分配金额"):
                 mgr.create(StrategyCreate(

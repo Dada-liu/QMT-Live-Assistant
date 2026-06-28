@@ -8,6 +8,7 @@ from backend.utils import (
     timestamp_to_datetime_string,
     parse_order_type,
     convert_to_current_date,
+    fetch_latest_prices_from_xtdata,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 
@@ -41,3 +42,22 @@ class TestConvertToCurrentDate:
         result = convert_to_current_date(1700000000.0)
         assert result != 1700000000.0
         assert isinstance(result, float)
+
+
+class TestFetchLatestPricesFromXtdata:
+    def test_empty_codes(self):
+        assert fetch_latest_prices_from_xtdata([]) == {}
+        assert fetch_latest_prices_from_xtdata(None) == {}
+
+    def test_fetch_known_stock(self):
+        result = fetch_latest_prices_from_xtdata(["000001.SZ"])
+        assert result == {"000001.SZ": 12.55}
+
+    def test_fetch_multiple_stocks(self):
+        result = fetch_latest_prices_from_xtdata(["000001.SZ", "600519.SH"])
+        assert result["000001.SZ"] == 12.55
+        assert result["600519.SH"] == 1805.0
+
+    def test_unknown_stock_returns_empty(self):
+        result = fetch_latest_prices_from_xtdata(["UNKNOWN.SZ"])
+        assert result == {}

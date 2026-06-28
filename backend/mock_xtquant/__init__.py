@@ -1,3 +1,8 @@
+"""非 Windows 平台的 xtquant Mock 实现。
+
+提供 MockTrader、MockData 等类，用于在 macOS/Linux 环境下进行开发测试，
+模拟 xtquant 的交易接口与行情数据接口。
+"""
 class MockTraderCallback:
     def on_disconnected(self): pass
     def on_stock_order(self, order): pass
@@ -125,6 +130,29 @@ class MockData:
     @staticmethod
     def download_history_data2(stock_list, period, start_time='', end_time='', callback=None):
         pass
+
+    @staticmethod
+    def subscribe_quote(stock_code, period, start_time='', end_time='', count=-1, callback=None):
+        """模拟订阅实时行情，无实际操作"""
+        pass
+
+    @staticmethod
+    def get_full_tick(stock_list):
+        """模拟全推行情，返回 {stock_code: {'lastPrice': price, ...}} 字典"""
+        if not stock_list:
+            return {}
+        result = {}
+        for code in stock_list:
+            if code in MockData._MOCK_KLINE:
+                kline = MockData._MOCK_KLINE[code]
+                result[code] = {
+                    "lastPrice": kline["close"],
+                    "open": kline["open"],
+                    "high": kline["high"],
+                    "low": kline["low"],
+                    "lastClose": kline["preClose"],
+                }
+        return result
 
     @staticmethod
     def get_market_data(field_list=None, stock_list=None, period=None,

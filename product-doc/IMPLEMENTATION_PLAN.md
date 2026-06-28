@@ -211,11 +211,11 @@ sequenceDiagram
     Main-->>Remote: {success: true, order_id}
 
     Note over 用户,QMT: === 聚宽风格下单流程 ===
-    Remote->>Main: POST /api/jukuan_order<br/>{security, amount, side}
+    Remote->>Main: POST /api/jukuan_order_value<br/>{security, value, side}<br/>X-Token: <策略Token>
     Main->>Svr: verify_any_token() → 识别策略
-    Svr->>JK: order(security, amount, side)
-    JK->>JK: 查询当前持仓 + 行情
-    JK->>Client: trader.order_stock() / 批量下单
+    Svr->>JK: jukuan_order_value(security, value, side)
+    JK->>JK: 查询当前持仓价格；无持仓时调用 fetch_latest_prices_from_xtdata 获取 lastPrice
+    JK->>Client: trader.order_stock()
     Client->>QMT: 下单
     JK-->>Svr: 返回委托结果
     Svr->>Strat: 记录交易
@@ -378,6 +378,12 @@ graph LR
 - `add_stock_suffix(code)` — 6位代码补全后缀（600000→600000.SH）
 - `timestamp_to_datetime_string(ts)` — 时间戳转字符串
 - `parse_order_type(order_type)` — 订单类型 int→中文
+- `convert_to_current_date(ts)` — 将历史时间戳转换为当前日期
+- `fetch_preclose_from_xtdata(stock_codes)` — 从 xtdata 获取日线 preClose
+- `fetch_open_prices_from_xtdata(stock_codes)` — 从 xtdata 获取日线 open
+- `fetch_stock_names_from_xtdata(stock_codes)` — 从 xtdata 获取合约名称
+- `fetch_latest_prices_from_xtdata(stock_codes)` — 通过 `xtdata.get_full_tick` 获取最新价（lastPrice），无 xtquant 时 fallback 到 mock 数据
+- 以上行情函数统一集中管理，供 `strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
 
 ### 5. `backend/qmt_xtconstant.py` — xtconstant 常量映射
 - xtquant 订单类型常量（STOCK_BUY, STOCK_SELL, FIX_PRICE, LATEST_PRICE 等）
@@ -421,7 +427,7 @@ graph LR
 
 `StrategyManager` 类：
 - CRUD：create, get, list_all, update, delete, toggle
-- `create(data)` — 若提供了 positions，通过 `_fetch_open_prices_from_xtdata` 获取开盘价作为 avg_cost，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
+- `create(data)` — 若提供了 positions，通过 `fetch_open_prices_from_xtdata`（来自 `backend.utils`）获取开盘价作为 avg_cost，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
 - `update(id, data)` — 支持 positions 对账；加仓时 avg_cost = (旧成本×旧量 + open_price×增量)/新量，减仓保留原成本，新增取 open_price
 - `find_by_token(token)` — 按 Token 查找策略
 - `update_position(...)` — 买/卖后更新持仓数量和可用资金
@@ -429,17 +435,11 @@ graph LR
 - `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取市值/数量 → 按策略占比分配 → 从 xtdata 获取 preClose → 计算 current_price (= 市值/数量)、market_value、daily_pnl (= 市值 - preClose×数量)、total_pnl (= 市值 - avg_cost×数量)；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
 - `daily_profit` property — 返回全局当日盈亏（所有策略汇总）
 
-`_fetch_preclose_from_xtdata(stock_codes)` 函数：
-- 调用 `xtdata.download_history_data2` + `get_market_data` 获取日线 preClose 字段
-- 返回 `{stock_code: preClose}` 字典，无 xtquant 时 fallback 到 mock 数据
-
-`_fetch_open_prices_from_xtdata(stock_codes)` 函数：
-- 同上模式获取 `open` 字段，用于 create/update 时设定策略持仓成本价
-- 返回 `{stock_code: open}` 字典，无 xtquant 时 fallback 到 mock 数据
-
-`_fetch_stock_names_from_xtdata(stock_codes)` 函数：
-- 调用 `xtdata.get_instrument_detail(code)` 获取合约基础信息中的 InstrumentName
-- 返回 `{stock_code: name}` 字典，无 xtquant 时 fallback 到 mock 数据
+行情数据获取函数已迁移到 `backend.utils`：
+- `fetch_preclose_from_xtdata(stock_codes)` — 调用 `xtdata.download_history_data2` + `get_market_data` 获取日线 preClose 字段，返回 `{stock_code: preClose}`，无 xtquant 时 fallback 到 mock
+- `fetch_open_prices_from_xtdata(stock_codes)` — 同上模式获取 `open` 字段，用于 create/update 时设定策略持仓成本价
+- `fetch_stock_names_from_xtdata(stock_codes)` — 调用 `xtdata.get_instrument_detail(code)` 获取合约名称
+- `fetch_latest_prices_from_xtdata(stock_codes)` — 通过 `xtdata.get_full_tick` 获取 `lastPrice`，用于无持仓时的价值下单
 
 ### 8. `backend/server.py` — 核心服务器
 
@@ -472,11 +472,14 @@ graph LR
 ### 10. `backend/jukuan_orders.py` — 聚宽风格下单
 
 `JukuanOrderHandler` 类：
-- 实现聚宽 API 风格的下单方法：`order`、`order_target`、`order_value`、`order_target_value`
-- 支持 security (聚宽格式) 自动转换为 QMT 格式下单
-- 使用 xtdata 查询实时行情和当前持仓
-- 自动计算下单量（按金额/目标仓位）
+- 实现聚宽 API 风格的下单方法：`jukuan_order`、`jukuan_order_target`、`jukuan_order_value`、`jukuan_order_target_value`
+- 支持 security（聚宽格式）自动转换为 QMT 格式下单
+- `_get_price(trader, account, jq_code)` — 优先从当前持仓（市值/数量）获取参考价；无持仓时调用 `fetch_latest_prices_from_xtdata` 通过 QMT 全推行情获取 `lastPrice`；均无法获取时抛出异常
+- `_get_volume(...)` — 查询当前持仓数量
+- 价值下单/目标价值下单时自动获取最新价并计算下单量，按每手股数向下取整
+- 期货品种特殊处理：每手为 1，且支持 `side='short'` 反向开平仓
 - 将交易记录写入对应的 strategy_manager
+- 所有函数/方法已补充中文注释/文档字符串
 
 ### 11. `backend/window.py` — pywebview 桌面窗口
 
@@ -509,7 +512,7 @@ graph LR
 - `MockPosition`: stock_code, volume, market_value, open_price, can_use_volume, frozen_volume 等
 - `MockAsset`: account_id, cash, market_value, total_asset, frozen_cash
 - `MockStockAccount`: account_id 属性
-- `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data()（返回 {field: DataFrame}）, get_market_data_ex()（返回 {code: DataFrame}）, get_instrument_detail() — 内置 3 只模拟股票（平安银行、贵州茅台、宁德时代）的完整 K 线数据（open/high/low/close/preClose）
+- `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data()（返回 {field: DataFrame}）, get_market_data_ex()（返回 {code: DataFrame}）, get_instrument_detail(), get_full_tick() — 内置 3 只模拟股票（平安银行、贵州茅台、宁德时代）的完整 K 线数据（open/high/low/close/preClose），get_full_tick 返回 lastPrice=close
 - `MockTraderCallback`: 基类
 
 ---
@@ -645,6 +648,9 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 15. `tests/test_client.py`
 16. `tests/test_server.py`
 17. `tests/test_signal_handler.py`
+18. `tests/test_strategy_manager.py`
+19. `tests/test_jukuan_orders.py`
+20. `tests/test_utils.py`
 
 ### Phase 6: 前端 ✅
 18. `frontend/styles.css`（含策略概览、筛选栏、模态框等新组件样式）
@@ -673,6 +679,14 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 33. `README.md`
 34. `IMPLEMENTATION_PLAN.md`
 
+### Phase 11: 行情工具重构与无持仓取价 ✅
+35. 将 `strategy_manager.py` 中的 `_fetch_preclose_from_xtdata`、`_fetch_open_prices_from_xtdata`、`_fetch_stock_names_from_xtdata` 迁移到 `backend/utils.py`，并改名为公共函数
+36. 在 `backend/utils.py` 新增 `fetch_latest_prices_from_xtdata`，通过 `xtdata.get_full_tick` 获取最新价 `lastPrice`
+37. 修改 `backend/jukuan_orders.py` 的 `_get_price`，无持仓时调用 `fetch_latest_prices_from_xtdata` 获取行情价，支持首次价值建仓
+38. 扩展 `backend/mock_xtquant/MockData` 支持 `get_full_tick`
+39. 补充 `tests/test_utils.py` 和 `tests/test_jukuan_orders.py` 相关测试
+40. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 ---
 
 ## 验证方案
@@ -685,8 +699,9 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
 7. **信号测试**：用策略 Token 发送信号 → 验证策略持仓和资金自动更新
 8. **聚宽下单**：用策略 Token 调用聚宽风格下单 API → 验证自动下单和持仓更新
-9. **信号筛选**：按日期和策略筛选信号 → 验证筛选结果
-10. **代码转换**：验证 jq_to_qmt 和 qmt_to_jq 转换正确性
-11. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
-12. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
-13. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
+9. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
+10. **信号筛选**：按日期和策略筛选信号 → 验证筛选结果
+11. **代码转换**：验证 jq_to_qmt 和 qmt_to_jq 转换正确性
+12. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
+13. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
+14. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能

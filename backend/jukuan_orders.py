@@ -1,8 +1,14 @@
+"""聚宽风格下单处理器。
+
+提供聚宽 API 风格的下单方法（order/order_target/order_value/order_target_value），
+支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
+"""
 from collections import deque
 from datetime import datetime
 from typing import Optional
 
 from backend.qmt_client import jq_to_qmt, qmt_to_jq
+from backend.utils import fetch_latest_prices_from_xtdata
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import LATEST_PRICE
@@ -11,6 +17,7 @@ FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
 
 
 def _is_future(code: str) -> bool:
+    """判断证券代码是否为期货品种。"""
     for suffix in FUTURE_EXCHANGES:
         if code.endswith(suffix):
             return True
@@ -18,15 +25,21 @@ def _is_future(code: str) -> bool:
 
 
 def _lot_size(code: str) -> int:
+    """获取证券每手数量，期货为1手，股票为100手。"""
     return 1 if _is_future(code) else 100
 
 
 def _round_down_to_lot(quantity: float, code: str) -> int:
+    """将下单数量向下取整到最近手数倍，避免非整手委托。"""
     size = _lot_size(code)
     return int(quantity / size) * size
 
 
 def _get_position_info(trader, account, jq_code: str) -> dict:
+    """查询指定聚宽代码在QMT账户中的持仓信息。
+
+    返回包含持仓数量、参考价格以及是否找到持仓的字典。
+    """
     qmt_code = jq_to_qmt(jq_code)
     try:
         positions = trader.query_stock_positions(account)
@@ -53,20 +66,40 @@ def _get_position_info(trader, account, jq_code: str) -> dict:
 
 
 def _get_price(trader, account, jq_code: str) -> float:
+    """获取指定聚宽代码的最新参考价格，优先使用持仓市值计算，无持仓时从行情接口获取。"""
     info = _get_position_info(trader, account, jq_code)
     if info['price'] > 0:
         return info['price']
-    raise ValueError(f"无法获取 {jq_code} 的最新价格，请确保持仓中有该股票或先买入少量")
+
+    # 无持仓时，从 QMT 行情接口获取最新价
+    qmt_code = jq_to_qmt(jq_code)
+    price_map = fetch_latest_prices_from_xtdata([qmt_code])
+    price = price_map.get(qmt_code, 0.0)
+    if price > 0:
+        return price
+
+    raise ValueError(f"无法获取 {jq_code} 的最新价格，请确保持仓中有该股票或行情接口可用")
 
 
 def _get_volume(trader, account, jq_code: str) -> int:
+    """获取指定聚宽代码在QMT账户中的当前持仓数量。"""
     info = _get_position_info(trader, account, jq_code)
     return info['volume']
 
 
 class JukuanOrderHandler:
+    """处理聚宽策略信号并转换为QMT实际委托的下单处理器。"""
+
     def __init__(self, trader, account, signal_log: deque = None,
                  strategy_manager=None):
+        """初始化下单处理器。
+
+        Args:
+            trader: QMT交易对象，用于调用下单与持仓查询接口。
+            account: 资金账号。
+            signal_log: 可选，信号日志队列，用于记录下单与调仓信号。
+            strategy_manager: 可选，策略管理器。
+        """
         self.trader = trader
         self.account = account
         self.signal_log = signal_log
@@ -74,6 +107,17 @@ class JukuanOrderHandler:
 
     def _submit_order(self, jq_code: str, order_type: int, quantity: int,
                       strategy_name: str = 'jukuan_order') -> int:
+        """向QMT提交一笔委托。
+
+        Args:
+            jq_code: 聚宽格式的证券代码。
+            order_type: 委托类型（买入或卖出）。
+            quantity: 委托数量，已按手数取整。
+            strategy_name: 策略名称，写入QMT订单备注。
+
+        Returns:
+            QMT返回的订单编号。
+        """
         qmt_code = jq_to_qmt(jq_code)
         order_id = self.trader.order_stock(
             self.account,
@@ -97,6 +141,17 @@ class JukuanOrderHandler:
     def _log_signal(self, jq_code: str, direction: str, quantity: int,
                     order_id: Optional[int], status: str, message: str,
                     strategy_name: str = 'jukuan_order'):
+        """将下单或调仓信号记录到日志队列。
+
+        Args:
+            jq_code: 聚宽格式的证券代码。
+            direction: 方向（buy/sell/none）。
+            quantity: 委托数量。
+            order_id: 订单编号，可能为None。
+            status: 信号状态（submitted/cancelled/skipped/failed）。
+            message: 描述信息。
+            strategy_name: 策略名称。
+        """
         if self.signal_log is not None:
             self.signal_log.append({
                 'type': 'jukuan_order',
@@ -114,6 +169,19 @@ class JukuanOrderHandler:
 
     def jukuan_order(self, security: str, amount: int,
                      side: str = 'long') -> dict:
+        """按指定数量下单。
+
+        根据 amount 的正负决定买入或卖出，已支持期货空头方向处理。
+        数量会按每手股数向下取整，不足一手的委托将被取消。
+
+        Args:
+            security: 证券代码。
+            amount: 目标数量，正数为买入/开多，负数为卖出/平多。
+            side: 方向，'long' 或 'short'，仅对期货生效。
+
+        Returns:
+            包含 order_id、direction、quantity、message 的字典。
+        """
         is_future = _is_future(security)
         quantity = _round_down_to_lot(abs(amount), security)
 
@@ -146,6 +214,18 @@ class JukuanOrderHandler:
 
     def jukuan_order_target(self, security: str, amount: int,
                             side: str = 'long') -> dict:
+        """按目标持仓数量调仓。
+
+        计算当前持仓与目标数量的差值，并委托买入或卖出差额部分。
+
+        Args:
+            security: 证券代码。
+            amount: 目标持仓数量。
+            side: 方向，'long' 或 'short'，仅对期货生效。
+
+        Returns:
+            包含 order_id、direction、quantity、message 的字典。
+        """
         current_qty = _get_volume(self.trader, self.account, security)
         delta = amount - current_qty
 
@@ -187,6 +267,18 @@ class JukuanOrderHandler:
 
     def jukuan_order_value(self, security: str, value: float,
                            side: str = 'long') -> dict:
+        """按指定金额下单。
+
+        根据持仓最新价格计算可购买数量，并向下取整到整手。
+
+        Args:
+            security: 证券代码。
+            value: 目标金额，正数为买入，负数为卖出。
+            side: 方向，'long' 或 'short'，仅对期货生效。
+
+        Returns:
+            包含 order_id、direction、quantity、message 的字典。
+        """
         price = _get_price(self.trader, self.account, security)
         target_qty = abs(value) / price
         quantity = _round_down_to_lot(target_qty, security)
@@ -222,6 +314,18 @@ class JukuanOrderHandler:
 
     def jukuan_order_target_value(self, security: str, value: float,
                                   side: str = 'long') -> dict:
+        """按目标持仓市值调仓。
+
+        计算当前持仓市值与目标市值的差值，并调用 jukuan_order_value 进行差额委托。
+
+        Args:
+            security: 证券代码。
+            value: 目标持仓市值。
+            side: 方向，'long' 或 'short'，仅对期货生效。
+
+        Returns:
+            包含 order_id、direction、quantity、message 的字典。
+        """
         price = _get_price(self.trader, self.account, security)
         current_qty = _get_volume(self.trader, self.account, security)
         current_value = current_qty * price

@@ -169,8 +169,19 @@ class TestJukuanOrderValue:
 
     def test_no_position_for_price(self, handler):
         handler.trader.query_stock_positions.return_value = []
-        with pytest.raises(ValueError, match="无法获取"):
-            handler.jukuan_order_value("000001.XSHE", 10000)
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={}):
+            with pytest.raises(ValueError, match="无法获取"):
+                handler.jukuan_order_value("000001.XSHE", 10000)
+
+    def test_price_from_market_data_when_no_position(self, handler):
+        handler.trader.query_stock_positions.return_value = []
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.jukuan_order_value("000001.XSHE", 10000)
+        assert result["direction"] == "buy"
+        assert result["quantity"] == 700
+        assert result["order_id"] == 200001
 
 
 class TestJukuanOrderTargetValue:

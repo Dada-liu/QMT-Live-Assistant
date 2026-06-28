@@ -1,3 +1,8 @@
+"""miniQMT 连接层。
+
+创建 XtQuantTrader 实例、注册交易回调、
+实现聚宽代码与 QMT 代码的互相转换。
+"""
 import sys
 import random
 from collections import deque

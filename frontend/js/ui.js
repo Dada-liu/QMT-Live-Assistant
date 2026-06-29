@@ -1,3 +1,4 @@
+import { api } from './api.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { Docs } from './docs.js';
 
@@ -11,15 +12,28 @@ export const UI = {
         const dashboard = document.getElementById('dashboard');
         if (!dashboard) return;
 
-        dashboard.addEventListener('click', (e) => {
+        dashboard.addEventListener('click', async (e) => {
             const card = e.target.closest('.dashboard-card.clickable');
             if (!card) return;
 
             const sortMode = card.dataset.sort;
             if (UI._positionSortMode === sortMode) {
                 UI._positionSortMode = null;
-            } else {
-                UI._positionSortMode = sortMode;
+                UI._renderPositionList();
+                return;
+            }
+
+            UI._positionSortMode = sortMode;
+            const token = getStoredToken();
+            if (token) {
+                try {
+                    const result = await api.getAccountPositions(token);
+                    if (result.success && result.data) {
+                        UI._positionData = result.data;
+                    }
+                } catch (error) {
+                    // 静默忽略，使用已有持仓数据渲染
+                }
             }
             UI._renderPositionList();
         });

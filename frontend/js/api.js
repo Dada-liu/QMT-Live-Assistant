@@ -65,6 +65,12 @@ class APIClient {
         });
     }
 
+    async getAccountPositions(token) {
+        return this.request('api/account-positions', {
+            headers: { 'X-Token': token },
+        });
+    }
+
     async convertJqToQmt(code) {
         return this.request('api/convert/jq-to-qmt', {
             method: 'POST',

@@ -472,19 +472,19 @@ export const UI = {
         }).join('');
 
         // 事件委托：点击策略卡片
-        grid.onclick = (e) => {
+        grid.onclick = async (e) => {
             const card = e.target.closest('.strategy-overview-card.clickable');
             if (!card) return;
             const sid = card.dataset.strategyId;
             if (this._selectedStrategyId === sid) {
                 this._selectedStrategyId = null;
                 this._hideStrategyPositionList();
+                this.renderStrategyOverview(strategies);
             } else {
                 this._selectedStrategyId = sid;
-                const strategy = strategies.find(s => s.id === sid);
-                if (strategy) this._renderStrategyPositionList(strategy);
+                const { loadStrategies } = await import('./strategy.js');
+                await loadStrategies();
             }
-            this.renderStrategyOverview(strategies);
         };
 
         // 保持选中策略的持仓列表

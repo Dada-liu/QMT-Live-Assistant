@@ -113,6 +113,7 @@ export const UI = {
             if (status === 'submitted') statusBadge = '<span class="badge badge-info">已提交</span>';
             else if (status === 'filled') statusBadge = '<span class="badge badge-success">已成交</span>';
             else if (status === 'error') statusBadge = '<span class="badge badge-error">失败</span>';
+            else if (status === 'cancelled') statusBadge = '<span class="badge badge-warning">已取消</span>';
             else statusBadge = `<span class="badge badge-warning">${status}</span>`;
 
             return `

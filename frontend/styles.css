@@ -494,7 +494,7 @@ a:hover { text-decoration: underline; }
 
 .signal-time { color: var(--color-body); font-family: var(--font-mono); font-size: var(--text-caption); }
 .signal-code { font-weight: 600; color: var(--color-ink); }
-.signal-direction { text-align: center; }
+.signal-direction { text-align: left; }
 
 .badge {
   display: inline-block;

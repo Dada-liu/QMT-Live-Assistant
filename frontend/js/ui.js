@@ -323,6 +323,16 @@ export const UI = {
         document.getElementById(sectionId).classList.add('hidden');
     },
 
+    showLoading() {
+        const el = document.getElementById('page-loading');
+        if (el) el.classList.remove('hidden');
+    },
+
+    hideLoading() {
+        const el = document.getElementById('page-loading');
+        if (el) el.classList.add('hidden');
+    },
+
     switchTab(tabName) {
         const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter','docs'];
 

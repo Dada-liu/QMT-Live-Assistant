@@ -90,7 +90,7 @@ async function checkServerStatus() {
 
             if (storedToken) {
                 setState('token', storedToken);
-                refreshDashboard();
+                await refreshDashboard();
                 startPolling();
                 await loadStrategies();
                 populateStrategyDropdown();
@@ -102,6 +102,8 @@ async function checkServerStatus() {
         }
     } catch (error) {
         // Server not running, normal state
+    } finally {
+        UI.hideLoading();
     }
 }
 

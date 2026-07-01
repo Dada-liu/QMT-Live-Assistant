@@ -113,21 +113,3 @@ def create_trader(account_id, mini_qmt_path, order_tracker=None):
     return xt_trader, account, callback
 
 
-def jq_to_qmt(code: str) -> str:
-    if code.endswith(".XSHE"):
-        return code.replace(".XSHE", ".SZ")
-    elif code.endswith(".XSHG"):
-        return code.replace(".XSHG", ".SH")
-    elif code.endswith(".XBJ"):
-        return code.replace(".XBJ", ".BJ")
-    return code
-
-
-def qmt_to_jq(code: str) -> str:
-    if code.endswith(".SZ"):
-        return code.replace(".SZ", ".XSHE")
-    elif code.endswith(".SH"):
-        return code.replace(".SH", ".XSHG")
-    elif code.endswith(".BJ"):
-        return code.replace(".BJ", ".XBJ")
-    return code

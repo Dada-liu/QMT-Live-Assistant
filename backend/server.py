@@ -347,13 +347,13 @@ class QMTServer:
 
         @app.post('/api/convert/jq-to-qmt')
         async def convert_jq_to_qmt(request: dict):
-            from backend.qmt_client import jq_to_qmt
+            from backend.utils import jq_to_qmt
             code = request.get('code', '')
             return {'success': True, 'data': {'result': jq_to_qmt(code)}}
 
         @app.post('/api/convert/qmt-to-jq')
         async def convert_qmt_to_jq(request: dict):
-            from backend.qmt_client import qmt_to_jq
+            from backend.utils import qmt_to_jq
             code = request.get('code', '')
             return {'success': True, 'data': {'result': qmt_to_jq(code)}}
 

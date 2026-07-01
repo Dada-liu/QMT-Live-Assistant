@@ -37,7 +37,7 @@ QMT-live-assistant/
 ├── backend/
 │   ├── main.py              # FastAPI 入口
 │   ├── server.py            # QMTServer 核心
-│   ├── qmt_client.py        # miniQMT 连接 + 代码转换
+│   ├── qmt_client.py        # miniQMT 连接
 │   ├── signal_handler.py    # 远程信号接收
 │   ├── strategy_manager.py  # 策略管理器（多策略支持）
 │   ├── utils.py             # 工具函数

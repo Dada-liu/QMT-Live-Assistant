@@ -29,7 +29,7 @@ graph TB
         subgraph 核心层["核心层"]
             SVR[server.py<br/>QMTServer<br/>动态端点生成]
             SIG[signal_handler.py<br/>SignalReceiver<br/>远程信号接收]
-            CLIENT[qmt_client.py<br/>QMT 连接 + 代码转换]
+            CLIENT[qmt_client.py<br/>QMT 连接]
             STRAT[strategy_manager.py<br/>StrategyManager<br/>策略CRUD + 持仓跟踪]
             JK[jukuan_orders.py<br/>JukuanOrderHandler<br/>聚宽风格下单]
         end
@@ -379,11 +379,12 @@ graph LR
 - `timestamp_to_datetime_string(ts)` — 时间戳转字符串
 - `parse_order_type(order_type)` — 订单类型 int→中文
 - `convert_to_current_date(ts)` — 将历史时间戳转换为当前日期
+- `jq_to_qmt(code)` / `qmt_to_jq(code)` — 聚宽格式与 QMT 格式代码互转（XSHE↔SZ、XSHG↔SH、XBJ↔BJ）
 - `fetch_preclose_from_xtdata(stock_codes)` — 从 xtdata 获取日线 preClose
 - `fetch_open_prices_from_xtdata(stock_codes)` — 从 xtdata 获取日线 open
 - `fetch_stock_names_from_xtdata(stock_codes)` — 从 xtdata 获取合约名称
 - `fetch_latest_prices_from_xtdata(stock_codes)` — 通过 `xtdata.get_full_tick` 获取最新价（lastPrice），无 xtquant 时 fallback 到 mock 数据
-- 以上行情函数统一集中管理，供 `strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
+- 以上行情函数与代码转换函数统一集中管理，供 `signal_handler.py`、`strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
 
 ### 5. `backend/qmt_xtconstant.py` — xtconstant 常量映射
 - xtquant 订单类型常量（STOCK_BUY, STOCK_SELL, FIX_PRICE, LATEST_PRICE 等）
@@ -401,8 +402,6 @@ graph LR
   - `xt_trader.subscribe(account)`
   - `xt_trader.register_callback(callback)`
   - 非 Windows 平台自动降级到 mock_xtquant
-- `jq_to_qmt(code)` / `qmt_to_jq(code)` — 聚宽格式转换
-  - XSHE→SZ, XSHG→SH, XBJ→BJ
 
 ### 7. `backend/strategy_manager.py` — 策略管理器
 

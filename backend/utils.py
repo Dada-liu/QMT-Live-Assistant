@@ -41,6 +41,26 @@ def convert_to_current_date(timestamp: float) -> float:
     return new_dt.timestamp()
 
 
+def jq_to_qmt(code: str) -> str:
+    if code.endswith(".XSHE"):
+        return code.replace(".XSHE", ".SZ")
+    elif code.endswith(".XSHG"):
+        return code.replace(".XSHG", ".SH")
+    elif code.endswith(".XBJ"):
+        return code.replace(".XBJ", ".BJ")
+    return code
+
+
+def qmt_to_jq(code: str) -> str:
+    if code.endswith(".SZ"):
+        return code.replace(".SZ", ".XSHE")
+    elif code.endswith(".SH"):
+        return code.replace(".SH", ".XSHG")
+    elif code.endswith(".BJ"):
+        return code.replace(".BJ", ".XBJ")
+    return code
+
+
 def fetch_preclose_from_xtdata(stock_codes):
     """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock"""
     if not stock_codes:

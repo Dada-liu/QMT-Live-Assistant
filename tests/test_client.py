@@ -4,8 +4,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from unittest.mock import patch
-from backend.qmt_client import jq_to_qmt, qmt_to_jq, create_trader
-from backend.utils import add_stock_suffix
+from backend.qmt_client import create_trader
+from backend.utils import add_stock_suffix, jq_to_qmt, qmt_to_jq
 
 
 class TestSymbolConversion:

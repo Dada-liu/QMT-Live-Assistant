@@ -3,8 +3,8 @@
 提供聚宽 API 风格的下单方法（order/order_target/order_value/order_target_value），
 支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
 """
-from backend.qmt_client import jq_to_qmt, qmt_to_jq
-from backend.utils import fetch_latest_prices_from_xtdata
+from backend.utils import fetch_latest_prices_from_xtdata, jq_to_qmt, qmt_to_jq
+from backend.qmt_client import create_trader
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import LATEST_PRICE

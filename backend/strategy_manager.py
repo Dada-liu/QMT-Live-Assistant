@@ -59,7 +59,6 @@ class StrategyManager:
 
     def __init__(self):
         self._strategies: Dict[str, Strategy] = {}
-        self._signal_counts: Dict[str, int] = {}
         self._daily_profit: float = 0.0
 
     @property
@@ -98,7 +97,6 @@ class StrategyManager:
             strategy.available_cash = data.allocated_funds - total_cost
 
         self._strategies[strategy.id] = strategy
-        self._signal_counts[strategy.id] = 0
         return strategy
 
     def get(self, strategy_id: str) -> Optional[Strategy]:
@@ -113,11 +111,10 @@ class StrategyManager:
         return None
 
     def list_all(self) -> List[dict]:
-        """列出所有策略（含信号计数）"""
+        """列出所有策略"""
         result = []
         for s in self._strategies.values():
             d = s.model_dump()
-            d["signal_count"] = self._signal_counts.get(s.id, 0)
             result.append(d)
         return result
 
@@ -205,7 +202,6 @@ class StrategyManager:
         """删除策略"""
         if strategy_id in self._strategies:
             del self._strategies[strategy_id]
-            self._signal_counts.pop(strategy_id, None)
             return True
         return False
 
@@ -222,15 +218,6 @@ class StrategyManager:
         """检查策略是否启用"""
         strategy = self._strategies.get(strategy_id)
         return strategy is not None and strategy.enabled
-
-    def increment_signal_count(self, strategy_id: str):
-        """增加策略信号计数"""
-        if strategy_id in self._signal_counts:
-            self._signal_counts[strategy_id] += 1
-
-    def get_signal_count(self, strategy_id: str) -> int:
-        """获取策略信号计数"""
-        return self._signal_counts.get(strategy_id, 0)
 
     def update_position(self, strategy_id: str, stock_code: str,
                         direction: str, quantity: int, price: float):
@@ -408,7 +395,6 @@ class StrategyManager:
         result = []
         for s in self._strategies.values():
             d = s.model_dump()
-            d["signal_count"] = self._signal_counts.get(s.id, 0)
 
             daily_pnl_total = 0.0
             enriched_positions = []

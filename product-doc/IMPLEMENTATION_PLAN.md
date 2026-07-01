@@ -28,7 +28,7 @@ graph TB
         end
         subgraph 核心层["核心层"]
             SVR[server.py<br/>QMTServer<br/>动态端点生成]
-            SIG[signal_handler.py<br/>SignalReceiver<br/>远程信号接收]
+            ORD[order_tracker.py<br/>OrderTracker<br/>订单状态跟踪]
             CLIENT[qmt_client.py<br/>QMT 连接]
             STRAT[strategy_manager.py<br/>StrategyManager<br/>策略CRUD + 持仓跟踪]
             JK[jukuan_orders.py<br/>JukuanOrderHandler<br/>聚宽风格下单]
@@ -73,37 +73,34 @@ graph TB
         end
     end
 
-    DS -->|"POST /api/receive-signal<br/>(JSON 信号 + 策略Token)"| MAIN
-    DS -->|"POST /api/jukuan_order 等<br/>(聚宽风格 + 策略Token)"| MAIN
+    DS -->|"POST /api/jukuan_order* <br/>(聚宽风格 + 策略Token)"| MAIN
     MAIN --> SVR
-    MAIN --> SIG
     MAIN --> STRAT
     MAIN --> JK
     SVR --> CLIENT
     SVR --> STRAT
-    SIG --> STRAT
     JK --> STRAT
     CLIENT -->|"XtQuant SDK"| XT
-    SIG --> CLIENT
     JK --> CLIENT
     CLIENT --> UTILS
     CLIENT --> LOG
     SVR --> LOG
     MAIN --> CFG
     CLIENT --> CONST
-    SIG --> CONST
     MAIN --> WINDOW
     MAIN --> TRAY
     WINDOW --> SVR
     TRAY --> SVR
     STRAT -->|"xtdata.get_market_data<br/>获取preClose/open计算成本与当日盈亏"| XT
 
-    SVR <-->|"信号日志"| SIG
+    ORD <-->|"订单状态同步 + 持仓修正"| STRAT
+    SVR <-->|"订单日志"| ORD
     STRAT <-->|"持仓/资金数据"| SVR
     STRAT <-->|"QMT行情刷新"| CLIENT
     MAIN <-->|"HTTP API"| API
     API --> HTML
     STATE --> JS
+    ORD --> JS
 ```
 
 ### 2. 项目目录结构
@@ -128,7 +125,7 @@ graph LR
         MAIN2["main.py"]
         SVR2["server.py"]
         CLIENT2["qmt_client.py"]
-        SIG2["signal_handler.py"]
+        ORD2["order_tracker.py"]
         STRAT2["strategy_manager.py"]
         JK2["jukuan_orders.py"]
         WINDOW2["window.py"]
@@ -172,7 +169,7 @@ sequenceDiagram
     participant Frontend as 🌐 前端 GUI
     participant Main as main.py
     participant Svr as server.py<br/>QMTServer
-    participant Sig as signal_handler.py<br/>SignalReceiver
+    participant Ord as order_tracker.py<br/>OrderTracker
     participant JK as jukuan_orders.py<br/>JukuanOrderHandler
     participant Strat as strategy_manager.py<br/>StrategyManager
     participant Client as qmt_client.py
@@ -181,7 +178,7 @@ sequenceDiagram
     Note over 用户,QMT: === 启动流程 ===
     用户->>Frontend: 填写配置表单（账号ID、QMT路径）
     Frontend->>Main: POST /api/start-server
-    Main->>Svr: 创建 QMTServer 实例（含 StrategyManager）
+    Main->>Svr: 创建 QMTServer 实例（含 StrategyManager + OrderTracker）
     Svr->>Client: create_trader(account_id, path)
     Client->>QMT: XtQuantTrader.start() + connect()
     QMT-->>Client: 连接成功
@@ -192,34 +189,32 @@ sequenceDiagram
     Note over 用户,QMT: === 策略管理流程 ===
     用户->>Frontend: 创建策略（名称、分配金额）
     Frontend->>Svr: POST /api/strategies (X-Token)
+    Svr->>Svr: normalize_to_qmt() 归一化持仓代码
     Svr->>Strat: create(StrategyCreate)
-    Strat-->>Svr: Strategy（含 token）
+    Strat-->>Svr: Strategy（含 token，positions 为 QMT 格式）
     Svr-->>Frontend: 策略数据 + Token
 
-    Note over 用户,QMT: === 远程信号流程（策略Token） ===
+    Note over 用户,QMT: === 聚宽风格下单流程（策略Token） ===
     actor Remote as ☁️ 远程策略服务器
-    Remote->>Main: POST /api/receive-signal<br/>{signal_id, stock_code, direction, quantity}<br/>X-Token: <策略Token>
+    Remote->>Main: POST /api/jukuan_order<br/>{security, amount, side}<br/>X-Token: <策略Token>
     Main->>Svr: verify_any_token() → 识别策略
-    Svr->>Sig: SignalReceiver.receive_signal(signal)
-    Sig->>Sig: jq_to_qmt(code) 代码转换
-    Sig->>Client: trader.order_stock(account, ...)
-    Client->>QMT: 下单
-    QMT-->>Client: 回调 on_stock_order()
-    Sig-->>Svr: 返回执行结果
-    Svr->>Strat: update_position() 更新持仓/资金
-    Svr->>Strat: add_trading_record() 记录交易
-    Main-->>Remote: {success: true, order_id}
-
-    Note over 用户,QMT: === 聚宽风格下单流程 ===
-    Remote->>Main: POST /api/jukuan_order_value<br/>{security, value, side}<br/>X-Token: <策略Token>
-    Main->>Svr: verify_any_token() → 识别策略
-    Svr->>JK: jukuan_order_value(security, value, side)
+    Svr->>Svr: normalize_to_qmt(security) 转为 QMT 代码
+    Svr->>JK: jukuan_order(stock_code, amount, side)
     JK->>JK: 查询当前持仓价格；无持仓时调用 fetch_latest_prices_from_xtdata 获取 lastPrice
     JK->>Client: trader.order_stock()
     Client->>QMT: 下单
-    JK-->>Svr: 返回委托结果
-    Svr->>Strat: 记录交易
+    JK-->>Svr: 返回委托结果（含 stock_code / jq_code）
+    Svr->>Ord: track_order() 注册订单
+    Svr->>Strat: apply_optimistic_position() 乐观更新持仓
+    Svr->>Strat: add_trading_record() 记录交易
     Main-->>Remote: {success: true, data: {...}}
+
+    Note over 用户,QMT: === 订单状态同步流程 ===
+    QMT-->>Client: 回调 on_stock_order() / on_stock_trade()
+    Client->>Ord: 更新订单状态
+    Ord->>Ord: poll_and_reconcile() 轮询 pending 订单
+    Ord->>Strat: reconcile_position() / rollback_position()
+    Strat-->>Ord: 修正后持仓
 
     Note over 用户,QMT: === 行情刷新流程（含当日盈亏计算）===
     用户->>Frontend: 点击「刷新行情」
@@ -233,7 +228,8 @@ sequenceDiagram
     Strat->>Strat: 计算当日盈亏<br/>daily_pnl = market_value - preClose × quantity
     Strat->>Strat: 按 QMT 总持仓比例分配市值到各策略
     Strat-->>Svr: 富化后的策略列表（含current_price/market_value/daily_pnl/total_pnl）
-    Svr-->>Frontend: 策略概览数据（含 daily_pnl）
+    Svr->>Ord: 按 strategy_id 统计订单数量
+    Svr-->>Frontend: 策略概览数据（含 daily_pnl, order_count）
 
     Note over 用户,QMT: === 仪表板资产查询 ===
     用户->>Frontend: 加载仪表板
@@ -244,11 +240,11 @@ sequenceDiagram
     Svr->>Svr: 注入 daily_profit<br/>从 StrategyManager._daily_profit 读取
     Svr-->>Frontend: {cash, market_value, total_asset, daily_profit}
 
-    Note over 用户,QMT: === 监控轮询 ===
+    Note over 用户,QMT: === 订单监控轮询 ===
     loop 每5秒
-        Frontend->>Svr: GET /api/signals (X-Token, ?strategy_name=&start_date=)
-        Svr-->>Frontend: signal_log 列表
-        Frontend->>Frontend: 更新信号监控面板
+        Frontend->>Svr: GET /api/orders (X-Token, ?status=&strategy_name=&start_date=)
+        Svr-->>Frontend: orders 列表
+        Frontend->>Frontend: 更新订单监控面板
     end
 ```
 
@@ -302,8 +298,9 @@ graph LR
     subgraph "静态路由 (server.py)"
         STATUS["GET /api/server-status"]
         CONN["GET /api/test-connection"]
-        SIGNALS["GET /api/signals<br/>(支持筛选参数)"]
+        ORDERS["GET /api/orders<br/>(支持筛选参数)"]
         ASSET["GET /api/account-asset"]
+        POS["GET /api/account-positions"]
     end
 
     subgraph "策略管理路由 (server.py)"
@@ -331,10 +328,6 @@ graph LR
         JK4["POST /api/jukuan_order_target_value"]
     end
 
-    subgraph "信号 API"
-        RECV["POST /api/receive-signal<br/>(支持主Token + 策略Token)"]
-    end
-
     subgraph "转换 API"
         JQ["POST /api/convert/jq-to-qmt"]
         QJ["POST /api/convert/qmt-to-jq"]
@@ -348,10 +341,8 @@ graph LR
     管理_API -->|"后台线程控制"| 策略管理路由
     管理_API -->|"后台线程控制"| 静态路由
     管理_API -->|"后台线程控制"| 动态路由
-    管理_API -->|"后台线程控制"| 信号_API
     管理_API -->|"后台线程控制"| 聚宽下单路由
     管理_API -->|"后台线程控制"| 文档_API
-    策略管理路由 -->|"持仓跟踪 + 行情刷新"| 信号_API
     策略管理路由 -->|"持仓跟踪 + 行情刷新"| 聚宽下单路由
 ```
 
@@ -380,11 +371,12 @@ graph LR
 - `parse_order_type(order_type)` — 订单类型 int→中文
 - `convert_to_current_date(ts)` — 将历史时间戳转换为当前日期
 - `jq_to_qmt(code)` / `qmt_to_jq(code)` — 聚宽格式与 QMT 格式代码互转（XSHE↔SZ、XSHG↔SH、XBJ↔BJ）
+- `normalize_to_qmt(code)` — 在系统边界将聚宽/QMT/其他格式统一归一化为 QMT 格式（.SZ/.SH/.BJ）
 - `fetch_preclose_from_xtdata(stock_codes)` — 从 xtdata 获取日线 preClose
 - `fetch_open_prices_from_xtdata(stock_codes)` — 从 xtdata 获取日线 open
 - `fetch_stock_names_from_xtdata(stock_codes)` — 从 xtdata 获取合约名称
 - `fetch_latest_prices_from_xtdata(stock_codes)` — 通过 `xtdata.get_full_tick` 获取最新价（lastPrice），无 xtquant 时 fallback 到 mock 数据
-- 以上行情函数与代码转换函数统一集中管理，供 `signal_handler.py`、`strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
+- 以上行情函数与代码转换函数统一集中管理，供 `order_tracker.py`、`strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
 
 ### 5. `backend/qmt_xtconstant.py` — xtconstant 常量映射
 - xtquant 订单类型常量（STOCK_BUY, STOCK_SELL, FIX_PRICE, LATEST_PRICE 等）
@@ -393,8 +385,8 @@ graph LR
 ### 6. `backend/qmt_client.py` — QMT 连接层
 - `MyXtQuantTraderCallback(XtQuantTraderCallback)` — 回调处理器
   - `on_disconnected()`, `on_stock_order()`, `on_stock_trade()`, `on_order_error()`, `on_cancel_error()`
-  - 将事件追加到共享的 `signal_log` deque 中
-- `create_trader(account_id, mini_qmt_path, signal_log)` → `(trader, account, callback)`
+  - 将订单/成交事件同步到 `OrderTracker`
+- `create_trader(account_id, mini_qmt_path, order_tracker)` → `(trader, account, callback)`
   - `session_id = random.randint(100000, 999999)`
   - `xt_trader = XtQuantTrader(path, session_id)`
   - `xt_trader.start()` → `xt_trader.connect()`
@@ -411,10 +403,10 @@ graph LR
 
 `Strategy` Pydantic 模型：
 - id（自动生成 12 位 hex）、name（必填）、description、enabled
-- token（自动生成 32 位 hex，用于远程信号认证）
+- token（自动生成 32 位 hex，用于远程聚宽风格下单认证）
 - allocated_funds（必填，> 0）、available_cash（可用资金）
 - total_asset（总资产）、daily_pnl（当日盈亏，从 QMT 行情 + xtdata preClose 计算）
-- positions（持久化字段：stock_code, stock_name, quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
+- positions（持久化字段：stock_code 统一为 QMT 格式，stock_name, quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
 - trading_records（买卖记录数组）
 
 `StrategyCreate` 模型：
@@ -430,9 +422,13 @@ graph LR
 - `update(id, data)` — 支持 positions 对账；加仓时 avg_cost = (旧成本×旧量 + open_price×增量)/新量，减仓保留原成本，新增取 open_price
 - `find_by_token(token)` — 按 Token 查找策略
 - `update_position(...)` — 买/卖后更新持仓数量和可用资金
+- `apply_optimistic_position(...)` — 下单时乐观更新持仓，返回快照用于回滚/修正
+- `rollback_position(...)` — 订单失败时根据快照撤销乐观更新
+- `reconcile_position(...)` — 实际成交与委托不一致时，按真实成交修正持仓
 - `add_trading_record(...)` — 添加买卖记录
 - `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取市值/数量 → 按策略占比分配 → 从 xtdata 获取 preClose → 计算 current_price (= 市值/数量)、market_value、daily_pnl (= 市值 - preClose×数量)、total_pnl (= 市值 - avg_cost×数量)；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
 - `daily_profit` property — 返回全局当日盈亏（所有策略汇总）
+- 策略持仓统一以 QMT 格式（.SZ/.SH/.BJ）持久化，不再维护独立的信号计数
 
 行情数据获取函数已迁移到 `backend.utils`：
 - `fetch_preclose_from_xtdata(stock_codes)` — 调用 `xtdata.download_history_data2` + `get_market_data` 获取日线 preClose 字段，返回 `{stock_code: preClose}`，无 xtquant 时 fallback 到 mock
@@ -443,41 +439,51 @@ graph LR
 ### 8. `backend/server.py` — 核心服务器
 
 `QMTServer` 类：
-- `__init__` — 创建 StrategyManager 实例
+- `__init__` — 创建 StrategyManager 与 OrderTracker 实例
 - `generate_token()` — `secrets.token_hex(32)` 随机生成 64 字符安全 Token
 - `verify_token(x_token)` — FastAPI 依赖，校验主 Token
 - `verify_any_token(x_token)` — 同时校验主 Token 和所有已启用策略的 Token
 - `init_trader()` — 调用 create_trader
 - `convert_to_dict(obj)` — 递归转换 XtQuant 对象为 dict
+- `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker，并对策略持仓进行乐观更新
 - `setup_routes()` — 注册所有端点：
   - 动态端点（trader 方法自动映射）
   - 策略 CRUD：GET/POST `/api/strategies`、PUT/DELETE `/api/strategies/{id}`、POST toggle、POST refresh
   - 聚宽下单：`/api/jukuan_order`、`/api/jukuan_order_target`、`/api/jukuan_order_value`、`/api/jukuan_order_target_value`
-  - `GET /api/signals` — 支持 `start_date`、`end_date`、`strategy_name` 筛选
+  - `GET /api/orders` — 支持 `status`、`strategy_name`、`start_date`、`end_date` 筛选
   - `GET /api/account-asset` — 返回账户资产 + 持仓明细（含 stock_name、open_price、total_pnl 等字段）+ daily_profit
-  - `POST /api/receive-signal` — 支持策略 Token，自动关联策略并更新持仓
+  - `GET /api/account-positions` — 返回账户持仓明细
+  - `POST /api/convert/jq-to-qmt`、`POST /api/convert/qmt-to-jq` — 代码转换
   - `GET /api/docs`、`GET /api/docs/{name}` — 文档内容
+- 在 `/api/strategies` 和 `/api/strategies/refresh` 返回前，从 OrderTracker 统计每个策略的订单数量并注入 `order_count`
+- 创建/更新策略时通过 `normalize_to_qmt()` 将持仓 stock_code 统一为 QMT 格式
 - `init_and_setup()` → `run()` → `stop()`
 
-### 9. `backend/signal_handler.py` — 远程信号接收
+### 9. `backend/order_tracker.py` — 订单状态跟踪
 
-`TradeSignal` Pydantic 模型：
-- signal_id, stock_code (聚宽格式), direction (buy/sell), quantity, price (可选), order_type, strategy_name, timestamp
+`Order` 数据类：
+- order_id, stock_code（QMT 格式）, jq_code（聚宽格式）, direction, quantity, filled_quantity, filled_price
+- status（pending / partial / filled / failed）, order_type, strategy_id, strategy_name
+- placed_at, resolved_at, error_msg, optimistic_position_applied, optimistic_snapshot
 
-`SignalReceiver` 类：
-- 接受 `strategy_manager` 参数
-- `receive_signal(signal)` → 验证 → 代码转换 → 下单 → 记录日志 → 返回结果
+`OrderTracker` 类：
+- `track_order(...)` — 注册一笔新订单
+- `get_order(order_id)` / `get_orders_by_strategy(strategy_id)` — 按订单 ID 或策略 ID 查询
+- `update_order(order_id, **kwargs)` — 更新订单字段
+- `on_state_change(callback)` — 注册订单状态变更回调
+- `poll_and_reconcile(trader, account)` — 后台轮询 pending 订单，根据 QMT 实际成交修正策略持仓
+- 订单达到终态（filled / failed）时触发回调，调用 StrategyManager 的 `reconcile_position` 或 `rollback_position`
 
 ### 10. `backend/jukuan_orders.py` — 聚宽风格下单
 
 `JukuanOrderHandler` 类：
 - 实现聚宽 API 风格的下单方法：`jukuan_order`、`jukuan_order_target`、`jukuan_order_value`、`jukuan_order_target_value`
-- 支持 security（聚宽格式）自动转换为 QMT 格式下单
-- `_get_price(trader, account, jq_code)` — 优先从当前持仓（市值/数量）获取参考价；无持仓时调用 `fetch_latest_prices_from_xtdata` 通过 QMT 全推行情获取 `lastPrice`；均无法获取时抛出异常
+- 所有方法接收 QMT 格式代码（`stock_code`），内部通过 `qmt_to_jq()` 在订单备注中保留原始聚宽代码
+- `_get_price(trader, account, stock_code)` — 优先从当前持仓（市值/数量）获取参考价；无持仓时调用 `fetch_latest_prices_from_xtdata` 通过 QMT 全推行情获取 `lastPrice`；均无法获取时抛出异常
 - `_get_volume(...)` — 查询当前持仓数量
 - 价值下单/目标价值下单时自动获取最新价并计算下单量，按每手股数向下取整
 - 期货品种特殊处理：每手为 1，且支持 `side='short'` 反向开平仓
-- 将交易记录写入对应的 strategy_manager
+- 返回结果包含 `stock_code`（QMT）和 `jq_code`（聚宽）双格式，便于上层 OrderTracker 记录与展示
 - 所有函数/方法已补充中文注释/文档字符串
 
 ### 11. `backend/window.py` — pywebview 桌面窗口
@@ -529,7 +535,7 @@ graph LR
   #strategy-management — 策略管理（列表 + 添加/编辑/删除/启用禁用 + Token复制）
   #dashboard           — 账户仪表板（可用资金、持仓市值、总资产、当日盈亏）
   #strategy-overview   — 策略概览（各策略资产卡片 + 点击展开持仓明细表 + 刷新按钮）
-  #monitor             — 信号监控面板（筛选栏 + 实时信号列表）
+  #monitor             — 订单监控面板（筛选栏 + 实时订单列表）
   #converter           — 聚宽代码转换工具
   #docs                — 文档浏览（Markdown 渲染）
 .footer                — 页脚
@@ -543,13 +549,13 @@ graph LR
 - 字体：Inter（正文）、JetBrains Mono（数字）
 - 盈亏色值独立于系统状态色值：`--color-pnl-up: #cf202f`（涨红）、`--color-pnl-down: #05b169`（跌绿），系统成功/失败仍用 `--color-semantic-up/down`（绿/红）
 - 响应式：1024px / 768px / 480px 断点
-- 新增组件样式：策略概览卡片、信号筛选栏、策略列表项、模态框、小按钮、文档区域
+- 新增组件样式：策略概览卡片、订单筛选栏、策略列表项、模态框、小按钮、文档区域
 
 ### JS 模块设计
 
 **`state.js`** — 全局状态 + Token 持久化
 ```
-serverRunning, token, serverInfo, signals[], theme, pollingInterval
+serverRunning, token, serverInfo, orders[], theme, pollingInterval
 getStoredToken() — 从 sessionStorage 读取 Token
 setState('token', v) — 自动同步到 sessionStorage
 clearToken() — 清除 sessionStorage 中的 Token
@@ -558,7 +564,7 @@ clearToken() — 清除 sessionStorage 中的 Token
 **`api.js`** — API 客户端
 ```
 startServer(config), stopServer(), getServerInfo(), testConnection(token),
-getSignals(token), getFilteredSignals(token, filters), getAccountAsset(token),
+getOrders(token, filters), getAccountAsset(token), getAccountPositions(token),
 getStrategies(token), createStrategy(data, token), updateStrategy(id, data, token),
 deleteStrategy(id, token), toggleStrategy(id, token), refreshStrategies(token),
 convertJqToQmt(code), convertQmtToJq(code), healthCheck(),
@@ -567,8 +573,8 @@ getDocList(), getDoc(docId)
 
 **`ui.js`** — UI 工具
 ```
-updateServerInfo(data), resetServerInfo(), renderSignals(), addSignal(signal),
-clearSignals(), updateDashboard(data), disableForm(disable),
+updateServerInfo(data), resetServerInfo(), renderOrders(), addOrder(order),
+clearOrders(), updateDashboard(data), disableForm(disable),
 toggleTheme(), initTheme(), showConnectPrompt(), hideConnectPrompt(),
 showSection(), hideSection(), switchTab(tabName), resetDashboard(),
 renderStrategyOverview(strategies), _renderPositionList(),
@@ -576,30 +582,31 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 ```
 - `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
 - `_buildPositionRows()` — 可复用持仓表格行渲染函数，通过 opts 控制是否显示总盈亏列和可用数量列
-- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、信号数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）
+- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、订单数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）
 - `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染；现价使用 API 返回的实时 `current_price`，盈亏数据由后端计算
 
 **`config-panel.js`** — 配置面板
 - 表单提交处理（启动/停止服务器）
 - 测试连接按钮
-- 复制 Token、清空信号、主题切换
+- 复制 Token、清空订单、主题切换
 - 启动成功后加载策略数据
 
 **`strategy.js`** — 策略管理面板
 - `loadStrategies()` — 从 API 加载策略列表并渲染
 - `refreshStrategies()` — 调用刷新 API 更新行情数据（含当日盈亏）
-- 策略列表渲染：名称、描述、分配金额、可用资金、Token（可复制到剪贴板）、信号计数
+- 策略列表渲染：名称、描述、分配金额、可用资金、Token（可复制到剪贴板）、订单计数
 - 策略模态框：创建/编辑表单（名称必填、描述、分配金额必填、可选添加持仓）
+- 编辑策略时先调用 `loadStrategies()` 刷新数据，确保分配数量输入框展示策略最新持仓数量
 - `loadAccountPositionsForAssign(strategy)` — 获取账户持仓并渲染分配数量输入框（step=100），计算可用数量（账户总量 - 其他策略已分配量）
 - 表单校验：名称不能为空、分配金额必须 > 0、分配数量须为 100 的整数倍且不超过可用数量、持仓总成本不超过分配金额
 - 模态框特性：左上角关闭按钮、点击非模态区域不关闭
 - 创建成功后展示策略 Token
-- `populateStrategyDropdown()` — 填充信号筛选的策略下拉
+- `populateStrategyDropdown()` — 填充订单筛选的策略下拉
 
-**`monitor.js`** — 信号监控
-- 实时信号列表渲染
-- 每 5 秒轮询 `/api/signals`，支持筛选参数
-- 筛选栏事件处理：日期选择器 + 策略下拉 + 筛选/重置
+**`monitor.js`** — 订单监控
+- 实时订单列表渲染
+- 每 5 秒轮询 `/api/orders`，支持状态、日期、策略筛选参数
+- 筛选栏事件处理：日期选择器 + 策略下拉 + 状态筛选 + 筛选/重置
 - 最多保留 200 条
 - 方向颜色：买入绿色、卖出红色
 
@@ -640,16 +647,16 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 
 ### Phase 4: 后端策略管理 ✅
 12. `backend/strategy_manager.py` — 策略模型 + CRUD + 持仓跟踪 + QMT 行情刷新 + xtdata 当日盈亏计算
-13. `server.py` — 集成 StrategyManager、策略 API、verify_any_token
-14. `signal_handler.py` — 接入 strategy_manager
+13. `backend/order_tracker.py` — 订单状态跟踪与策略持仓修正
+14. `server.py` — 集成 StrategyManager、OrderTracker、策略 API、verify_any_token、聚宽下单端点
+15. `signal_handler.py` — ~~已移除，聚宽风格下单替代原远程信号入口~~
 
 ### Phase 5: 后端测试 ✅
 15. `tests/test_client.py`
 16. `tests/test_server.py`
-17. `tests/test_signal_handler.py`
-18. `tests/test_strategy_manager.py`
-19. `tests/test_jukuan_orders.py`
-20. `tests/test_utils.py`
+17. `tests/test_strategy_manager.py`
+18. `tests/test_jukuan_orders.py`
+19. `tests/test_utils.py`
 
 ### Phase 6: 前端 ✅
 18. `frontend/styles.css`（含策略概览、筛选栏、模态框等新组件样式）
@@ -686,6 +693,16 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 39. 补充 `tests/test_utils.py` 和 `tests/test_jukuan_orders.py` 相关测试
 40. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
 
+### Phase 12: 代码归一化与订单计数替代信号计数 ✅
+41. 将 `qmt_client.py` 的 `jq_to_qmt` / `qmt_to_jq` 迁移到 `backend/utils.py`，新增 `normalize_to_qmt()` 在系统边界统一代码格式
+42. `backend/jukuan_orders.py` 下单函数入参统一为 `stock_code`（QMT 格式），内部通过 `qmt_to_jq()` 保留聚宽代码用于订单备注和返回
+43. `backend/server.py` 在聚宽下单端点和策略 CRUD 入口调用 `normalize_to_qmt()`，策略持仓统一以 QMT 格式持久化
+44. 策略编辑弹窗加载账户持仓前刷新策略数据，分配数量默认展示策略最新持仓数量
+45. 移除 `StrategyManager` 中的 `_signal_counts` 信号计数逻辑；前端策略列表与策略概览卡片改用 `order_count`（来自 `OrderTracker` 按策略统计）
+46. 前端 `monitor.js` 改为轮询 `/api/orders`，UI 文案从「信号」统一改为「订单」
+47. 更新 `tests/test_server.py`、`tests/test_strategy_manager.py`、`tests/test_jukuan_orders.py`、`tests/test_utils.py`
+48. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 ---
 
 ## 验证方案
@@ -694,13 +711,14 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 2. **Mock 模式启动**：在 macOS 上 `python -m backend.main` 验证服务器启动成功
 3. **前端验证**：浏览器打开 `http://localhost:8000`，验证 UI 渲染和 API 交互
 4. **仪表板当日盈亏**：连接服务器后验证仪表板"当日盈亏"卡片正确显示数值和颜色（正数红色、负数绿色，A 股习惯）
-5. **策略管理**：创建策略（名称和分配金额必填，可选分配账户持仓）→ 获取 Token → 点击策略概览卡片查看持仓明细 → 编辑/删除策略
+5. **策略管理**：创建策略（名称和分配金额必填，可选分配账户持仓）→ 获取 Token → 点击策略概览卡片查看持仓明细 → 编辑/删除策略；编辑时分配数量默认显示策略当前持仓数量
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
-7. **信号测试**：用策略 Token 发送信号 → 验证策略持仓和资金自动更新
-8. **聚宽下单**：用策略 Token 调用聚宽风格下单 API → 验证自动下单和持仓更新
-9. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
-10. **信号筛选**：按日期和策略筛选信号 → 验证筛选结果
-11. **代码转换**：验证 jq_to_qmt 和 qmt_to_jq 转换正确性
-12. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
-13. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
-14. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
+7. **聚宽下单**：用策略 Token 调用 `/api/jukuan_order` → 验证自动下单、OrderTracker 记录订单、策略持仓和资金自动更新
+8. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
+9. **订单筛选**：按状态、日期和策略筛选订单 → 验证筛选结果
+10. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
+11. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
+12. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
+13. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
+14. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
+15. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能

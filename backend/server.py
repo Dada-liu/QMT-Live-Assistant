@@ -11,8 +11,8 @@ import asyncio
 from typing import Any, Optional
 from datetime import datetime
 from backend.qmt_client import create_trader
-from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata
+from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -86,7 +86,7 @@ class QMTServer:
             if order.status == OrderState.FILLED:
                 self.strategy_manager.reconcile_position(
                     order.strategy_id,
-                    order.jq_code,
+                    order.stock_code,
                     order.direction,
                     order.quantity,
                     order.filled_quantity,
@@ -112,13 +112,13 @@ class QMTServer:
         quantity = order_result.get('quantity', 0)
         price = order_result.get('price', 0.0)
         order_type = order_result.get('order_type', 0)
-        qmt_code = order_result.get('qmt_code') or jq_code
+        qmt_code = order_result.get('qmt_code') or normalize_to_qmt(jq_code)
 
         snapshot = None
         optimistic_applied = False
         if strategy_id and direction in ('buy', 'sell') and quantity > 0:
             snapshot = self.strategy_manager.apply_optimistic_position(
-                strategy_id, jq_code, direction, quantity, price
+                strategy_id, qmt_code, direction, quantity, price
             )
             optimistic_applied = snapshot is not None
 
@@ -385,15 +385,20 @@ class QMTServer:
             if not security:
                 raise HTTPException(status_code=400, detail="请提供 security 参数")
 
+            qmt_code = normalize_to_qmt(security)
+
             amount = request.get('amount', 0)
             value = request.get('value', 0)
             side = request.get('side', 'long')
 
             method = getattr(handler, method_name)
             if method_name in ('jukuan_order', 'jukuan_order_target'):
-                result = method(security, amount, side=side)
+                result = method(qmt_code, amount, side=side)
             else:
-                result = method(security, value, side=side)
+                result = method(qmt_code, value, side=side)
+
+            # 保留原始聚宽代码便于返回和日志
+            result['jq_code'] = security
 
             # 注册订单到跟踪器，并对策略持仓进行乐观更新
             if result.get('order_id'):
@@ -404,10 +409,9 @@ class QMTServer:
 
             # 策略记账
             if strategy_id and result.get('order_id'):
-                _current_server.strategy_manager.increment_signal_count(strategy_id)
                 _current_server.strategy_manager.add_trading_record(strategy_id, {
                     'timestamp': datetime.now().isoformat(),
-                    'stock_code': security,
+                    'stock_code': qmt_code,
                     'direction': result.get('direction', 'none'),
                     'quantity': result.get('quantity', 0),
                     'price': result.get('price', 0),
@@ -455,15 +459,33 @@ class QMTServer:
 
         # --- 策略管理 API ---
 
+        def _enrich_order_count(strategies):
+            for s in strategies:
+                orders = _current_server.order_tracker.get_orders_by_strategy(s["id"])
+                s["order_count"] = len(orders)
+            return strategies
+
         @app.get('/api/strategies')
         async def list_strategies(token: str = Depends(_verify_token)):
-            return {'success': True, 'data': _current_server.strategy_manager.list_all_enriched(
+            strategies = _current_server.strategy_manager.list_all_enriched(
                 _current_server.trader, _current_server.account
-            )}
+            )
+            return {'success': True, 'data': _enrich_order_count(strategies)}
 
         @app.post('/api/strategies')
         async def create_strategy(data: StrategyCreate, token: str = Depends(_verify_token)):
             try:
+                if data.positions:
+                    normalized_positions = [
+                        PositionAssignment(
+                            stock_code=normalize_to_qmt(p.stock_code),
+                            stock_name=p.stock_name,
+                            quantity=p.quantity,
+                            current_price=p.current_price,
+                        )
+                        for p in data.positions
+                    ]
+                    data = data.model_copy(update={'positions': normalized_positions})
                 strategy = _current_server.strategy_manager.create(data)
                 return {'success': True, 'data': strategy.model_dump()}
             except ValueError as e:
@@ -476,6 +498,17 @@ class QMTServer:
             token: str = Depends(_verify_token),
         ):
             try:
+                if data and data.positions:
+                    normalized_positions = [
+                        PositionAssignment(
+                            stock_code=normalize_to_qmt(p.stock_code),
+                            stock_name=p.stock_name,
+                            quantity=p.quantity,
+                            current_price=p.current_price,
+                        )
+                        for p in data.positions
+                    ]
+                    data = data.model_copy(update={'positions': normalized_positions})
                 strategy = _current_server.strategy_manager.update(strategy_id, data)
                 if not strategy:
                     raise HTTPException(status_code=404, detail="策略不存在")
@@ -504,9 +537,10 @@ class QMTServer:
 
         @app.post('/api/strategies/refresh')
         async def refresh_strategies(token: str = Depends(_verify_token)):
-            return {'success': True, 'data': _current_server.strategy_manager.list_all_enriched(
+            strategies = _current_server.strategy_manager.list_all_enriched(
                 _current_server.trader, _current_server.account
-            )}
+            )
+            return {'success': True, 'data': _enrich_order_count(strategies)}
 
     def init_and_setup(self, target_app=None):
         try:

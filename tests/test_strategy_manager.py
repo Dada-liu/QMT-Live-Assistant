@@ -98,7 +98,6 @@ class TestStrategyManagerCRUD:
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         assert s.name == "策略1"
         assert s.id in mgr._strategies
-        assert mgr._signal_counts[s.id] == 0
 
     def test_get_found(self, mgr):
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
@@ -126,14 +125,12 @@ class TestStrategyManagerCRUD:
         mgr.create(StrategyCreate(name="B", allocated_funds=10000))
         result = mgr.list_all()
         assert len(result) == 2
-        assert all("signal_count" in d for d in result)
-        assert result[0]["signal_count"] == 0
+        assert all("id" in d for d in result)
 
     def test_delete_existing(self, mgr):
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
         assert mgr.delete(s.id) is True
         assert mgr.get(s.id) is None
-        assert mgr._signal_counts.get(s.id) is None
 
     def test_delete_nonexistent(self, mgr):
         assert mgr.delete("nonexistent") is False
@@ -200,31 +197,6 @@ class TestStrategyManagerUpdate:
         s = mgr.update(self._first_id(mgr), StrategyUpdate(name="新"))
         assert s.updated_at >= old_ts
 
-
-class TestStrategyManagerSignals:
-    @pytest.fixture
-    def mgr(self):
-        mgr = StrategyManager()
-        mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
-        return mgr
-
-    def _first_id(self, mgr):
-        return list(mgr._strategies.keys())[0]
-
-    def test_increment_signal_count(self, mgr):
-        sid = self._first_id(mgr)
-        mgr.increment_signal_count(sid)
-        mgr.increment_signal_count(sid)
-        assert mgr.get_signal_count(sid) == 2
-
-    def test_get_signal_count_default(self, mgr):
-        assert mgr.get_signal_count("nonexistent") == 0
-
-    def test_signal_count_in_list(self, mgr):
-        sid = self._first_id(mgr)
-        mgr.increment_signal_count(sid)
-        result = mgr.list_all()
-        assert result[0]["signal_count"] == 1
 
 
 class TestStrategyManagerPositions:

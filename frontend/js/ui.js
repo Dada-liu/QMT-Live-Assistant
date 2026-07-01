@@ -465,7 +465,7 @@ export const UI = {
                 </div>
                 <div class="strategy-overview-footer">
                     <span class="strategy-meta">持仓 ${positionCount} 只</span>
-                    <span class="strategy-meta">信号 ${s.signal_count || 0} 次</span>
+                    <span class="strategy-meta">订单 ${s.order_count || 0} 笔</span>
                 </div>
             </div>
             `;

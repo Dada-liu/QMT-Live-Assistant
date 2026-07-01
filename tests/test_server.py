@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.server import QMTServer, create_server
 
@@ -250,6 +251,47 @@ class TestStrategyManagement:
         assert response.status_code == 200
         assert response.json()["success"] is True
 
+    def test_create_strategy_normalizes_jq_code(self, client, server):
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata", return_value={"000001.SZ": 12.0}):
+            response = client.post(
+                "/api/strategies",
+                json={
+                    "name": "归一化测试",
+                    "allocated_funds": 100000,
+                    "positions": [
+                        {"stock_code": "000001.XSHE", "stock_name": "平安银行", "quantity": 100, "current_price": 12.0}
+                    ],
+                },
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert len(data["positions"]) == 1
+        assert data["positions"][0]["stock_code"] == "000001.SZ"
+
+    def test_update_strategy_normalizes_jq_code(self, client, server):
+        create_resp = client.post(
+            "/api/strategies",
+            json={"name": "原始策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        sid = create_resp.json()["data"]["id"]
+
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata", return_value={"000001.SZ": 12.0}):
+            response = client.put(
+                f"/api/strategies/{sid}",
+                json={
+                    "positions": [
+                        {"stock_code": "000001.XSHE", "stock_name": "平安银行", "quantity": 100, "current_price": 12.0}
+                    ],
+                },
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert len(data["positions"]) == 1
+        assert data["positions"][0]["stock_code"] == "000001.SZ"
+
     def test_strategies_require_auth(self, client):
         response = client.get("/api/strategies")
         assert response.status_code == 422
@@ -363,7 +405,7 @@ class TestOrdersApi:
         assert order["direction"] == "buy"
         assert order["status"] == "pending"
         assert order["jq_code"] == "000001.XSHE"
-        assert order["stock_code"] == "000001.XSHE"
+        assert order["stock_code"] == "000001.SZ"
 
     def test_get_orders_filter_by_status(self, client, server):
         client.post(
@@ -424,6 +466,7 @@ class TestOrderTrackingIntegration:
         assert response.status_code == 200
         s = server.strategy_manager.get(strategy["id"])
         assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["stock_code"] == "000001.SZ"
 
     def test_strategy_jukuan_order_resolves_on_poll(self, client, server):
         strategy = self._create_strategy(client, server)
@@ -441,4 +484,22 @@ class TestOrderTrackingIntegration:
         assert tracked.status == "filled"
         s = server.strategy_manager.get(strategy["id"])
         assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["stock_code"] == "000001.SZ"
         assert s.available_cash == 100000 - 1250
+
+    def test_strategy_order_count_replaces_signal_count(self, client, server):
+        strategy = self._create_strategy(client, server)
+        client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        response = client.get(
+            "/api/strategies",
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        strategy_data = next(s for s in data if s["id"] == strategy["id"])
+        assert "signal_count" not in strategy_data
+        assert strategy_data["order_count"] == 1

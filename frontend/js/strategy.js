@@ -78,7 +78,7 @@ function renderStrategyList() {
             <div class="strategy-item-meta">
                 <span>分配: ${formatMoney(s.allocated_funds)}</span>
                 <span>可用: ${formatMoney(s.available_cash)}</span>
-                <span class="strategy-count">${s.signal_count || 0} 信号</span>
+                <span class="strategy-count">${s.order_count || 0} 订单</span>
             </div>
             <div class="strategy-item-status">
                 <button class="btn-sm btn-sm-toggle ${s.enabled ? 'enabled' : ''}" data-id="${s.id}" data-action="toggle">
@@ -110,8 +110,13 @@ function renderStrategyList() {
 
     // Edit
     list.querySelectorAll('[data-action="edit"]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const id = btn.dataset.id;
+            try {
+                await loadStrategies();
+            } catch (error) {
+                // 继续尝试使用本地已缓存数据
+            }
             const strategy = _strategies.find(s => s.id === id);
             if (strategy) showStrategyModal(strategy);
         });

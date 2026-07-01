@@ -16,19 +16,19 @@ class TestHelpers:
         assert _is_future("IF8888.CCFX") is True
 
     def test_is_future_false(self):
-        assert _is_future("000001.XSHE") is False
-        assert _is_future("600000.XSHG") is False
+        assert _is_future("000001.SZ") is False
+        assert _is_future("600000.SH") is False
 
     def test_lot_size_stock(self):
-        assert _lot_size("000001.XSHE") == 100
+        assert _lot_size("000001.SZ") == 100
 
     def test_lot_size_future(self):
         assert _lot_size("RB8888.XSGE") == 1
 
     def test_round_down_to_lot_stock(self):
-        assert _round_down_to_lot(250, "000001.XSHE") == 200
-        assert _round_down_to_lot(100, "000001.XSHE") == 100
-        assert _round_down_to_lot(50, "000001.XSHE") == 0
+        assert _round_down_to_lot(250, "000001.SZ") == 200
+        assert _round_down_to_lot(100, "000001.SZ") == 100
+        assert _round_down_to_lot(50, "000001.SZ") == 0
 
     def test_round_down_to_lot_future(self):
         assert _round_down_to_lot(5, "RB8888.XSGE") == 5
@@ -44,18 +44,20 @@ class TestJukuanOrder:
         return JukuanOrderHandler(trader=trader, account=account)
 
     def test_buy(self, handler):
-        result = handler.jukuan_order("000001.XSHE", 100)
+        result = handler.jukuan_order("000001.SZ", 100)
         assert result["direction"] == "buy"
         assert result["quantity"] == 100
         assert result["order_id"] == 200001
+        assert result["stock_code"] == "000001.SZ"
+        assert result["jq_code"] == "000001.XSHE"
 
     def test_sell(self, handler):
-        result = handler.jukuan_order("000001.XSHE", -100)
+        result = handler.jukuan_order("000001.SZ", -100)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
 
     def test_zero_quantity_below_lot(self, handler):
-        result = handler.jukuan_order("000001.XSHE", 50)
+        result = handler.jukuan_order("000001.SZ", 50)
         assert result["order_id"] is None
         assert result["direction"] == "none"
         assert result["quantity"] == 0
@@ -64,6 +66,8 @@ class TestJukuanOrder:
         result = handler.jukuan_order("RB8888.XSGE", 3, side="long")
         assert result["direction"] == "buy"
         assert result["quantity"] == 3
+        assert result["stock_code"] == "RB8888.XSGE"
+        assert result["jq_code"] == "RB8888.XSGE"
 
     def test_future_short_open(self, handler):
         result = handler.jukuan_order("RB8888.XSGE", 3, side="short")
@@ -76,7 +80,7 @@ class TestJukuanOrder:
     def test_order_error(self, handler):
         handler.trader.order_stock.side_effect = Exception("下单失败")
         with pytest.raises(Exception, match="下单失败"):
-            handler.jukuan_order("000001.XSHE", 100)
+            handler.jukuan_order("000001.SZ", 100)
 
 
 class TestJukuanOrderTarget:
@@ -96,26 +100,26 @@ class TestJukuanOrderTarget:
         return JukuanOrderHandler(trader=trader, account=account)
 
     def test_already_at_target(self, handler):
-        result = handler.jukuan_order_target("000001.XSHE", 100)
+        result = handler.jukuan_order_target("000001.SZ", 100)
         assert result["direction"] == "none"
         assert result["quantity"] == 0
         assert result["order_id"] is None
         assert "目标数量已满足" in result["message"]
 
     def test_increase(self, handler):
-        result = handler.jukuan_order_target("000001.XSHE", 200)
+        result = handler.jukuan_order_target("000001.SZ", 200)
         assert result["direction"] == "buy"
         assert result["quantity"] == 100
         assert result["order_id"] == 200001
 
     def test_decrease(self, handler):
-        result = handler.jukuan_order_target("000001.XSHE", 0)
+        result = handler.jukuan_order_target("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
 
     def test_delta_below_lot(self, handler):
         handler.trader.query_stock_positions.return_value = []
-        result = handler.jukuan_order_target("000001.XSHE", 50)
+        result = handler.jukuan_order_target("000001.SZ", 50)
         assert result["direction"] == "none"
         assert result["quantity"] == 0
 
@@ -137,18 +141,18 @@ class TestJukuanOrderValue:
         return JukuanOrderHandler(trader=trader, account=account)
 
     def test_buy_by_value(self, handler):
-        result = handler.jukuan_order_value("000001.XSHE", 10000)
+        result = handler.jukuan_order_value("000001.SZ", 10000)
         assert result["direction"] == "buy"
         assert result["quantity"] == 1000
         assert result["order_id"] == 200001
 
     def test_sell_by_value(self, handler):
-        result = handler.jukuan_order_value("000001.XSHE", -5000)
+        result = handler.jukuan_order_value("000001.SZ", -5000)
         assert result["direction"] == "sell"
         assert result["quantity"] == 500
 
     def test_value_too_small(self, handler):
-        result = handler.jukuan_order_value("000001.XSHE", 500)
+        result = handler.jukuan_order_value("000001.SZ", 500)
         assert result["direction"] == "none"
         assert result["quantity"] == 0
         assert result["order_id"] is None
@@ -159,13 +163,13 @@ class TestJukuanOrderValue:
         with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
                    return_value={}):
             with pytest.raises(ValueError, match="无法获取"):
-                handler.jukuan_order_value("000001.XSHE", 10000)
+                handler.jukuan_order_value("000001.SZ", 10000)
 
     def test_price_from_market_data_when_no_position(self, handler):
         handler.trader.query_stock_positions.return_value = []
         with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
                    return_value={"000001.SZ": 12.55}):
-            result = handler.jukuan_order_value("000001.XSHE", 10000)
+            result = handler.jukuan_order_value("000001.SZ", 10000)
         assert result["direction"] == "buy"
         assert result["quantity"] == 700
         assert result["order_id"] == 200001
@@ -188,18 +192,18 @@ class TestJukuanOrderTargetValue:
         return JukuanOrderHandler(trader=trader, account=account)
 
     def test_already_at_target_value(self, handler):
-        result = handler.jukuan_order_target_value("000001.XSHE", 1000)
+        result = handler.jukuan_order_target_value("000001.SZ", 1000)
         assert result["direction"] == "none"
         assert result["quantity"] == 0
         assert "目标价值已满足" in result["message"]
 
     def test_increase_value(self, handler):
-        result = handler.jukuan_order_target_value("000001.XSHE", 3000)
+        result = handler.jukuan_order_target_value("000001.SZ", 3000)
         assert result["direction"] == "buy"
         assert result["quantity"] == 200
         assert result["order_id"] == 200001
 
     def test_decrease_value(self, handler):
-        result = handler.jukuan_order_target_value("000001.XSHE", 0)
+        result = handler.jukuan_order_target_value("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100

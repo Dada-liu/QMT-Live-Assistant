@@ -13,13 +13,13 @@
 - 连接 miniQMT 交易终端（迅投 XtQuant SDK）
 - 启动/停止本地交易服务器
 - 测试连接并获取账户资产（可用资金、持仓市值、总资产、当日盈亏）
-- 多策略管理：创建多个交易策略，各自独立分配资金、跟踪持仓、接收信号
-- 策略概览：查看各策略的可用资金、总资产、当日盈亏，点击策略卡片展开持仓明细表
-- 接收远程策略服务器的交易信号，自动下单并更新策略持仓
-- 策略 Token 认证：每个策略拥有独立 Token，远程信号携带策略 Token 即可关联
-- 实时信号监控面板，支持按日期和策略筛选
+- 多策略管理：创建多个交易策略，各自独立分配资金、跟踪持仓、接收聚宽风格下单
+- 策略概览：查看各策略的可用资金、总资产、当日盈亏与订单数量，点击策略卡片展开持仓明细表
+- 聚宽风格下单：远程策略服务器通过 `/api/jukuan_order*` 接口下单，自动关联策略并更新持仓
+- 策略 Token 认证：每个策略拥有独立 Token，远程下单携带策略 Token 即可关联
+- 实时订单监控面板，支持按日期、策略和状态筛选
 - 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
-- 聚宽格式 ↔ QMT 格式代码转换
+- 聚宽格式 ↔ QMT 格式代码转换；策略持仓统一持久化为 QMT 格式（.SZ/.SH/.BJ）
 - 聚宽风格下单：支持按数量/金额/目标仓位下单，无持仓时自动通过 QMT 全推行情获取最新价
 - 亮/暗双主题切换
 - 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
@@ -38,9 +38,10 @@ QMT-live-assistant/
 │   ├── main.py              # FastAPI 入口
 │   ├── server.py            # QMTServer 核心
 │   ├── qmt_client.py        # miniQMT 连接
-│   ├── signal_handler.py    # 远程信号接收
+│   ├── order_tracker.py     # 订单状态跟踪
 │   ├── strategy_manager.py  # 策略管理器（多策略支持）
-│   ├── utils.py             # 工具函数
+│   ├── utils.py             # 工具函数（含 jq_to_qmt / qmt_to_jq / normalize_to_qmt）
+│   ├── jukuan_orders.py     # 聚宽风格下单
 │   ├── logger.py            # 日志系统
 │   ├── constants.py         # 常量定义
 │   ├── qmt_xtconstant.py    # QMT 常量
@@ -54,7 +55,7 @@ QMT-live-assistant/
 │       ├── api.js           # API 客户端
 │       ├── ui.js            # UI 工具
 │       ├── config-panel.js  # 配置面板
-│       ├── monitor.js       # 信号监控
+│       ├── monitor.js       # 订单监控
 │       ├── dashboard.js     # 仪表板
 │       ├── strategy.js      # 策略管理面板
 │       └── toast.js         # Toast 通知
@@ -136,12 +137,12 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 服务器启动后，可在「配置」tab 中管理策略：
 
 1. **创建策略**：设置策略名称（必填）、描述、分配金额（必填），可选从账户现有持仓中分配数量到该策略
-2. **获取 Token**：每个策略自动生成独立 Token，用于远程信号认证
-3. **信号关联**：远程服务器用策略 Token 调用 `/api/receive-signal`，信号自动关联到该策略
-4. **持仓跟踪**：策略持仓仅持久化股票代码、名称、数量和成本价（avg_cost），现价、市值、当日盈亏等行情数据在请求时从 QMT 实时获取
+2. **获取 Token**：每个策略自动生成独立 Token，用于远程聚宽风格下单认证
+3. **下单关联**：远程策略服务器用策略 Token 调用 `/api/jukuan_order` 等接口，订单自动关联到该策略
+4. **持仓跟踪**：策略持仓统一以 QMT 格式（.SZ/.SH/.BJ）持久化，仅持久化股票代码、名称、数量和成本价（avg_cost），现价、市值、当日盈亏等行情数据在请求时从 QMT 实时获取
 5. **成本价计算**：新建策略时取 xtquant 当日开盘价作为成本基准；更新策略加仓时自动计算加权均价
 6. **行情刷新**：点击「刷新行情」从 QMT 拉取实时数据，计算策略持仓市值、现价和当日盈亏
-7. **策略概览**：在「QMT账号」tab 查看各策略的资产概览卡片，点击卡片查看该策略的持仓明细表（持仓/可用、成本/现价、市值、累计盈亏、当日盈亏，与账户持仓列一致）
+7. **策略概览**：在「QMT账号」tab 查看各策略的资产概览卡片，卡片展示持仓数量与订单数量；点击卡片查看该策略的持仓明细表（持仓/可用、成本/现价、市值、累计盈亏、当日盈亏，与账户持仓列一致）
 
 
 ## API 参考
@@ -172,10 +173,14 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 |------|------|------|
 | GET | `/api/test-connection` | 测试连接，返回资产数据 |
 | GET | `/api/account-asset` | 账户资产 |
-| GET | `/api/signals` | 信号历史（支持 ?start_date=&end_date=&strategy_name=） |
+| GET | `/api/account-positions` | 账户持仓明细 |
+| GET | `/api/orders` | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | QMT→聚宽 转换 |
-| POST | `/api/receive-signal` | 接收远程信号（支持策略 Token） |
+| POST | `/api/jukuan_order` | 聚宽风格按数量下单 |
+| POST | `/api/jukuan_order_target` | 聚宽风格目标持仓下单 |
+| POST | `/api/jukuan_order_value` | 聚宽风格按金额下单 |
+| POST | `/api/jukuan_order_target_value` | 聚宽风格目标市值下单 |
 
 ### 动态端点（自动生成）
 
@@ -188,32 +193,32 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 - `POST /api/query_stock_trades` — 查询成交
 - `POST /api/query_stock_positions` — 查询持仓
 
-### 信号格式
+### 聚宽下单格式
 
-远程策略服务器发送信号到 `/api/receive-signal`：
+远程策略服务器使用策略 Token 调用 `/api/jukuan_order`：
 
-**使用策略 Token（推荐）**：信号自动关联到对应策略，执行后自动更新策略持仓和资金。
+**使用策略 Token（推荐）**：订单自动关联到对应策略，执行后自动更新策略持仓和资金。
 
 ```json
 {
-  "signal_id": "sig-20260528-001",
-  "stock_code": "000001.XSHE",
-  "direction": "buy",
-  "quantity": 100,
-  "price": 12.50,
-  "order_type": "limit",
-  "strategy_name": "momentum-v1"
+  "security": "000001.XSHE",
+  "amount": 100,
+  "side": "long"
 }
 ```
 
 请求头：`X-Token: <策略Token>`
 
+- `security`：证券代码，支持聚宽格式（`.XSHE`/`.XSHG`/`.XBJ`）或 QMT 格式（`.SZ`/`.SH`/`.BJ`），后端会自动归一化为 QMT 格式
+- `amount`：目标数量，`jukuan_order` 中正数为买入、负数为卖出
+- `side`：方向，股票默认 `long`；期货可指定 `short`
+
 ## Token 安全机制
 
 - 服务器主 Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同
-- 每个策略自动生成独立 Token（`secrets.token_hex(16)`），用于远程信号认证
+- 每个策略自动生成独立 Token（`secrets.token_hex(16)`），用于远程聚宽风格下单认证
 - 策略 Token 可在「配置」tab 的策略列表中查看和复制
-- `/api/receive-signal` 同时支持主 Token 和策略 Token
+- `/api/jukuan_order*` 同时支持主 Token 和策略 Token
 - 前端通过 Session Storage 存储 Token（页面刷新不丢失，关闭标签页即清除）
 - `/api/server-info` 不再返回 Token，仅在 `/api/start-server` 响应中返回一次
 - `/api/stop-server` 需要 X-Token 鉴权

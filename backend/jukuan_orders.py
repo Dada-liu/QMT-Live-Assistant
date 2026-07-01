@@ -3,7 +3,7 @@
 提供聚宽 API 风格的下单方法（order/order_target/order_value/order_target_value），
 支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
 """
-from backend.utils import fetch_latest_prices_from_xtdata, jq_to_qmt, qmt_to_jq
+from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq
 from backend.qmt_client import create_trader
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
@@ -31,12 +31,11 @@ def _round_down_to_lot(quantity: float, code: str) -> int:
     return int(quantity / size) * size
 
 
-def _get_position_info(trader, account, jq_code: str) -> dict:
-    """查询指定聚宽代码在QMT账户中的持仓信息。
+def _get_position_info(trader, account, stock_code: str) -> dict:
+    """查询指定 QMT 代码在账户中的持仓信息。
 
     返回包含持仓数量、参考价格以及是否找到持仓的字典。
     """
-    qmt_code = jq_to_qmt(jq_code)
     try:
         positions = trader.query_stock_positions(account)
     except Exception:
@@ -44,7 +43,7 @@ def _get_position_info(trader, account, jq_code: str) -> dict:
 
     for pos in positions:
         pos_code = getattr(pos, 'stock_code', '')
-        if pos_code != qmt_code:
+        if pos_code != stock_code:
             continue
         volume = getattr(pos, 'volume', 0) or 0
         market_value = getattr(pos, 'market_value', 0.0) or 0.0
@@ -61,25 +60,24 @@ def _get_position_info(trader, account, jq_code: str) -> dict:
     return {'volume': 0, 'price': 0.0, 'found': False}
 
 
-def _get_price(trader, account, jq_code: str) -> float:
-    """获取指定聚宽代码的最新参考价格，优先使用持仓市值计算，无持仓时从行情接口获取。"""
-    info = _get_position_info(trader, account, jq_code)
+def _get_price(trader, account, stock_code: str) -> float:
+    """获取指定 QMT 代码的最新参考价格，优先使用持仓市值计算，无持仓时从行情接口获取。"""
+    info = _get_position_info(trader, account, stock_code)
     if info['price'] > 0:
         return info['price']
 
     # 无持仓时，从 QMT 行情接口获取最新价
-    qmt_code = jq_to_qmt(jq_code)
-    price_map = fetch_latest_prices_from_xtdata([qmt_code])
-    price = price_map.get(qmt_code, 0.0)
+    price_map = fetch_latest_prices_from_xtdata([stock_code])
+    price = price_map.get(stock_code, 0.0)
     if price > 0:
         return price
 
-    raise ValueError(f"无法获取 {jq_code} 的最新价格，请确保持仓中有该股票或行情接口可用")
+    raise ValueError(f"无法获取 {stock_code} 的最新价格，请确保持仓中有该股票或行情接口可用")
 
 
-def _get_volume(trader, account, jq_code: str) -> int:
-    """获取指定聚宽代码在QMT账户中的当前持仓数量。"""
-    info = _get_position_info(trader, account, jq_code)
+def _get_volume(trader, account, stock_code: str) -> int:
+    """获取指定 QMT 代码在账户中的当前持仓数量。"""
+    info = _get_position_info(trader, account, stock_code)
     return info['volume']
 
 
@@ -98,12 +96,12 @@ class JukuanOrderHandler:
         self.account = account
         self.strategy_manager = strategy_manager
 
-    def _submit_order(self, jq_code: str, order_type: int, quantity: int,
+    def _submit_order(self, stock_code: str, order_type: int, quantity: int,
                       strategy_name: str = 'jukuan_order') -> int:
         """向QMT提交一笔委托。
 
         Args:
-            jq_code: 聚宽格式的证券代码。
+            stock_code: QMT格式的证券代码。
             order_type: 委托类型（买入或卖出）。
             quantity: 委托数量，已按手数取整。
             strategy_name: 策略名称，写入QMT订单备注。
@@ -111,10 +109,10 @@ class JukuanOrderHandler:
         Returns:
             QMT返回的订单编号。
         """
-        qmt_code = jq_to_qmt(jq_code)
+        jq_code = qmt_to_jq(stock_code)
         order_id = self.trader.order_stock(
             self.account,
-            stock_code=qmt_code,
+            stock_code=stock_code,
             order_type=order_type,
             order_volume=quantity,
             price_type=LATEST_PRICE,
@@ -124,7 +122,7 @@ class JukuanOrderHandler:
         )
         logger.info(
             f"{BLUE}【聚宽下单】{RESET} "
-            f"股票:{jq_code}→{qmt_code} "
+            f"股票:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
             f"数量:{quantity} "
             f"订单编号:{order_id}"
@@ -133,7 +131,7 @@ class JukuanOrderHandler:
 
     # ---- (1) jukuan_order ----
 
-    def jukuan_order(self, security: str, amount: int,
+    def jukuan_order(self, stock_code: str, amount: int,
                      side: str = 'long') -> dict:
         """按指定数量下单。
 
@@ -141,22 +139,23 @@ class JukuanOrderHandler:
         数量会按每手股数向下取整，不足一手的委托将被取消。
 
         Args:
-            security: 证券代码。
+            stock_code: QMT格式的证券代码。
             amount: 目标数量，正数为买入/开多，负数为卖出/平多。
             side: 方向，'long' 或 'short'，仅对期货生效。
 
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        is_future = _is_future(security)
-        quantity = _round_down_to_lot(abs(amount), security)
+        is_future = _is_future(stock_code)
+        quantity = _round_down_to_lot(abs(amount), stock_code)
 
         if quantity == 0:
             msg = f"下单数量不足一手，调整为0股，订单取消"
-            logger.warning(f"{YELLOW}【聚宽下单】{RESET} {security} {msg}")
+            logger.warning(f"{YELLOW}【聚宽下单】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': 'none',
                 'quantity': 0,
                 'price': 0.0,
@@ -172,11 +171,12 @@ class JukuanOrderHandler:
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
         try:
-            order_id = self._submit_order(security, order_type, quantity)
-            msg = f"聚宽下单: {direction} {security} {quantity}股"
+            order_id = self._submit_order(stock_code, order_type, quantity)
+            msg = f"聚宽下单: {direction} {stock_code} {quantity}股"
             return {
                 'order_id': order_id,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': quantity,
                 'price': 0.0,
@@ -189,29 +189,30 @@ class JukuanOrderHandler:
 
     # ---- (2) jukuan_order_target ----
 
-    def jukuan_order_target(self, security: str, amount: int,
+    def jukuan_order_target(self, stock_code: str, amount: int,
                             side: str = 'long') -> dict:
         """按目标持仓数量调仓。
 
         计算当前持仓与目标数量的差值，并委托买入或卖出差额部分。
 
         Args:
-            security: 证券代码。
+            stock_code: QMT格式的证券代码。
             amount: 目标持仓数量。
             side: 方向，'long' 或 'short'，仅对期货生效。
 
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        current_qty = _get_volume(self.trader, self.account, security)
+        current_qty = _get_volume(self.trader, self.account, stock_code)
         delta = amount - current_qty
 
         if delta == 0:
             msg = f"目标数量已满足 (当前:{current_qty}, 目标:{amount})，不再调整"
-            logger.info(f"{GREEN}【聚宽调仓】{RESET} {security} {msg}")
+            logger.info(f"{GREEN}【聚宽调仓】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': 'none',
                 'quantity': 0,
                 'price': 0.0,
@@ -219,15 +220,16 @@ class JukuanOrderHandler:
                 'message': msg,
             }
 
-        is_future = _is_future(security)
-        quantity = _round_down_to_lot(abs(delta), security)
+        is_future = _is_future(stock_code)
+        quantity = _round_down_to_lot(abs(delta), stock_code)
 
         if quantity == 0:
             msg = f"调整数量不足一手 (delta:{delta})，订单取消"
-            logger.warning(f"{YELLOW}【聚宽调仓】{RESET} {security} {msg}")
+            logger.warning(f"{YELLOW}【聚宽调仓】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': 'none',
                 'quantity': 0,
                 'price': 0.0,
@@ -243,11 +245,12 @@ class JukuanOrderHandler:
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
         try:
-            order_id = self._submit_order(security, order_type, quantity)
-            msg = f"聚宽调仓: {direction} {security} {quantity}股 (当前:{current_qty}→目标:{amount})"
+            order_id = self._submit_order(stock_code, order_type, quantity)
+            msg = f"聚宽调仓: {direction} {stock_code} {quantity}股 (当前:{current_qty}→目标:{amount})"
             return {
                 'order_id': order_id,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': quantity,
                 'price': 0.0,
@@ -260,30 +263,31 @@ class JukuanOrderHandler:
 
     # ---- (3) jukuan_order_value ----
 
-    def jukuan_order_value(self, security: str, value: float,
+    def jukuan_order_value(self, stock_code: str, value: float,
                            side: str = 'long') -> dict:
         """按指定金额下单。
 
         根据持仓最新价格计算可购买数量，并向下取整到整手。
 
         Args:
-            security: 证券代码。
+            stock_code: QMT格式的证券代码。
             value: 目标金额，正数为买入，负数为卖出。
             side: 方向，'long' 或 'short'，仅对期货生效。
 
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        price = _get_price(self.trader, self.account, security)
+        price = _get_price(self.trader, self.account, stock_code)
         target_qty = abs(value) / price
-        quantity = _round_down_to_lot(target_qty, security)
+        quantity = _round_down_to_lot(target_qty, stock_code)
 
         if quantity == 0:
             msg = f"下单金额不足以购买一手 (价值:{value:.2f}, 价格:{price:.2f})，订单取消"
-            logger.warning(f"{YELLOW}【聚宽价值下单】{RESET} {security} {msg}")
+            logger.warning(f"{YELLOW}【聚宽价值下单】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': 'none',
                 'quantity': 0,
                 'price': price,
@@ -291,7 +295,7 @@ class JukuanOrderHandler:
                 'message': msg,
             }
 
-        is_future = _is_future(security)
+        is_future = _is_future(stock_code)
         if is_future and side == 'short':
             order_type = STOCK_SELL if value > 0 else STOCK_BUY
         else:
@@ -300,12 +304,13 @@ class JukuanOrderHandler:
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
         try:
-            order_id = self._submit_order(security, order_type, quantity)
-            msg = (f"聚宽价值下单: {direction} {security} {quantity}股 "
+            order_id = self._submit_order(stock_code, order_type, quantity)
+            msg = (f"聚宽价值下单: {direction} {stock_code} {quantity}股 "
                    f"(价值:{value:.2f}, 价格:{price:.2f})")
             return {
                 'order_id': order_id,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': quantity,
                 'price': price,
@@ -318,32 +323,33 @@ class JukuanOrderHandler:
 
     # ---- (4) jukuan_order_target_value ----
 
-    def jukuan_order_target_value(self, security: str, value: float,
+    def jukuan_order_target_value(self, stock_code: str, value: float,
                                   side: str = 'long') -> dict:
         """按目标持仓市值调仓。
 
         计算当前持仓市值与目标市值的差值，并调用 jukuan_order_value 进行差额委托。
 
         Args:
-            security: 证券代码。
+            stock_code: QMT格式的证券代码。
             value: 目标持仓市值。
             side: 方向，'long' 或 'short'，仅对期货生效。
 
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        price = _get_price(self.trader, self.account, security)
-        current_qty = _get_volume(self.trader, self.account, security)
+        price = _get_price(self.trader, self.account, stock_code)
+        current_qty = _get_volume(self.trader, self.account, stock_code)
         current_value = current_qty * price
         delta_value = value - current_value
 
         if abs(delta_value) < 0.01:
             msg = (f"目标价值已满足 (当前价值:{current_value:.2f}, 目标:{value:.2f})，"
                    f"不再调整")
-            logger.info(f"{GREEN}【聚宽价值调仓】{RESET} {security} {msg}")
+            logger.info(f"{GREEN}【聚宽价值调仓】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
-                'jq_code': security,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
                 'direction': 'none',
                 'quantity': 0,
                 'price': price,
@@ -351,4 +357,4 @@ class JukuanOrderHandler:
                 'message': msg,
             }
 
-        return self.jukuan_order_value(security, delta_value, side=side)
+        return self.jukuan_order_value(stock_code, delta_value, side=side)

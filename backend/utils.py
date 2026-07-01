@@ -61,6 +61,22 @@ def qmt_to_jq(code: str) -> str:
     return code
 
 
+def normalize_to_qmt(code: str) -> str:
+    """将任意平台的股票代码统一归一化为 QMT 格式。
+
+    - 已是 QMT 格式（.SZ/.SH/.BJ） -> 原样返回
+    - 聚宽格式（.XSHE/.XSHG/.XBJ） -> 转换为 QMT
+    - 其他格式（期货、6 位数字等） -> 原样返回
+    """
+    if not code:
+        return code
+    if code.endswith(('.SZ', '.SH', '.BJ')):
+        return code
+    if code.endswith(('.XSHE', '.XSHG', '.XBJ')):
+        return jq_to_qmt(code)
+    return code
+
+
 def fetch_preclose_from_xtdata(stock_codes):
     """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock"""
     if not stock_codes:

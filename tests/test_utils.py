@@ -9,6 +9,7 @@ from backend.utils import (
     parse_order_type,
     convert_to_current_date,
     fetch_latest_prices_from_xtdata,
+    normalize_to_qmt,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 
@@ -61,3 +62,21 @@ class TestFetchLatestPricesFromXtdata:
     def test_unknown_stock_returns_empty(self):
         result = fetch_latest_prices_from_xtdata(["UNKNOWN.SZ"])
         assert result == {}
+
+
+class TestNormalizeToQmt:
+    def test_qmt_code_unchanged(self):
+        assert normalize_to_qmt("000001.SZ") == "000001.SZ"
+        assert normalize_to_qmt("600000.SH") == "600000.SH"
+        assert normalize_to_qmt("430001.BJ") == "430001.BJ"
+
+    def test_jq_code_converted(self):
+        assert normalize_to_qmt("000001.XSHE") == "000001.SZ"
+        assert normalize_to_qmt("600000.XSHG") == "600000.SH"
+        assert normalize_to_qmt("430001.XBJ") == "430001.BJ"
+
+    def test_future_code_unchanged(self):
+        assert normalize_to_qmt("RB8888.XSGE") == "RB8888.XSGE"
+
+    def test_empty_code(self):
+        assert normalize_to_qmt("") == ""

@@ -2,7 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 
-_TOKEN = "9152b7fa5f07b5c364a21b06c02d1170"
+_TOKEN = "6660150ed2b39666da8c264ba1dc579a"
 
 def _load_client_class():
     """动态加载带横杠文件名的客户端模块"""

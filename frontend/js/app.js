@@ -2,7 +2,7 @@ import { UI } from './ui.js';
 import { api } from './api.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { initConfigPanel } from './config-panel.js';
-import { initMonitor, startPolling, stopPolling, startStatusCheck, stopStatusCheck } from './monitor.js';
+import { initMonitor, fetchOrders, startStatusCheck, stopStatusCheck } from './monitor.js';
 import { initDashboard, refreshDashboard } from './dashboard.js';
 import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
@@ -69,7 +69,6 @@ async function initApp() {
             UI.showSection('server-info');
             UI.showSection('dashboard');
             refreshDashboard();
-            startPolling();
             await loadStrategies();
             populateStrategyDropdown();
             Toast.success('连接成功！');
@@ -91,7 +90,6 @@ async function checkServerStatus() {
             if (storedToken) {
                 setState('token', storedToken);
                 await refreshDashboard();
-                startPolling();
                 await loadStrategies();
                 populateStrategyDropdown();
                 UI.switchTab('account');
@@ -113,6 +111,9 @@ function initTabNavigation() {
             e.preventDefault();
             const targetId = link.getAttribute('href').substring(1);
             UI.switchTab(targetId);
+            if (targetId === 'trade') {
+                fetchOrders();
+            }
         });
     });
 }

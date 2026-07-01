@@ -88,15 +88,12 @@ class TestAccountAsset:
             assert "can_use_volume" in pos
             assert "current_price" not in pos
 
-    def test_signals_endpoint(self, client, server):
+    def test_signals_endpoint_removed(self, client, server):
         response = client.get(
             "/api/signals",
             headers={"X-Token": server.token}
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert isinstance(data["data"], list)
+        assert response.status_code == 404
 
 
 class TestJqConversion:
@@ -333,35 +330,115 @@ class TestJukuanOrderAPI:
         assert response.status_code == 422
 
 
-class TestReceiveSignal:
-    """接收外部信号 API 测试"""
+class TestOrdersApi:
+    """订单查询 API 测试"""
 
-    def test_receive_signal_with_main_token(self, client, server):
-        response = client.post(
-            "/api/receive-signal",
-            json={
-                "signal_id": "sig-test-001",
-                "stock_code": "000001.XSHE",
-                "direction": "buy",
-                "quantity": 100,
-                "price": 10.0,
-            },
+    def test_get_orders_empty(self, client, server):
+        response = client.get(
+            "/api/orders",
             headers={"X-Token": server.token},
         )
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert "order_id" in data["data"]
+        assert data["data"] == []
 
-    def test_receive_signal_invalid_token(self, client):
+    def test_get_orders_with_jukuan_order(self, client, server):
         response = client.post(
-            "/api/receive-signal",
-            json={
-                "signal_id": "sig-001",
-                "stock_code": "000001.XSHE",
-                "direction": "buy",
-                "quantity": 100,
-            },
-            headers={"X-Token": "invalid"},
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": server.token},
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
+
+        response = client.get(
+            "/api/orders",
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["data"]) == 1
+        order = data["data"][0]
+        assert order["direction"] == "buy"
+        assert order["status"] == "pending"
+        assert order["jq_code"] == "000001.XSHE"
+        assert order["stock_code"] == "000001.XSHE"
+
+    def test_get_orders_filter_by_status(self, client, server):
+        client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": server.token},
+        )
+
+        response = client.get(
+            "/api/orders?status=pending",
+            headers={"X-Token": server.token},
+        )
+        data = response.json()
+        assert len(data["data"]) == 1
+
+        response = client.get(
+            "/api/orders?status=filled",
+            headers={"X-Token": server.token},
+        )
+        data = response.json()
+        assert len(data["data"]) == 0
+
+    def test_get_orders_unauthorized(self, client):
+        response = client.get("/api/orders")
+        assert response.status_code == 422
+
+
+class TestOrderTrackingIntegration:
+    """订单跟踪与策略持仓同步集成测试"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "跟踪测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
+
+    def test_jukuan_order_tracks_order(self, client, server):
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+        tracked = server.order_tracker.get_order(order_id)
+        assert tracked is not None
+        assert tracked.direction == "buy"
+
+    def test_strategy_jukuan_order_optimistic_update(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.positions[0]["quantity"] == 100
+
+    def test_strategy_jukuan_order_resolves_on_poll(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+
+        import asyncio
+        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+
+        tracked = server.order_tracker.get_order(order_id)
+        assert tracked.status == "filled"
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.positions[0]["quantity"] == 100
+        assert s.available_cash == 100000 - 1250

@@ -291,6 +291,90 @@ class TestStrategyManagerPositions:
         mgr.update_position("nonexistent", "000001.SZ", "buy", 100, 10.0)
 
 
+class TestStrategyManagerOptimisticUpdates:
+    @pytest.fixture
+    def mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        return mgr
+
+    def _first_id(self, mgr):
+        return list(mgr._strategies.keys())[0]
+
+    def test_apply_optimistic_position_buy(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 100
+        assert s.available_cash == 100000 - 1000
+        assert snapshot["quantity"] == 0
+        assert snapshot["available_cash"] == 100000
+
+    def test_apply_optimistic_position_sell(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 200
+        assert s.available_cash == 100000 - 3000 + 1200
+        assert snapshot["quantity"] == 300
+        assert snapshot["avg_cost"] == 10.0
+
+    def test_rollback_buy_position(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.rollback_position(sid, snapshot)
+        s = mgr.get(sid)
+        assert len(s.positions) == 0
+        assert s.available_cash == 100000
+
+    def test_rollback_sell_position(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+        mgr.rollback_position(sid, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 300
+        assert s.positions[0]["avg_cost"] == 10.0
+        assert s.available_cash == 100000 - 3000
+
+    def test_reconcile_full_fill(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 100, 10.0, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["avg_cost"] == 10.0
+        assert s.available_cash == 100000 - 1000
+
+    def test_reconcile_partial_buy(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 60, 10.2, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 60
+        assert s.positions[0]["avg_cost"] == 10.2
+        assert s.available_cash == 100000 - 60 * 10.2
+
+    def test_reconcile_partial_sell(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+        mgr.reconcile_position(sid, "000001.SZ", "sell", 100, 60, 12.2, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 240
+        assert s.positions[0]["avg_cost"] == 10.0
+        assert s.available_cash == 100000 - 3000 + 60 * 12.2
+
+    def test_reconcile_zero_fill_rolls_back(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 0, 0.0, snapshot)
+        s = mgr.get(sid)
+        assert len(s.positions) == 0
+        assert s.available_cash == 100000
+
+
 class TestStrategyManagerTradingRecords:
     @pytest.fixture
     def mgr(self):

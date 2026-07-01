@@ -5,27 +5,21 @@
 """
 import sys
 import random
-from collections import deque
 
+from backend.order_tracker import OrderTracker
 from backend.utils import timestamp_to_datetime_string, parse_order_type, convert_to_current_date
-from backend.constants import RED, GREEN, YELLOW, BLUE, RESET
+from backend.constants import RED, GREEN, BLUE, RESET
 from backend.logger import logger
 
 error_orders = []
 
 
 class MyXtQuantTraderCallback:
-    def __init__(self, signal_log: deque = None):
-        self.signal_log = signal_log
+    def __init__(self, order_tracker: OrderTracker = None):
+        self.order_tracker = order_tracker
 
     def on_disconnected(self):
         logger.warning(f"{YELLOW}【连接断开】{RESET}")
-        if self.signal_log is not None:
-            self.signal_log.append({
-                "type": "connection",
-                "event": "disconnected",
-                "message": "miniQMT 连接断开",
-            })
 
     def on_stock_order(self, order):
         if order.order_status == 50:
@@ -36,81 +30,37 @@ class MyXtQuantTraderCallback:
                 f"订单编号:{order.order_id} "
                 f"委托时间:{timestamp_to_datetime_string(convert_to_current_date(order.order_time))}"
             )
-        elif order.order_status in (53, 54):
-            logger.warning(
-                f"{YELLOW}【已撤单】{RESET} {parse_order_type(order.order_type)} "
-                f"代码:{order.stock_code} 名称:{order.order_remark} "
-                f"委托价格:{order.price:.2f} 委托数量:{order.order_volume} "
-                f"订单编号:{order.order_id}"
+
+        if self.order_tracker is not None:
+            traded_volume = getattr(order, 'traded_volume', 0) or 0
+            traded_price = getattr(order, 'traded_price', 0.0) or 0.0
+            self.order_tracker.update_from_callback(
+                order.order_id, order.order_status, traded_volume, traded_price
             )
-        if self.signal_log is not None:
-            self.signal_log.append({
-                "type": "order",
-                "order_id": str(order.order_id),
-                "stock_code": order.stock_code,
-                "order_type": parse_order_type(order.order_type),
-                "price": order.price,
-                "volume": order.order_volume,
-                "status": order.order_status,
-                "message": f"{parse_order_type(order.order_type)} {order.stock_code} {order.order_volume}股",
-            })
 
     def on_stock_trade(self, trade):
-        logger.info(
-            f"{GREEN}【已成交】{RESET} {parse_order_type(trade.order_type)} "
-            f"代码:{trade.stock_code} 名称:{trade.order_remark} "
-            f"成交价格:{trade.traded_price:.2f} 成交数量:{trade.traded_volume} "
-            f"成交编号:{trade.order_id} "
-            f"成交时间:{timestamp_to_datetime_string(convert_to_current_date(trade.traded_time))}"
-        )
-        if self.signal_log is not None:
-            self.signal_log.append({
-                "type": "trade",
-                "order_id": str(trade.order_id),
-                "stock_code": trade.stock_code,
-                "order_type": parse_order_type(trade.order_type),
-                "price": trade.traded_price,
-                "volume": trade.traded_volume,
-                "status": "filled",
-                "message": f"成交 {trade.stock_code} {trade.traded_volume}股 @ {trade.traded_price:.2f}",
-            })
+        if self.order_tracker is not None:
+            self.order_tracker.update_from_trade(
+                trade.order_id, trade.traded_volume, trade.traded_price
+            )
 
     def on_order_error(self, data):
         if data.order_id in error_orders:
             return
         error_orders.append(data.order_id)
         logger.error(f"{RED}【委托失败】{RESET}错误信息:{data.error_msg.strip()}")
-        if self.signal_log is not None:
-            self.signal_log.append({
-                "type": "error",
-                "order_id": str(data.order_id),
-                "stock_code": "",
-                "order_type": "",
-                "price": 0,
-                "volume": 0,
-                "status": "error",
-                "message": f"委托失败: {data.error_msg.strip()}",
-            })
+
+        if self.order_tracker is not None:
+            self.order_tracker.update_from_error(data.order_id, data.error_msg.strip())
 
     def on_cancel_error(self, data):
         if data.order_id in error_orders:
             return
         error_orders.append(data.order_id)
         logger.error(f"{RED}【撤单失败】{RESET}错误信息:{data.error_msg.strip()}")
-        if self.signal_log is not None:
-            self.signal_log.append({
-                "type": "error",
-                "order_id": str(data.order_id),
-                "stock_code": "",
-                "order_type": "",
-                "price": 0,
-                "volume": 0,
-                "status": "cancel_error",
-                "message": f"撤单失败: {data.error_msg.strip()}",
-            })
 
 
-def create_trader(account_id, mini_qmt_path, signal_log=None):
+def create_trader(account_id, mini_qmt_path, order_tracker=None):
     is_real_xtquant = False
 
     if sys.platform == 'win32':
@@ -148,7 +98,7 @@ def create_trader(account_id, mini_qmt_path, signal_log=None):
             pass
     logger.debug(f"{GREEN}【账号订阅成功】{RESET} 账号ID:{account_id}")
 
-    callback = MyXtQuantTraderCallback(signal_log=signal_log)
+    callback = MyXtQuantTraderCallback(order_tracker=order_tracker)
 
     if sys.platform == 'win32':
         try:

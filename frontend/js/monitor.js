@@ -3,7 +3,6 @@ import { UI } from './ui.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { refreshDashboard } from './dashboard.js';
 
-let pollingTimer = null;
 let currentFilters = {};
 
 export function setFilters(filters) {
@@ -14,38 +13,26 @@ export function getCurrentFilters() {
     return { ...currentFilters };
 }
 
-async function fetchSignals() {
+export async function fetchOrders() {
     const filters = getCurrentFilters();
-    const hasFilters = filters.strategy_name || filters.start_date || filters.end_date;
+    const hasFilters = filters.strategy_name || filters.start_date || filters.end_date || filters.status;
     try {
         const result = hasFilters
-            ? await api.getFilteredSignals(getState('token'), filters)
-            : await api.getSignals(getState('token'));
+            ? await api.getOrders(getState('token'), filters)
+            : await api.getOrders(getState('token'));
         if (result.success && result.data) {
-            setState('signals', result.data);
-            UI.renderSignals();
+            setState('orders', result.data);
+            UI.renderOrders();
         }
     } catch (error) {
         // silently ignore polling errors
     }
 }
 
-export function startPolling() {
-    stopPolling();
-    fetchSignals();
-    pollingTimer = setInterval(fetchSignals, 5000);
-}
-
-export function stopPolling() {
-    if (pollingTimer) {
-        clearInterval(pollingTimer);
-        pollingTimer = null;
-    }
-}
-
 export function initMonitor() {
     const btnApply = document.getElementById('btn-apply-filters');
     const btnReset = document.getElementById('btn-reset-filters');
+    const btnClear = document.getElementById('btn-clear-orders');
 
     if (btnApply) {
         btnApply.addEventListener('click', () => {
@@ -53,7 +40,7 @@ export function initMonitor() {
             const endDate = document.getElementById('filter-end-date').value;
             const strategyName = document.getElementById('filter-strategy').value;
             setFilters({ start_date: startDate, end_date: endDate, strategy_name: strategyName });
-            fetchSignals();
+            fetchOrders();
         });
     }
 
@@ -63,7 +50,13 @@ export function initMonitor() {
             document.getElementById('filter-end-date').value = '';
             document.getElementById('filter-strategy').value = '';
             setFilters({});
-            fetchSignals();
+            fetchOrders();
+        });
+    }
+
+    if (btnClear) {
+        btnClear.addEventListener('click', () => {
+            UI.clearOrders();
         });
     }
 }
@@ -90,7 +83,6 @@ export function startStatusCheck() {
                     UI.showSection('strategy-overview');
                     UI.showSection('strategy-management');
                     refreshDashboard();
-                    startPolling();
                 } else {
                     UI.showSection('account-empty');
                     UI.showConnectPrompt();

@@ -38,6 +38,8 @@ class MockOrder:
         self.order_remark = "平安银行"
         self.order_status = 56
         self.order_time = 1750000000.0
+        self.traded_volume = 0
+        self.traded_price = 0.0
 
 
 class MockPosition:
@@ -67,10 +69,13 @@ class MockAsset:
 
 
 class MockTrader:
+    _order_counter = 100000
+
     def __init__(self, mini_qmt_path, session_id):
         self.mini_qmt_path = mini_qmt_path
         self.session_id = session_id
         self._callbacks = []
+        self._orders = {}
 
     def start(self):
         return True
@@ -88,13 +93,63 @@ class MockTrader:
         return MockAsset()
 
     def order_stock(self, account, stock_code, order_type, order_volume, price_type, price, strategy_name="", order_remark=""):
-        return 100001
+        MockTrader._order_counter += 1
+        order_id = MockTrader._order_counter
+
+        order = MockOrder()
+        order.order_id = order_id
+        order.stock_code = stock_code
+        order.order_type = order_type
+        order.price = price if price > 0 else 12.50
+        order.order_volume = order_volume
+        order.order_remark = order_remark or ""
+        order.order_status = 50
+        order.order_time = 1750000000.0
+        order.traded_volume = 0
+        order.traded_price = 0.0
+
+        self._orders[str(order_id)] = order
+        return order_id
 
     def cancel_order(self, account, order_id):
+        order = self._orders.get(str(order_id))
+        if order:
+            order.order_status = 54
         return True
 
-    def query_stock_orders(self, account):
-        return [MockOrder()]
+    def _advance_order_if_needed(self, order):
+        """模拟订单状态推进：已报 -> 已成，并触发回调。"""
+        if order.order_status == 50:
+            order.order_status = 56
+            order.traded_volume = order.order_volume
+            order.traded_price = order.price
+
+            for callback in self._callbacks:
+                try:
+                    callback.on_stock_order(order)
+                    trade = MockTrade()
+                    trade.order_id = order.order_id
+                    trade.stock_code = order.stock_code
+                    trade.order_type = order.order_type
+                    trade.traded_price = order.price
+                    trade.traded_volume = order.order_volume
+                    trade.order_remark = order.order_remark
+                    callback.on_stock_trade(trade)
+                except Exception:
+                    pass
+
+    def query_stock_order(self, account, order_id):
+        order = self._orders.get(str(order_id))
+        if not order:
+            return None
+
+        self._advance_order_if_needed(order)
+        return order
+
+    def query_stock_orders(self, account, cancelable_only=False):
+        for order in self._orders.values():
+            self._advance_order_if_needed(order)
+        return list(self._orders.values())
 
     def query_stock_trades(self, account):
         return [MockTrade()]
@@ -108,7 +163,7 @@ class MockTrader:
         ]
 
     def query_all_orders(self, account):
-        return [MockOrder()]
+        return list(self._orders.values())
 
     def query_all_trades(self, account):
         return [MockTrade()]

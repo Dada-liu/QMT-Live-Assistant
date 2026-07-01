@@ -80,62 +80,62 @@ export const UI = {
         if (tokenEl) tokenEl.textContent = '--';
         setState('token', null);
         setState('serverInfo', null);
-        setState('signals', []);
-        this.renderSignals();
+        setState('orders', []);
+        this.renderOrders();
     },
 
-    renderSignals() {
-        const list = document.getElementById('signal-list');
+    renderOrders() {
+        const list = document.getElementById('order-list');
         if (!list) return;
 
-        const signals = getState('signals');
+        const orders = getState('orders');
 
-        if (signals.length === 0) {
-            list.innerHTML = '<div class="signal-empty">暂无信号记录</div>';
+        if (orders.length === 0) {
+            list.innerHTML = '<div class="signal-empty">暂无订单记录，下单后将在此显示。</div>';
             return;
         }
 
         const header = `
           <div class="signal-item header">
             <span>时间</span>
-            <span>信号ID</span>
+            <span>订单ID</span>
             <span>方向</span>
-            <span>内容</span>
-            <span>数量</span>
+            <span>股票</span>
+            <span>成交/委托</span>
             <span>状态</span>
           </div>
         `;
 
-        const rows = signals.slice().reverse().map(s => {
-            const time = s.timestamp ? new Date(s.timestamp).toLocaleTimeString() : '--';
-            const signalId = s.signal_id || '--';
-            const direction = s.direction || s.order_type || '--';
-            const msg = s.message || '--';
-            const volume = s.quantity || s.volume || '--';
-            const status = s.status || '--';
+        const rows = orders.map(o => {
+            const time = o.placed_at ? new Date(o.placed_at).toLocaleTimeString() : '--';
+            const orderId = o.order_id || '--';
+            const direction = o.direction || '--';
+            const stockCode = o.jq_code || o.stock_code || '--';
+            const volume = `${o.filled_quantity || 0}/${o.quantity || '--'}`;
+            const status = o.status || '--';
 
             let directionBadge = '';
-            if (direction === 'buy' || direction.includes('买入')) {
+            if (direction === 'buy') {
                 directionBadge = '<span class="badge badge-buy">买入</span>';
-            } else if (direction === 'sell' || direction.includes('卖出')) {
+            } else if (direction === 'sell') {
                 directionBadge = '<span class="badge badge-sell">卖出</span>';
             } else {
                 directionBadge = `<span class="badge badge-warning">${direction}</span>`;
             }
 
             let statusBadge = '';
-            if (status === 'submitted') statusBadge = '<span class="badge badge-info">已提交</span>';
+            if (status === 'pending') statusBadge = '<span class="badge badge-info">待成交</span>';
+            else if (status === 'partial') statusBadge = '<span class="badge badge-warning">部分成交</span>';
             else if (status === 'filled') statusBadge = '<span class="badge badge-success">已成交</span>';
-            else if (status === 'error') statusBadge = '<span class="badge badge-error">失败</span>';
-            else if (status === 'cancelled') statusBadge = '<span class="badge badge-warning">已取消</span>';
+            else if (status === 'failed') statusBadge = '<span class="badge badge-error">失败</span>';
             else statusBadge = `<span class="badge badge-warning">${status}</span>`;
 
             return `
               <div class="signal-item">
                 <span class="signal-time">${time}</span>
-                <span class="signal-code">${signalId}</span>
+                <span class="signal-code">${orderId}</span>
                 <span class="signal-direction">${directionBadge}</span>
-                <span class="signal-msg">${msg}</span>
+                <span class="signal-msg">${stockCode}</span>
                 <span>${volume}</span>
                 <span>${statusBadge}</span>
               </div>
@@ -145,17 +145,17 @@ export const UI = {
         list.innerHTML = header + rows;
     },
 
-    addSignal(signal) {
-        const signals = getState('signals');
-        signals.push(signal);
-        if (signals.length > 200) signals.shift();
-        setState('signals', signals);
-        this.renderSignals();
+    addOrder(order) {
+        const orders = getState('orders');
+        orders.push(order);
+        if (orders.length > 200) orders.shift();
+        setState('orders', orders);
+        this.renderOrders();
     },
 
-    clearSignals() {
-        setState('signals', []);
-        this.renderSignals();
+    clearOrders() {
+        setState('orders', []);
+        this.renderOrders();
     },
 
     updateDashboard(data) {

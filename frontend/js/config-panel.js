@@ -1,7 +1,7 @@
 import { api } from './api.js';
 import { UI } from './ui.js';
 import { getState, setState } from './state.js';
-import { startPolling, stopPolling, stopStatusCheck } from './monitor.js';
+import { stopStatusCheck } from './monitor.js';
 import { refreshDashboard } from './dashboard.js';
 import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
@@ -52,7 +52,6 @@ export function initConfigPanel() {
             populateStrategyDropdown();
             UI.switchTab('account');
             refreshDashboard();
-            startPolling();
         } catch (error) {
             Toast.error(`启动失败: ${error.message}`);
         }
@@ -71,9 +70,8 @@ export function initConfigPanel() {
             setState('serverRunning', false);
             UI.disableForm(false);
             UI.resetServerInfo();
-            UI.clearSignals();
+            UI.clearOrders();
             UI.resetDashboard();
-            stopPolling();
             stopStatusCheck();
             UI.switchTab('account');
             if (stopError) {
@@ -98,27 +96,8 @@ export function initConfigPanel() {
 
             UI.updateDashboard(data);
             Toast.success('连接测试成功！资产数据已更新。');
-
-            UI.addSignal({
-                type: 'test',
-                signal_id: 'conn-test',
-                direction: 'info',
-                quantity: 0,
-                status: 'success',
-                timestamp: new Date().toISOString(),
-                message: '连接测试成功',
-            });
         } catch (error) {
             Toast.error(`连接测试失败: ${error.message}`);
-            UI.addSignal({
-                type: 'test',
-                signal_id: 'conn-test',
-                direction: 'error',
-                quantity: 0,
-                status: 'error',
-                timestamp: new Date().toISOString(),
-                message: `连接测试失败: ${error.message}`,
-            });
         }
     });
 
@@ -156,9 +135,9 @@ export function initConfigPanel() {
         document.body.removeChild(textarea);
     }
 
-    const btnClear = el('btn-clear-signals');
+    const btnClear = el('btn-clear-orders');
     if (btnClear) btnClear.addEventListener('click', () => {
-        UI.clearSignals();
+        UI.clearOrders();
     });
 
     const themeToggle = el('theme-toggle');

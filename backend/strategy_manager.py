@@ -239,7 +239,92 @@ class StrategyManager:
         if not strategy:
             return
 
-        positions = list(strategy.positions)
+        positions = self._apply_position_change(
+            list(strategy.positions), strategy, stock_code, direction, quantity, price
+        )
+        strategy.positions = positions
+        strategy.updated_at = datetime.now().isoformat()
+
+    def apply_optimistic_position(self, strategy_id: str, stock_code: str,
+                                  direction: str, quantity: int, price: float):
+        """下单时乐观更新策略持仓，并返回更新前的持仓快照用于后续回滚或修正。"""
+        strategy = self._strategies.get(strategy_id)
+        if not strategy:
+            return None
+
+        old_pos = next(
+            (p for p in strategy.positions if p["stock_code"] == stock_code), None
+        )
+        snapshot = {
+            "stock_code": stock_code,
+            "quantity": old_pos["quantity"] if old_pos else 0,
+            "avg_cost": old_pos["avg_cost"] if old_pos else 0.0,
+            "available_cash": strategy.available_cash,
+        }
+
+        self.update_position(strategy_id, stock_code, direction, quantity, price)
+        return snapshot
+
+    def rollback_position(self, strategy_id: str, snapshot: Optional[dict]):
+        """根据快照撤销乐观持仓更新。"""
+        strategy = self._strategies.get(strategy_id)
+        if not strategy or not snapshot:
+            return
+
+        strategy.available_cash = snapshot["available_cash"]
+        positions = [
+            p for p in strategy.positions
+            if p["stock_code"] != snapshot["stock_code"]
+        ]
+        if snapshot["quantity"] > 0:
+            positions.append({
+                "stock_code": snapshot["stock_code"],
+                "stock_name": "",
+                "quantity": snapshot["quantity"],
+                "avg_cost": snapshot["avg_cost"],
+            })
+
+        strategy.positions = positions
+        strategy.updated_at = datetime.now().isoformat()
+
+    def reconcile_position(self, strategy_id: str, stock_code: str,
+                           direction: str, requested_qty: int,
+                           filled_qty: int, filled_price: float,
+                           snapshot: Optional[dict]):
+        """实际成交与委托不一致时，先恢复到快照再按实际成交修正持仓。"""
+        strategy = self._strategies.get(strategy_id)
+        if not strategy:
+            return
+
+        if filled_qty <= 0:
+            self.rollback_position(strategy_id, snapshot)
+            return
+
+        # 恢复到乐观更新前的快照状态
+        strategy.available_cash = snapshot["available_cash"]
+        positions = [
+            p for p in strategy.positions
+            if p["stock_code"] != stock_code
+        ]
+        if snapshot["quantity"] > 0:
+            positions.append({
+                "stock_code": stock_code,
+                "stock_name": "",
+                "quantity": snapshot["quantity"],
+                "avg_cost": snapshot["avg_cost"],
+            })
+
+        # 按实际成交重新应用
+        positions = self._apply_position_change(
+            positions, strategy, stock_code, direction, filled_qty, filled_price
+        )
+        strategy.positions = positions
+        strategy.updated_at = datetime.now().isoformat()
+
+    def _apply_position_change(self, positions: List[dict], strategy,
+                               stock_code: str, direction: str,
+                               quantity: int, price: float) -> List[dict]:
+        """在传入的 positions 列表上应用买卖变动，返回新的 positions 列表。"""
         cost = quantity * price
 
         if direction == "buy":
@@ -269,8 +354,7 @@ class StrategyManager:
                         positions = [p for p in positions if p["stock_code"] != stock_code]
                     break
 
-        strategy.positions = positions
-        strategy.updated_at = datetime.now().isoformat()
+        return positions
 
     def add_trading_record(self, strategy_id: str, record: dict):
         """添加买卖记录"""

@@ -7,14 +7,15 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Path
 from pydantic import BaseModel
 import inspect
 import secrets
+import asyncio
 from typing import Any, Optional
-from collections import deque
 from datetime import datetime
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate
 from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
+from backend.order_tracker import OrderTracker, OrderState
 
 _current_server = None
 
@@ -22,7 +23,6 @@ _current_server = None
 async def _verify_token(x_token: str = Header(...)):
     if _current_server is None:
         raise HTTPException(status_code=401, detail="服务器未运行")
-    print(f"验证Token: {x_token}, 服务器Token: {_current_server.token}")
     if x_token != _current_server.token:
         raise HTTPException(status_code=401, detail="无效的Token")
     return x_token
@@ -53,11 +53,12 @@ class QMTServer:
         self.account = None
         self.callback = None
         self.token = token if token else self.generate_token()
-        self.signal_log = deque(maxlen=200)
-        self._signal_receiver = None
+        self.order_tracker = OrderTracker()
+        self._poll_task: Optional[asyncio.Task] = None
         self._jukuan_handler = None
         self.running = False
         self.strategy_manager = StrategyManager()
+        self._register_order_state_callback()
         print(f"\n授权Token: {self.token}\n")
 
     def generate_token(self) -> str:
@@ -72,8 +73,83 @@ class QMTServer:
 
     def init_trader(self):
         self.trader, self.account, self.callback = create_trader(
-            self.account_id, self.mini_qmt_path, signal_log=self.signal_log
+            self.account_id, self.mini_qmt_path,
+            order_tracker=self.order_tracker
         )
+
+    def _register_order_state_callback(self):
+        """注册订单状态变更回调，用于在终态时修正策略持仓。"""
+        def on_state_change(order):
+            if not order.strategy_id or not order.optimistic_position_applied:
+                return
+
+            if order.status == OrderState.FILLED:
+                self.strategy_manager.reconcile_position(
+                    order.strategy_id,
+                    order.jq_code,
+                    order.direction,
+                    order.quantity,
+                    order.filled_quantity,
+                    order.filled_price,
+                    order.optimistic_snapshot,
+                )
+            elif order.status == OrderState.FAILED:
+                self.strategy_manager.rollback_position(
+                    order.strategy_id, order.optimistic_snapshot
+                )
+
+        self.order_tracker.on_state_change(on_state_change)
+
+    def _track_and_apply_order(self, order_result: dict, strategy_id: Optional[str],
+                               strategy_name: str) -> None:
+        """将订单注册到跟踪器，并对策略持仓进行乐观更新。"""
+        order_id = order_result.get('order_id')
+        if not order_id:
+            return
+        print(f"跟踪订单 {order_id}，策略: {strategy_name}, 策略ID: {strategy_id}")
+        jq_code = order_result.get('jq_code', '')
+        direction = order_result.get('direction', '')
+        quantity = order_result.get('quantity', 0)
+        price = order_result.get('price', 0.0)
+        order_type = order_result.get('order_type', 0)
+        qmt_code = order_result.get('qmt_code') or jq_code
+
+        snapshot = None
+        optimistic_applied = False
+        if strategy_id and direction in ('buy', 'sell') and quantity > 0:
+            snapshot = self.strategy_manager.apply_optimistic_position(
+                strategy_id, jq_code, direction, quantity, price
+            )
+            optimistic_applied = snapshot is not None
+
+        self.order_tracker.track_order(
+            order_id=order_id,
+            stock_code=qmt_code,
+            jq_code=jq_code,
+            direction=direction,
+            quantity=quantity,
+            order_type=order_type,
+            strategy_id=strategy_id,
+            strategy_name=strategy_name,
+            price=price,
+            optimistic_position_applied=optimistic_applied,
+        ).optimistic_snapshot = snapshot
+
+    async def _poll_orders_loop(self):
+        """后台轮询 pending 订单状态，补偿漏掉的回调。"""
+        try:
+            while self.running:
+                try:
+                    if self.trader is not None and self.account is not None:
+                        await self.order_tracker.poll_and_reconcile(
+                            self.trader, self.account
+                        )
+                except Exception:
+                    # 轮询失败不应影响主服务
+                    pass
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
 
     def convert_to_dict(self, obj):
         if isinstance(obj, (int, float, str, bool, type(None))):
@@ -205,21 +281,46 @@ class QMTServer:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"连接测试失败: {str(e)}")
 
-        @app.get('/api/signals')
-        async def get_signals(
+        @app.get('/api/orders')
+        async def get_orders(
+            status: Optional[str] = None,
+            strategy_name: Optional[str] = None,
             start_date: Optional[str] = None,
             end_date: Optional[str] = None,
-            strategy_name: Optional[str] = None,
             token: str = Depends(_verify_token),
         ):
-            signals = list(_current_server.signal_log)
+            orders = list(_current_server.order_tracker._orders.values())
+            result = []
+            for o in orders:
+                result.append({
+                    "order_id": o.order_id,
+                    "stock_code": o.stock_code,
+                    "jq_code": o.jq_code,
+                    "direction": o.direction,
+                    "quantity": o.quantity,
+                    "filled_quantity": o.filled_quantity,
+                    "filled_price": o.filled_price,
+                    "price": o.price,
+                    "status": o.status,
+                    "order_type": o.order_type,
+                    "strategy_id": o.strategy_id,
+                    "strategy_name": o.strategy_name,
+                    "placed_at": o.placed_at.isoformat() if o.placed_at else None,
+                    "resolved_at": o.resolved_at.isoformat() if o.resolved_at else None,
+                    "error_msg": o.error_msg,
+                })
+
+            if status:
+                result = [o for o in result if o["status"] == status]
             if strategy_name:
-                signals = [s for s in signals if s.get('strategy_name') == strategy_name]
+                result = [o for o in result if o["strategy_name"] == strategy_name]
             if start_date:
-                signals = [s for s in signals if s.get('timestamp', '')[:10] >= start_date]
+                result = [o for o in result if (o.get("placed_at") or "")[:10] >= start_date]
             if end_date:
-                signals = [s for s in signals if s.get('timestamp', '')[:10] <= end_date]
-            return {'success': True, 'data': signals}
+                result = [o for o in result if (o.get("placed_at") or "")[:10] <= end_date]
+
+            result.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
+            return {'success': True, 'data': result}
 
         @app.get('/api/account-asset')
         async def account_asset(token: str = Depends(_verify_token)):
@@ -256,54 +357,6 @@ class QMTServer:
             code = request.get('code', '')
             return {'success': True, 'data': {'result': qmt_to_jq(code)}}
 
-        @app.post('/api/receive-signal')
-        async def receive_signal_endpoint(request: dict, x_token: str = Header(...)):
-            from backend.signal_handler import TradeSignal, SignalReceiver
-
-            # 验证 token（同时支持主 token 和策略 token）
-            if x_token != _current_server.token:
-                strategy = _current_server.strategy_manager.find_by_token(x_token)
-                if not strategy or not strategy.enabled:
-                    raise HTTPException(status_code=401, detail="无效的Token")
-                request['strategy_name'] = strategy.name
-                request['_strategy_id'] = strategy.id
-
-            if _current_server._signal_receiver is None:
-                _current_server._signal_receiver = SignalReceiver(
-                    trader=_current_server.trader,
-                    account=_current_server.account,
-                    callback=_current_server.callback,
-                    signal_log=_current_server.signal_log,
-                    strategy_manager=_current_server.strategy_manager,
-                )
-
-            signal = TradeSignal(**{k: v for k, v in request.items() if not k.startswith('_')})
-            strategy_id = request.get('_strategy_id')
-            try:
-                result = await _current_server._signal_receiver.receive_signal(signal)
-
-                # 信号执行成功后更新策略持仓和记录
-                if strategy_id:
-                    price = signal.price if signal.price is not None and signal.price > 0 else 0
-                    _current_server.strategy_manager.update_position(
-                        strategy_id, signal.stock_code,
-                        signal.direction, signal.quantity, price
-                    )
-                    _current_server.strategy_manager.increment_signal_count(strategy_id)
-                    _current_server.strategy_manager.add_trading_record(strategy_id, {
-                        "timestamp": signal.timestamp or "",
-                        "stock_code": signal.stock_code,
-                        "direction": signal.direction,
-                        "quantity": signal.quantity,
-                        "price": price,
-                        "order_id": str(result.get("data", {}).get("order_id", "")),
-                        "signal_id": signal.signal_id,
-                    })
-
-                return result
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
         # --- 聚宽风格下单 API ---
 
         def _resolve_strategy(request: dict, x_token: str):
@@ -320,7 +373,6 @@ class QMTServer:
                 _current_server._jukuan_handler = JukuanOrderHandler(
                     trader=_current_server.trader,
                     account=_current_server.account,
-                    signal_log=_current_server.signal_log,
                     strategy_manager=_current_server.strategy_manager,
                 )
             return _current_server._jukuan_handler
@@ -343,6 +395,13 @@ class QMTServer:
             else:
                 result = method(security, value, side=side)
 
+            # 注册订单到跟踪器，并对策略持仓进行乐观更新
+            if result.get('order_id'):
+                result['strategy_name'] = strategy_name or method_name
+                _current_server._track_and_apply_order(
+                    result, strategy_id, strategy_name or method_name
+                )
+
             # 策略记账
             if strategy_id and result.get('order_id'):
                 _current_server.strategy_manager.increment_signal_count(strategy_id)
@@ -351,7 +410,7 @@ class QMTServer:
                     'stock_code': security,
                     'direction': result.get('direction', 'none'),
                     'quantity': result.get('quantity', 0),
-                    'price': 0,
+                    'price': result.get('price', 0),
                     'order_id': str(result.get('order_id', '')),
                     'method': method_name,
                 })
@@ -457,14 +516,14 @@ class QMTServer:
             raise
         self.setup_routes(target_app=target_app)
         self.running = True
-
-    def run(self):
-        self.init_and_setup()
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        self._poll_task = asyncio.create_task(self._poll_orders_loop())
 
     def stop(self):
         global _current_server
         self.running = False
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
         _current_server = None
 
 

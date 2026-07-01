@@ -53,12 +53,6 @@ class APIClient {
         });
     }
 
-    async getSignals(token) {
-        return this.request('api/signals', {
-            headers: { 'X-Token': token },
-        });
-    }
-
     async getAccountAsset(token) {
         return this.request('api/account-asset', {
             headers: { 'X-Token': token },
@@ -143,15 +137,14 @@ class APIClient {
         });
     }
 
-    // --- 筛选信号 ---
-
-    async getFilteredSignals(token, filters = {}) {
+    async getOrders(token, filters = {}) {
         const params = new URLSearchParams();
+        if (filters.status) params.append('status', filters.status);
+        if (filters.strategy_name) params.append('strategy_name', filters.strategy_name);
         if (filters.start_date) params.append('start_date', filters.start_date);
         if (filters.end_date) params.append('end_date', filters.end_date);
-        if (filters.strategy_name) params.append('strategy_name', filters.strategy_name);
         const query = params.toString();
-        return this.request(`api/signals${query ? '?' + query : ''}`, {
+        return this.request(`api/orders${query ? '?' + query : ''}`, {
             headers: { 'X-Token': token },
         });
     }

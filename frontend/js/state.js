@@ -4,7 +4,7 @@ export const AppState = {
     serverRunning: false,
     token: null,
     serverInfo: null,
-    signals: [],
+    orders: [],
     theme: 'light',
     pollingInterval: null,
 };

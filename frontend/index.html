@@ -193,15 +193,15 @@
       </div>
     </section>
 
-    <!-- 信号监控 -->
+    <!-- 订单监控 -->
     <section id="monitor" class="section hidden">
       <div class="section-header">
-        <span class="section-label">信号监控</span>
-        <h2 class="section-title">实时信号</h2>
-        <p class="section-desc">监控远程策略服务器发送的交易信号和 miniQMT 回调事件。</p>
+        <span class="section-label">订单监控</span>
+        <h2 class="section-title">实时订单</h2>
+        <p class="section-desc">监控所有委托订单的状态变化和成交情况。</p>
       </div>
       <div class="card">
-        <div class="signal-filter-bar" id="signal-filter-bar">
+        <div class="signal-filter-bar" id="order-filter-bar">
           <div class="filter-group">
             <label class="filter-label">开始日期</label>
             <input type="date" class="form-input filter-date" id="filter-start-date">
@@ -220,10 +220,10 @@
           <button class="btn btn-secondary btn-filter" id="btn-reset-filters">重置</button>
         </div>
         <div class="btn-group" style="margin-bottom: var(--spacing-base);">
-          <button class="btn btn-secondary" id="btn-clear-signals">清空记录</button>
+          <button class="btn btn-secondary" id="btn-clear-orders">清空记录</button>
         </div>
-        <div class="signal-list" id="signal-list">
-          <div class="signal-empty">暂无信号记录，启动服务器并测试连接后将在此显示。</div>
+        <div class="signal-list" id="order-list">
+          <div class="signal-empty">暂无订单记录，下单后将在此显示。</div>
         </div>
       </div>
     </section>

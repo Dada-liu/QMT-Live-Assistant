@@ -3,10 +3,6 @@
 提供聚宽 API 风格的下单方法（order/order_target/order_value/order_target_value），
 支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
 """
-from collections import deque
-from datetime import datetime
-from typing import Optional
-
 from backend.qmt_client import jq_to_qmt, qmt_to_jq
 from backend.utils import fetch_latest_prices_from_xtdata
 from backend.logger import logger
@@ -90,19 +86,16 @@ def _get_volume(trader, account, jq_code: str) -> int:
 class JukuanOrderHandler:
     """处理聚宽策略信号并转换为QMT实际委托的下单处理器。"""
 
-    def __init__(self, trader, account, signal_log: deque = None,
-                 strategy_manager=None):
+    def __init__(self, trader, account, strategy_manager=None):
         """初始化下单处理器。
 
         Args:
             trader: QMT交易对象，用于调用下单与持仓查询接口。
             account: 资金账号。
-            signal_log: 可选，信号日志队列，用于记录下单与调仓信号。
             strategy_manager: 可选，策略管理器。
         """
         self.trader = trader
         self.account = account
-        self.signal_log = signal_log
         self.strategy_manager = strategy_manager
 
     def _submit_order(self, jq_code: str, order_type: int, quantity: int,
@@ -138,33 +131,6 @@ class JukuanOrderHandler:
         )
         return order_id
 
-    def _log_signal(self, jq_code: str, direction: str, quantity: int,
-                    order_id: Optional[int], status: str, message: str,
-                    strategy_name: str = 'jukuan_order'):
-        """将下单或调仓信号记录到日志队列。
-
-        Args:
-            jq_code: 聚宽格式的证券代码。
-            direction: 方向（buy/sell/none）。
-            quantity: 委托数量。
-            order_id: 订单编号，可能为None。
-            status: 信号状态（submitted/cancelled/skipped/failed）。
-            message: 描述信息。
-            strategy_name: 策略名称。
-        """
-        if self.signal_log is not None:
-            self.signal_log.append({
-                'type': 'jukuan_order',
-                'stock_code': jq_code,
-                'direction': direction,
-                'quantity': quantity,
-                'order_id': str(order_id) if order_id else None,
-                'status': status,
-                'timestamp': datetime.now().isoformat(),
-                'strategy_name': strategy_name,
-                'message': message,
-            })
-
     # ---- (1) jukuan_order ----
 
     def jukuan_order(self, security: str, amount: int,
@@ -188,8 +154,15 @@ class JukuanOrderHandler:
         if quantity == 0:
             msg = f"下单数量不足一手，调整为0股，订单取消"
             logger.warning(f"{YELLOW}【聚宽下单】{RESET} {security} {msg}")
-            self._log_signal(security, 'none', 0, None, 'cancelled', msg)
-            return {'order_id': None, 'direction': 'none', 'quantity': 0, 'message': msg}
+            return {
+                'order_id': None,
+                'jq_code': security,
+                'direction': 'none',
+                'quantity': 0,
+                'price': 0.0,
+                'order_type': None,
+                'message': msg,
+            }
 
         if is_future and side == 'short':
             order_type = STOCK_SELL if amount > 0 else STOCK_BUY
@@ -201,13 +174,17 @@ class JukuanOrderHandler:
         try:
             order_id = self._submit_order(security, order_type, quantity)
             msg = f"聚宽下单: {direction} {security} {quantity}股"
-            self._log_signal(security, direction, quantity, order_id,
-                             'submitted', msg)
-            return {'order_id': order_id, 'direction': direction, 'quantity': quantity, 'message': msg}
+            return {
+                'order_id': order_id,
+                'jq_code': security,
+                'direction': direction,
+                'quantity': quantity,
+                'price': 0.0,
+                'order_type': order_type,
+                'message': msg,
+            }
         except Exception as e:
             msg = f"下单失败: {str(e)}"
-            self._log_signal(security, direction, quantity, None,
-                             'failed', msg)
             raise
 
     # ---- (2) jukuan_order_target ----
@@ -232,8 +209,15 @@ class JukuanOrderHandler:
         if delta == 0:
             msg = f"目标数量已满足 (当前:{current_qty}, 目标:{amount})，不再调整"
             logger.info(f"{GREEN}【聚宽调仓】{RESET} {security} {msg}")
-            self._log_signal(security, 'none', 0, None, 'skipped', msg)
-            return {'order_id': None, 'direction': 'none', 'quantity': 0, 'message': msg}
+            return {
+                'order_id': None,
+                'jq_code': security,
+                'direction': 'none',
+                'quantity': 0,
+                'price': 0.0,
+                'order_type': None,
+                'message': msg,
+            }
 
         is_future = _is_future(security)
         quantity = _round_down_to_lot(abs(delta), security)
@@ -241,8 +225,15 @@ class JukuanOrderHandler:
         if quantity == 0:
             msg = f"调整数量不足一手 (delta:{delta})，订单取消"
             logger.warning(f"{YELLOW}【聚宽调仓】{RESET} {security} {msg}")
-            self._log_signal(security, 'none', 0, None, 'cancelled', msg)
-            return {'order_id': None, 'direction': 'none', 'quantity': 0, 'message': msg}
+            return {
+                'order_id': None,
+                'jq_code': security,
+                'direction': 'none',
+                'quantity': 0,
+                'price': 0.0,
+                'order_type': None,
+                'message': msg,
+            }
 
         if is_future and side == 'short':
             order_type = STOCK_SELL if delta > 0 else STOCK_BUY
@@ -254,13 +245,17 @@ class JukuanOrderHandler:
         try:
             order_id = self._submit_order(security, order_type, quantity)
             msg = f"聚宽调仓: {direction} {security} {quantity}股 (当前:{current_qty}→目标:{amount})"
-            self._log_signal(security, direction, quantity, order_id,
-                             'submitted', msg)
-            return {'order_id': order_id, 'direction': direction, 'quantity': quantity, 'message': msg}
+            return {
+                'order_id': order_id,
+                'jq_code': security,
+                'direction': direction,
+                'quantity': quantity,
+                'price': 0.0,
+                'order_type': order_type,
+                'message': msg,
+            }
         except Exception as e:
             msg = f"调仓失败: {str(e)}"
-            self._log_signal(security, direction, quantity, None,
-                             'failed', msg)
             raise
 
     # ---- (3) jukuan_order_value ----
@@ -286,8 +281,15 @@ class JukuanOrderHandler:
         if quantity == 0:
             msg = f"下单金额不足以购买一手 (价值:{value:.2f}, 价格:{price:.2f})，订单取消"
             logger.warning(f"{YELLOW}【聚宽价值下单】{RESET} {security} {msg}")
-            self._log_signal(security, 'none', 0, None, 'cancelled', msg)
-            return {'order_id': None, 'direction': 'none', 'quantity': 0, 'message': msg}
+            return {
+                'order_id': None,
+                'jq_code': security,
+                'direction': 'none',
+                'quantity': 0,
+                'price': price,
+                'order_type': None,
+                'message': msg,
+            }
 
         is_future = _is_future(security)
         if is_future and side == 'short':
@@ -301,13 +303,17 @@ class JukuanOrderHandler:
             order_id = self._submit_order(security, order_type, quantity)
             msg = (f"聚宽价值下单: {direction} {security} {quantity}股 "
                    f"(价值:{value:.2f}, 价格:{price:.2f})")
-            self._log_signal(security, direction, quantity, order_id,
-                             'submitted', msg)
-            return {'order_id': order_id, 'direction': direction, 'quantity': quantity, 'message': msg}
+            return {
+                'order_id': order_id,
+                'jq_code': security,
+                'direction': direction,
+                'quantity': quantity,
+                'price': price,
+                'order_type': order_type,
+                'message': msg,
+            }
         except Exception as e:
             msg = f"价值下单失败: {str(e)}"
-            self._log_signal(security, direction, quantity, None,
-                             'failed', msg)
             raise
 
     # ---- (4) jukuan_order_target_value ----
@@ -335,7 +341,14 @@ class JukuanOrderHandler:
             msg = (f"目标价值已满足 (当前价值:{current_value:.2f}, 目标:{value:.2f})，"
                    f"不再调整")
             logger.info(f"{GREEN}【聚宽价值调仓】{RESET} {security} {msg}")
-            self._log_signal(security, 'none', 0, None, 'skipped', msg)
-            return {'order_id': None, 'direction': 'none', 'quantity': 0, 'message': msg}
+            return {
+                'order_id': None,
+                'jq_code': security,
+                'direction': 'none',
+                'quantity': 0,
+                'price': price,
+                'order_type': None,
+                'message': msg,
+            }
 
         return self.jukuan_order_value(security, delta_value, side=side)

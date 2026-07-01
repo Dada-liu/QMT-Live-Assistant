@@ -4,7 +4,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from unittest.mock import MagicMock, patch
-from collections import deque
 from backend.jukuan_orders import (
     JukuanOrderHandler, _is_future, _lot_size, _round_down_to_lot,
 )
@@ -42,8 +41,7 @@ class TestJukuanOrder:
         trader = MagicMock()
         trader.order_stock.return_value = 200001
         account = MagicMock()
-        signal_log = deque(maxlen=200)
-        return JukuanOrderHandler(trader=trader, account=account, signal_log=signal_log)
+        return JukuanOrderHandler(trader=trader, account=account)
 
     def test_buy(self, handler):
         result = handler.jukuan_order("000001.XSHE", 100)
@@ -75,19 +73,10 @@ class TestJukuanOrder:
         result = handler.jukuan_order("RB8888.XSGE", -3, side="short")
         assert result["direction"] == "buy"
 
-    def test_signal_logged(self, handler):
-        handler.jukuan_order("000001.XSHE", 100)
-        assert len(handler.signal_log) == 1
-        entry = handler.signal_log[-1]
-        assert entry["type"] == "jukuan_order"
-        assert entry["stock_code"] == "000001.XSHE"
-        assert entry["status"] == "submitted"
-
     def test_order_error(self, handler):
         handler.trader.order_stock.side_effect = Exception("下单失败")
         with pytest.raises(Exception, match="下单失败"):
             handler.jukuan_order("000001.XSHE", 100)
-        assert handler.signal_log[-1]["status"] == "failed"
 
 
 class TestJukuanOrderTarget:
@@ -104,8 +93,7 @@ class TestJukuanOrderTarget:
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()
-        signal_log = deque(maxlen=200)
-        return JukuanOrderHandler(trader=trader, account=account, signal_log=signal_log)
+        return JukuanOrderHandler(trader=trader, account=account)
 
     def test_already_at_target(self, handler):
         result = handler.jukuan_order_target("000001.XSHE", 100)
@@ -146,8 +134,7 @@ class TestJukuanOrderValue:
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()
-        signal_log = deque(maxlen=200)
-        return JukuanOrderHandler(trader=trader, account=account, signal_log=signal_log)
+        return JukuanOrderHandler(trader=trader, account=account)
 
     def test_buy_by_value(self, handler):
         result = handler.jukuan_order_value("000001.XSHE", 10000)
@@ -198,8 +185,7 @@ class TestJukuanOrderTargetValue:
         trader.query_stock_positions.return_value = [mock_pos]
 
         account = MagicMock()
-        signal_log = deque(maxlen=200)
-        return JukuanOrderHandler(trader=trader, account=account, signal_log=signal_log)
+        return JukuanOrderHandler(trader=trader, account=account)
 
     def test_already_at_target_value(self, handler):
         result = handler.jukuan_order_target_value("000001.XSHE", 1000)

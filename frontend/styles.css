@@ -910,6 +910,12 @@ a:hover { text-decoration: underline; }
   grid-template-columns: 1.4fr 1fr 1.1fr 1fr 1.1fr 1.1fr;
 }
 
+.position-empty {
+  padding: var(--spacing-xxl);
+  text-align: center;
+  color: var(--color-muted);
+}
+
 .position-list-header {
   display: flex;
   align-items: center;

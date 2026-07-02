@@ -252,12 +252,13 @@ export const UI = {
         if (!container || !list || !title) return;
 
         const positions = strategy.positions || [];
+        title.textContent = `${strategy.name} - 持仓明细`;
+
         if (positions.length === 0) {
-            container.classList.add('hidden');
+            list.innerHTML = '<div class="position-empty">暂无持仓</div>';
+            container.classList.remove('hidden');
             return;
         }
-
-        title.textContent = `${strategy.name} - 持仓明细`;
 
         const norm = positions.map(p => {
             const qty = p.quantity || 0;
@@ -490,7 +491,7 @@ export const UI = {
         // 保持选中策略的持仓列表
         if (selectedId) {
             const strategy = strategies.find(s => s.id === selectedId);
-            if (strategy && strategy.positions && strategy.positions.length > 0) {
+            if (strategy) {
                 this._renderStrategyPositionList(strategy);
             } else {
                 this._hideStrategyPositionList();

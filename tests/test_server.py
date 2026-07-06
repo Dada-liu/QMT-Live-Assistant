@@ -465,7 +465,9 @@ class TestOrderTrackingIntegration:
         )
         assert response.status_code == 200
         s = server.strategy_manager.get(strategy["id"])
-        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["quantity"] == 0
+        assert s.positions[0]["available_quantity"] == 0
+        assert s.positions[0]["frozen_quantity"] == 100
         assert s.positions[0]["stock_code"] == "000001.SZ"
 
     def test_strategy_jukuan_order_resolves_on_poll(self, client, server):

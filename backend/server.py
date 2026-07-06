@@ -16,6 +16,13 @@ from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtd
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
+from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
+from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
+from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
+from backend.db.models.signal_log import SignalLogModel
+from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
+from backend.db.models.account import AccountModel
+from config.settings import settings
 
 _current_server = None
 
@@ -41,7 +48,12 @@ async def _verify_any_token(x_token: str = Header(...)):
 
 class QMTServer:
     def __init__(self, account_id: str, mini_qmt_path: str,
-                 host: str = "0.0.0.0", port: int = 8000, token: str = None):
+                 host: str = "0.0.0.0", port: int = 8000, token: str = None,
+                 strategy_repository: Optional[StrategyRepository] = None,
+                 order_repository: Optional[OrderRepository] = None,
+                 signal_log_repository: Optional[SignalLogRepository] = None,
+                 account_repository: Optional[AccountRepository] = None,
+                 db_session=None):
         global _current_server
         _current_server = self
         self.account_id = account_id
@@ -53,11 +65,14 @@ class QMTServer:
         self.account = None
         self.callback = None
         self.token = token if token else self.generate_token()
-        self.order_tracker = OrderTracker()
+        self._db_session = db_session
+        self._account_repository = account_repository
+        self._signal_log_repository = signal_log_repository
+        self.order_tracker = OrderTracker(repository=order_repository)
         self._poll_task: Optional[asyncio.Task] = None
         self._jukuan_handler = None
         self.running = False
-        self.strategy_manager = StrategyManager()
+        self.strategy_manager = StrategyManager(repository=strategy_repository)
         self._register_order_state_callback()
         print(f"\n授权Token: {self.token}\n")
 
@@ -289,7 +304,7 @@ class QMTServer:
             end_date: Optional[str] = None,
             token: str = Depends(_verify_token),
         ):
-            orders = list(_current_server.order_tracker._orders.values())
+            orders = _current_server.order_tracker.list_all()
             result = []
             for o in orders:
                 result.append({
@@ -385,41 +400,64 @@ class QMTServer:
             if not security:
                 raise HTTPException(status_code=400, detail="请提供 security 参数")
 
-            qmt_code = normalize_to_qmt(security)
-
-            amount = request.get('amount', 0)
-            value = request.get('value', 0)
-            side = request.get('side', 'long')
-
-            method = getattr(handler, method_name)
-            if method_name in ('jukuan_order', 'jukuan_order_target'):
-                result = method(qmt_code, amount, side=side)
-            else:
-                result = method(qmt_code, value, side=side)
-
-            # 保留原始聚宽代码便于返回和日志
-            result['jq_code'] = security
-
-            # 注册订单到跟踪器，并对策略持仓进行乐观更新
-            if result.get('order_id'):
-                result['strategy_name'] = strategy_name or method_name
-                _current_server._track_and_apply_order(
-                    result, strategy_id, strategy_name or method_name
+            signal_log = None
+            if _current_server._signal_log_repository is not None:
+                signal_log = _current_server._signal_log_repository.add(
+                    SignalLogModel(
+                        strategy_id=strategy_id,
+                        endpoint=f"/api/{method_name}",
+                        source_platform=request.get("source_platform"),
+                        source_ip=None,
+                        payload=request,
+                    )
                 )
 
-            # 策略记账
-            if strategy_id and result.get('order_id'):
-                _current_server.strategy_manager.add_trading_record(strategy_id, {
-                    'timestamp': datetime.now().isoformat(),
-                    'stock_code': qmt_code,
-                    'direction': result.get('direction', 'none'),
-                    'quantity': result.get('quantity', 0),
-                    'price': result.get('price', 0),
-                    'order_id': str(result.get('order_id', '')),
-                    'method': method_name,
-                })
+            try:
+                qmt_code = normalize_to_qmt(security)
 
-            return {'success': True, 'data': result}
+                amount = request.get('amount', 0)
+                value = request.get('value', 0)
+                side = request.get('side', 'long')
+
+                method = getattr(handler, method_name)
+                if method_name in ('jukuan_order', 'jukuan_order_target'):
+                    result = method(qmt_code, amount, side=side)
+                else:
+                    result = method(qmt_code, value, side=side)
+
+                # 保留原始聚宽代码便于返回和日志
+                result['jq_code'] = security
+
+                # 注册订单到跟踪器，并对策略持仓进行乐观更新
+                if result.get('order_id'):
+                    result['strategy_name'] = strategy_name or method_name
+                    _current_server._track_and_apply_order(
+                        result, strategy_id, strategy_name or method_name
+                    )
+
+                # 策略记账
+                if strategy_id and result.get('order_id'):
+                    _current_server.strategy_manager.add_trading_record(strategy_id, {
+                        'timestamp': datetime.now().isoformat(),
+                        'stock_code': qmt_code,
+                        'direction': result.get('direction', 'none'),
+                        'quantity': result.get('quantity', 0),
+                        'price': result.get('price', 0),
+                        'order_id': str(result.get('order_id', '')),
+                        'method': method_name,
+                    })
+
+                if signal_log is not None and _current_server._signal_log_repository is not None:
+                    order_id = str(result.get('order_id', '')) if result.get('order_id') else None
+                    _current_server._signal_log_repository.update_processed_order(
+                        signal_log.id, order_id
+                    )
+
+                return {'success': True, 'data': result}
+            except Exception as e:
+                if signal_log is not None and _current_server._signal_log_repository is not None:
+                    _current_server._signal_log_repository.update_error(signal_log.id, str(e))
+                raise
 
         @app.post('/api/jukuan_order')
         async def jukuan_order_endpoint(request: dict, x_token: str = Header(...)):
@@ -544,13 +582,31 @@ class QMTServer:
 
     def init_and_setup(self, target_app=None):
         try:
+            self._ensure_account_record()
             self.init_trader()
         except Exception:
             self.setup_routes(target_app=target_app)
             raise
+        self.order_tracker._load_orders()
         self.setup_routes(target_app=target_app)
         self.running = True
         self._poll_task = asyncio.create_task(self._poll_orders_loop())
+
+    def _ensure_account_record(self):
+        """如启用数据库，同步当前账户信息到 accounts 表。"""
+        if self._db_session is None or self._account_repository is None:
+            return
+        account = self._account_repository.get_by_account_id(self.account_id)
+        if account is not None:
+            account.qmt_path = self.mini_qmt_path
+            self._account_repository.update(account)
+        else:
+            account = AccountModel(
+                name=self.account_id,
+                account_id=self.account_id,
+                qmt_path=self.mini_qmt_path,
+            )
+            self._account_repository.add(account)
 
     def stop(self):
         global _current_server
@@ -558,6 +614,9 @@ class QMTServer:
         if self._poll_task is not None:
             self._poll_task.cancel()
             self._poll_task = None
+        if self._db_session is not None:
+            self._db_session.close()
+            self._db_session = None
         _current_server = None
 
 

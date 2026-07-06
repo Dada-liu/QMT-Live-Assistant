@@ -1,10 +1,9 @@
 """订单生命周期跟踪器。
 
-维护内存中的订单状态机，接收 xtquant 回调与主动查询结果，
+维护订单状态机，接收 xtquant 回调与主动查询结果，
 在订单到达终端状态（已成交/已失败）时通知订阅者进行策略持仓修正。
 """
-from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.qmt_xtconstant import (
@@ -16,43 +15,19 @@ from backend.qmt_xtconstant import (
 )
 from backend.logger import logger
 from backend.constants import GREEN, YELLOW, BLUE, RESET
-
-
-class OrderState:
-    PENDING = "pending"
-    PARTIAL = "partial"
-    FILLED = "filled"
-    FAILED = "failed"
-
-
-@dataclass
-class TrackedOrder:
-    order_id: str
-    stock_code: str          # QMT 代码
-    jq_code: str             # 聚宽代码
-    direction: str           # "buy" 或 "sell"
-    quantity: int            # 委托数量
-    order_type: int          # xtquant 委托类型（如 STOCK_BUY=23）
-    strategy_id: Optional[str]
-    strategy_name: str
-    price: float             # 委托价格，市价单为 0
-    status: str = OrderState.PENDING
-    xtquant_status: Optional[int] = None
-    filled_quantity: int = 0
-    filled_price: float = 0.0
-    placed_at: datetime = field(default_factory=datetime.now)
-    resolved_at: Optional[datetime] = None
-    error_msg: Optional[str] = None
-    optimistic_position_applied: bool = False
+from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
+from backend.models.order import TrackedOrder, OrderState
 
 
 class OrderTracker:
     """跟踪订单从下单到终态的完整生命周期。"""
 
-    def __init__(self):
+    def __init__(self, repository: Optional[OrderRepository] = None):
+        self._repo = repository or InMemoryOrderRepository()
         self._orders: Dict[str, TrackedOrder] = {}
         self._state_change_callbacks: List[Callable[[TrackedOrder], None]] = []
         self.on_state_change(self._log_state_change)
+        self._load_orders()
 
     def on_state_change(self, callback: Callable[[TrackedOrder], None]):
         """注册订单状态到达终态时的回调。"""
@@ -104,6 +79,8 @@ class OrderTracker:
             optimistic_position_applied=optimistic_position_applied,
         )
         self._orders[order.order_id] = order
+        self._repo.save(order)
+        self._record_event(order, "placed", None, "manual")
         logger.info(
             f"{BLUE}【新订单】{RESET} "
             f"订单ID:{order.order_id} 股票:{jq_code or stock_code} "
@@ -124,16 +101,20 @@ class OrderTracker:
         if not order:
             return None
 
+        old_status = order.status
         order.xtquant_status = xtquant_status
         new_status = self._normalize_status(xtquant_status)
 
         if traded_volume > 0:
-            self._accumulate_fill(order, traded_volume, traded_price)
+            order.filled_quantity, order.filled_price = self._compute_fill(
+                order, traded_volume, traded_price
+            )
 
         if new_status == OrderState.FILLED:
-            self._resolve(order, OrderState.FILLED)
+            self._resolve(order, OrderState.FILLED, old_status, "callback")
         elif new_status == OrderState.PARTIAL:
             order.status = OrderState.PARTIAL
+            self._persist(order, old_status, "callback")
             logger.info(
                 f"{BLUE}【部分成交】{RESET} "
                 f"订单ID:{order.order_id} 股票:{order.jq_code or order.stock_code} "
@@ -141,11 +122,12 @@ class OrderTracker:
                 f"成交均价:{order.filled_price:.2f}"
             )
         elif new_status == OrderState.FAILED:
-            # 已撤单但有成交时，按实际成交部分结算；无成交则视为失败
             if order.filled_quantity > 0:
-                self._resolve(order, OrderState.FILLED)
+                self._resolve(order, OrderState.FILLED, old_status, "callback")
             else:
-                self._resolve(order, OrderState.FAILED)
+                self._resolve(order, OrderState.FAILED, old_status, "callback")
+        else:
+            self._persist(order, old_status, "callback")
 
         return order
 
@@ -160,12 +142,16 @@ class OrderTracker:
         if not order:
             return None
 
-        self._accumulate_fill(order, traded_volume, traded_price)
+        old_status = order.status
+        order.filled_quantity, order.filled_price = self._compute_fill(
+            order, traded_volume, traded_price
+        )
 
         if order.filled_quantity >= order.quantity:
-            self._resolve(order, OrderState.FILLED)
+            self._resolve(order, OrderState.FILLED, old_status, "trade")
         else:
             order.status = OrderState.PARTIAL
+            self._persist(order, old_status, "trade")
             logger.info(
                 f"{BLUE}【部分成交】{RESET} "
                 f"订单ID:{order.order_id} 股票:{order.jq_code or order.stock_code} "
@@ -185,8 +171,9 @@ class OrderTracker:
         if not order:
             return None
 
+        old_status = order.status
         order.error_msg = error_msg
-        self._resolve(order, OrderState.FAILED)
+        self._resolve(order, OrderState.FAILED, old_status, "error")
         return order
 
     def _normalize_status(self, xt_status: Optional[int]) -> str:
@@ -198,21 +185,23 @@ class OrderTracker:
             return OrderState.PARTIAL
         return OrderState.PENDING
 
-    def _accumulate_fill(self, order: TrackedOrder, volume: int, price: float):
-        """累积成交数量并按金额加权计算成交均价。"""
+    def _compute_fill(self, order: TrackedOrder, volume: int, price: float) -> tuple:
+        """计算累计成交量和加权成交均价。"""
         if volume <= 0:
-            return
+            return order.filled_quantity, order.filled_price
         total_amount = order.filled_quantity * order.filled_price + volume * price
-        order.filled_quantity += volume
-        order.filled_price = round(total_amount / order.filled_quantity, 4)
+        new_qty = order.filled_quantity + volume
+        new_price = round(total_amount / new_qty, 4) if new_qty > 0 else 0.0
+        return new_qty, new_price
 
-    def _resolve(self, order: TrackedOrder, status: str):
+    def _resolve(self, order: TrackedOrder, status: str, from_status: str, source: str) -> None:
         """将订单置为终态并触发回调。"""
         if order.status in (OrderState.FILLED, OrderState.FAILED):
             return
 
         order.status = status
-        order.resolved_at = datetime.now()
+        order.resolved_at = datetime.now(timezone.utc)
+        self._persist(order, from_status, source)
 
         for callback in self._state_change_callbacks:
             try:
@@ -220,6 +209,38 @@ class OrderTracker:
             except Exception:
                 # 回调失败不应影响状态机本身
                 pass
+
+    def _persist(self, order: TrackedOrder, from_status: Optional[str], source: str) -> None:
+        """持久化订单并记录事件。"""
+        self._repo.save(order)
+        self._record_event(order, order.status, from_status, source)
+
+    def _record_event(
+        self,
+        order: TrackedOrder,
+        event_type: str,
+        from_status: Optional[str],
+        source: str,
+    ) -> None:
+        """记录订单事件。"""
+        self._repo.record_event(
+            order_id=order.order_id,
+            event_type=event_type,
+            from_status=from_status,
+            to_status=order.status,
+            payload={
+                "order_id": order.order_id,
+                "stock_code": order.stock_code,
+                "jq_code": order.jq_code,
+                "direction": order.direction,
+                "quantity": order.quantity,
+                "filled_quantity": order.filled_quantity,
+                "filled_price": order.filled_price,
+                "status": order.status,
+                "xtquant_status": order.xtquant_status,
+            },
+            source=source,
+        )
 
     def get_order(self, order_id: Any) -> Optional[TrackedOrder]:
         return self._orders.get(str(order_id))
@@ -233,6 +254,15 @@ class OrderTracker:
     def get_orders_by_strategy(self, strategy_id: Any) -> List[TrackedOrder]:
         target = str(strategy_id)
         return [o for o in self._orders.values() if o.strategy_id == target]
+
+    def list_all(self) -> List[TrackedOrder]:
+        """返回内存中所有订单（启动时已从历史记录加载）。"""
+        return list(self._orders.values())
+
+    def _load_orders(self) -> None:
+        """启动时从 Repository 加载所有历史订单。"""
+        for order in self._repo.list_all():
+            self._orders[order.order_id] = order
 
     async def poll_and_reconcile(
         self,

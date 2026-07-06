@@ -14,6 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.server import QMTServer
+from backend.db.base import SessionLocal
+from backend.db.repositories import (
+    SQLAlchemyStrategyRepository,
+    SQLAlchemyOrderRepository,
+    SQLAlchemyAccountRepository,
+    SQLAlchemySignalLogRepository,
+)
 from config.settings import settings
 
 app = FastAPI(title="QMT Live Assistant")
@@ -25,6 +32,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _create_repositories(session):
+    """根据配置创建 Repository。若 PERSISTENCE_MODE=memory 返回 None，使用内存实现。"""
+    if settings.PERSISTENCE_MODE == "memory":
+        return None, None, None, None, None
+    return (
+        session,
+        SQLAlchemyStrategyRepository(session),
+        SQLAlchemyOrderRepository(session),
+        SQLAlchemyAccountRepository(session),
+        SQLAlchemySignalLogRepository(session),
+    )
 
 
 def _get_frontend_dir() -> str:
@@ -123,11 +143,25 @@ async def start_server(data: dict):
     if not qmt_path:
         raise HTTPException(status_code=400, detail="请输入QMT路径")
 
+    db_session = SessionLocal() if settings.PERSISTENCE_MODE != "memory" else None
+    (
+        _,
+        strategy_repository,
+        order_repository,
+        account_repository,
+        signal_log_repository,
+    ) = _create_repositories(db_session)
+
     server = QMTServer(
         account_id=account_id,
         mini_qmt_path=qmt_path,
         host=host,
         port=port,
+        strategy_repository=strategy_repository,
+        order_repository=order_repository,
+        account_repository=account_repository,
+        signal_log_repository=signal_log_repository,
+        db_session=db_session,
     )
 
     try:
@@ -252,12 +286,25 @@ if __name__ == "__main__":
             args.window = True
 
     if args.account and args.qmt_path:
+        db_session = SessionLocal() if settings.PERSISTENCE_MODE != "memory" else None
+        (
+            _,
+            strategy_repository,
+            order_repository,
+            account_repository,
+            signal_log_repository,
+        ) = _create_repositories(db_session)
         server = QMTServer(
             account_id=args.account,
             mini_qmt_path=args.qmt_path,
             host=args.host,
             port=args.port,
             token=args.token,
+            strategy_repository=strategy_repository,
+            order_repository=order_repository,
+            account_repository=account_repository,
+            signal_log_repository=signal_log_repository,
+            db_session=db_session,
         )
         try:
             server.init_and_setup(target_app=app)

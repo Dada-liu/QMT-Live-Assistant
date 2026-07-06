@@ -3,6 +3,8 @@
 提供 MockTrader、MockData 等类，用于在 macOS/Linux 环境下进行开发测试，
 模拟 xtquant 的交易接口与行情数据接口。
 """
+import time
+
 class MockTraderCallback:
     def on_disconnected(self): pass
     def on_stock_order(self, order): pass

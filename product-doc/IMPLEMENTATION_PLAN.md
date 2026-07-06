@@ -401,13 +401,14 @@ graph LR
 - stock_code, stock_name, quantity（> 0）, current_price（> 0）
 - 用于创建/编辑策略时分配账户现有持仓
 
-`Strategy` Pydantic 模型：
+`Strategy` Pydantic 模型（位于 `backend/models/strategy.py`）：
 - id（自动生成 12 位 hex）、name（必填）、description、enabled
 - token（自动生成 32 位 hex，用于远程聚宽风格下单认证）
 - allocated_funds（必填，> 0）、available_cash（可用资金）
 - total_asset（总资产）、daily_pnl（当日盈亏，从 QMT 行情 + xtdata preClose 计算）
-- positions（持久化字段：stock_code 统一为 QMT 格式，stock_name, quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
+- positions（持久化字段：stock_code 统一为 QMT 格式，stock_name, quantity, available_quantity, frozen_quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
 - trading_records（买卖记录数组）
+- deleted_at（软删除标记，None 表示未删除）
 
 `StrategyCreate` 模型：
 - name（必填，min_length=1）、description、allocated_funds（必填，> 0）、enabled
@@ -417,14 +418,17 @@ graph LR
 - 所有字段可选，positions 为 Optional[List[PositionAssignment]]
 
 `StrategyManager` 类：
-- CRUD：create, get, list_all, update, delete, toggle
+- 通过构造函数注入 `StrategyRepository`，未传入时自动降级为 `InMemoryStrategyRepository`
+- 内部维护 `_strategies` 内存缓存，通过 `_refresh_cache()` 从 Repository 加载，兼容现有测试与无持久化场景
+- CRUD：create, get, list_all, update, delete（SQLAlchemy 实现为软删除，设置 `deleted_at`）, toggle
+- 所有写操作通过 `model_copy(deep=True, update=...)` 生成新的 `Strategy` 对象，保持领域模型不可变
 - `create(data)` — 若提供了 positions，通过 `fetch_open_prices_from_xtdata`（来自 `backend.utils`）获取开盘价作为 avg_cost，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
 - `update(id, data)` — 支持 positions 对账；加仓时 avg_cost = (旧成本×旧量 + open_price×增量)/新量，减仓保留原成本，新增取 open_price
-- `find_by_token(token)` — 按 Token 查找策略
-- `update_position(...)` — 买/卖后更新持仓数量和可用资金
-- `apply_optimistic_position(...)` — 下单时乐观更新持仓，返回快照用于回滚/修正
-- `rollback_position(...)` — 订单失败时根据快照撤销乐观更新
-- `reconcile_position(...)` — 实际成交与委托不一致时，按真实成交修正持仓
+- `find_by_token(token)` — 通过 Repository 按 Token 查找策略
+- `update_position(...)` — 按实际成交更新持仓数量、可用数量与可用资金
+- `apply_optimistic_position(...)` — 下单时冻结对应数量（总数量不变，available_quantity 减少，frozen_quantity 增加），并返回快照用于回滚/修正
+- `rollback_position(...)` — 订单失败或撤单时根据快照解冻持仓
+- `reconcile_position(...)` — 实际成交与委托不一致时，先回滚到快照再按真实成交修正持仓
 - `add_trading_record(...)` — 添加买卖记录
 - `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取市值/数量 → 按策略占比分配 → 从 xtdata 获取 preClose → 计算 current_price (= 市值/数量)、market_value、daily_pnl (= 市值 - preClose×数量)、total_pnl (= 市值 - avg_cost×数量)；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
 - `daily_profit` property — 返回全局当日盈亏（所有策略汇总）
@@ -439,11 +443,12 @@ graph LR
 ### 8. `backend/server.py` — 核心服务器
 
 `QMTServer` 类：
-- `__init__` — 创建 StrategyManager 与 OrderTracker 实例
+- `__init__` — 接收 `strategy_repository` / `order_repository` / `account_repository` / `signal_log_repository` / `db_session`，创建 `StrategyManager` 与 `OrderTracker` 实例；未传入 Repository 时自动使用 InMemory 实现
 - `generate_token()` — `secrets.token_hex(32)` 随机生成 64 字符安全 Token
 - `verify_token(x_token)` — FastAPI 依赖，校验主 Token
 - `verify_any_token(x_token)` — 同时校验主 Token 和所有已启用策略的 Token
 - `init_trader()` — 调用 create_trader
+- `_ensure_account_record()` — 启用数据库时，启动前同步当前账户信息到 `accounts` 表
 - `convert_to_dict(obj)` — 递归转换 XtQuant 对象为 dict
 - `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker，并对策略持仓进行乐观更新
 - `setup_routes()` — 注册所有端点：
@@ -457,22 +462,26 @@ graph LR
   - `GET /api/docs`、`GET /api/docs/{name}` — 文档内容
 - 在 `/api/strategies` 和 `/api/strategies/refresh` 返回前，从 OrderTracker 统计每个策略的订单数量并注入 `order_count`
 - 创建/更新策略时通过 `normalize_to_qmt()` 将持仓 stock_code 统一为 QMT 格式
-- `init_and_setup()` → `run()` → `stop()`
+- 聚宽下单端点写入 `signal_logs`，记录来源平台、请求 payload、处理后订单 ID 及异常信息
+- `init_and_setup()` → `run()` → `stop()`，`stop()` 关闭数据库 Session
 
 ### 9. `backend/order_tracker.py` — 订单状态跟踪
 
-`Order` 数据类：
+`TrackedOrder` / `OrderState` 已迁移至 `backend/models/order.py`：
 - order_id, stock_code（QMT 格式）, jq_code（聚宽格式）, direction, quantity, filled_quantity, filled_price
 - status（pending / partial / filled / failed）, order_type, strategy_id, strategy_name
 - placed_at, resolved_at, error_msg, optimistic_position_applied, optimistic_snapshot
 
 `OrderTracker` 类：
-- `track_order(...)` — 注册一笔新订单
-- `get_order(order_id)` / `get_orders_by_strategy(strategy_id)` — 按订单 ID 或策略 ID 查询
+- 通过构造函数注入 `OrderRepository`，未传入时自动降级为 `InMemoryOrderRepository`
+- 启动时调用 `_load_orders()` 从 Repository 恢复 pending 订单到内存状态机
+- `track_order(...)` — 注册一笔新订单，同时持久化并记录 `placed` 事件
+- `get_order(order_id)` / `get_orders_by_strategy(strategy_id)` / `list_all()` — 按订单 ID、策略 ID 查询或列出全部
 - `update_order(order_id, **kwargs)` — 更新订单字段
 - `on_state_change(callback)` — 注册订单状态变更回调
 - `poll_and_reconcile(trader, account)` — 后台轮询 pending 订单，根据 QMT 实际成交修正策略持仓
 - 订单达到终态（filled / failed）时触发回调，调用 StrategyManager 的 `reconcile_position` 或 `rollback_position`
+- 每次状态变更通过 `_persist()` 保存订单并写入 `order_events` 审计事件
 
 ### 10. `backend/jukuan_orders.py` — 聚宽风格下单
 
@@ -507,6 +516,7 @@ graph LR
 - 挂载 `../frontend/` 到静态文件
 - `GET /` 提供 index.html
 - `verify_server_token()` — 全局 Token 校验依赖
+- 根据 `PERSISTENCE_MODE` 创建 SQLAlchemy Session 与 Repository（`sqlite` 模式）或 InMemory Repository（`memory` 模式）
 - 管理 API：`POST /api/start-server`（返回 Token）、`POST /api/stop-server`（需 X-Token）、`GET /api/server-info`（不含 Token）
 - CLI 入口：argparse 支持 --account --qmt-path --host --port --token --tray --window
 - 三种运行模式：CLI 模式、系统托盘模式（--tray）、桌面窗口模式（--window）
@@ -519,6 +529,19 @@ graph LR
 - `MockStockAccount`: account_id 属性
 - `MockData`: set_qmt_data_dir(), download_history_data2(), get_market_data()（返回 {field: DataFrame}）, get_market_data_ex()（返回 {code: DataFrame}）, get_instrument_detail(), get_full_tick() — 内置 3 只模拟股票（平安银行、贵州茅台、宁德时代）的完整 K 线数据（open/high/low/close/preClose），get_full_tick 返回 lastPrice=close
 - `MockTraderCallback`: 基类
+
+### 15. `backend/db/` — 数据库层
+
+- `backend/db/base.py` — SQLAlchemy `Base` 与 `SessionLocal`，读取 `DATABASE_URL`
+- `backend/db/models/` — 7 张表的数据库模型：`AccountModel`、`StrategyModel`、`PositionModel`、`OrderModel`、`StrategyTokenModel`、`OrderEventModel`、`SignalLogModel`
+- `backend/db/repositories/` — Repository 抽象基类 `Repository` / `InMemoryRepository`，以及 `StrategyRepository`、`OrderRepository`、`AccountRepository`、`SignalLogRepository` 的 SQLAlchemy + InMemory 双实现
+- `backend/db/migrations/` — Alembic 迁移脚本，当前包含初始化表结构与存储完整策略 Token 的两条迁移
+
+### 16. `backend/models/` — 领域模型
+
+- `backend/models/strategy.py` — Pydantic 领域模型：`Strategy`、`PositionAssignment`、`StrategyCreate`、`StrategyUpdate`
+- `backend/models/order.py` — `TrackedOrder`（Pydantic）与 `OrderState` 状态常量
+- 将业务层与数据库层解耦，Repository 负责领域模型与数据库模型之间的映射转换
 
 ---
 
@@ -703,7 +726,18 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 47. 更新 `tests/test_server.py`、`tests/test_strategy_manager.py`、`tests/test_jukuan_orders.py`、`tests/test_utils.py`
 48. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
 
----
+### Phase 13: 数据持久化改造 ✅
+49. 引入 SQLAlchemy 2.0 + Alembic + SQLite，实现策略、持仓、订单、信号日志等持久化（7 张表：accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）
+50. 创建 `backend/db/` 目录：Base、models、repositories（SQLAlchemy + InMemory 双实现）、migrations
+51. 创建 `backend/models/` 目录：将 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment` / `TrackedOrder` / `OrderState` 提取为 Pydantic 领域模型，打破 Repository 与业务层循环依赖
+52. 改造 `StrategyManager` 注入 `StrategyRepository`，内部保留内存缓存兼容现有测试，写操作通过 `model_copy` 保持不可变；持仓字典新增 `available_quantity` / `frozen_quantity` 支持委托冻结；策略删除采用软删除（`deleted_at`）
+53. 改造 `OrderTracker` 注入 `OrderRepository`，内存状态机对象可变以兼容现有行为，Repository 保存订单快照并记录 `order_events`
+54. 改造 `QMTServer` 注入 `StrategyRepository` / `OrderRepository` / `AccountRepository` / `SignalLogRepository` 与数据库 Session，启动时同步账户信息到 `accounts` 表、加载 pending 订单，聚宽下单端点写入 `signal_logs`
+55. 改造 `backend/main.py` 根据 `PERSISTENCE_MODE` 创建 SQLAlchemy / InMemory Repository
+56. 新增 `tests/repositories/` 测试，覆盖 SQLAlchemy（内存 SQLite）与 InMemory Repository
+57. 新增 `pytest.ini`，启用 `pytest-asyncio` 自动模式
+58. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 
 ## 验证方案
 

@@ -3,63 +3,39 @@
 管理多个远程交易策略，支持策略 CRUD、资金分配、持仓跟踪、
 交易记录，以及基于 QMT 实时行情的持仓富化和当日盈亏计算。
 """
-import uuid
-import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
 from backend.utils import fetch_preclose_from_xtdata, fetch_open_prices_from_xtdata, fetch_stock_names_from_xtdata
+from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
+from backend.models.strategy import Strategy, StrategyCreate, StrategyUpdate, PositionAssignment
 
 
-class Strategy(BaseModel):
-    """策略抽象实体"""
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    name: str
-    description: str = ""
-    enabled: bool = True
-    token: str = Field(default_factory=lambda: secrets.token_hex(16))
-    allocated_funds: float = 0.0
-    available_cash: float = 0.0
-    total_asset: float = 0.0
-    daily_pnl: float = 0.0
-    positions: list = []
-    trading_records: list = []
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-class PositionAssignment(BaseModel):
-    """单条持仓分配"""
-    stock_code: str
-    stock_name: str = ""
-    quantity: int = Field(gt=0)
-    current_price: float = Field(gt=0)
-
-
-class StrategyCreate(BaseModel):
-    """创建策略请求体"""
-    name: str = Field(min_length=1)
-    description: str = ""
-    allocated_funds: float = Field(gt=0)
-    enabled: bool = True
-    positions: List[PositionAssignment] = []
-
-
-class StrategyUpdate(BaseModel):
-    """更新策略请求体"""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    allocated_funds: Optional[float] = None
-    enabled: Optional[bool] = None
-    positions: Optional[List[PositionAssignment]] = None
+def _make_position(stock_code: str, stock_name: str, quantity: int, avg_cost: float,
+                   available_quantity: Optional[int] = None,
+                   frozen_quantity: int = 0) -> dict:
+    """构造标准化持仓字典。"""
+    return {
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "quantity": quantity,
+        "available_quantity": available_quantity if available_quantity is not None else quantity,
+        "frozen_quantity": frozen_quantity,
+        "avg_cost": avg_cost,
+    }
 
 
 class StrategyManager:
     """策略管理器 — 管理所有策略的生命周期和资金持仓跟踪"""
 
-    def __init__(self):
-        self._strategies: Dict[str, Strategy] = {}
+    def __init__(self, repository: Optional[StrategyRepository] = None):
+        self._repo = repository or InMemoryStrategyRepository()
         self._daily_profit: float = 0.0
+        self._strategies: Dict[str, Strategy] = {}
+        self._refresh_cache()
 
     @property
     def daily_profit(self) -> float:
@@ -75,7 +51,6 @@ class StrategyManager:
             total_asset=data.allocated_funds,
             enabled=data.enabled,
         )
-        # 初始化分配持仓（成本价取 xtquant 开盘价，行情数据实时获取）
         if data.positions:
             codes = [pa.stock_code for pa in data.positions]
             open_prices = fetch_open_prices_from_xtdata(codes)
@@ -85,19 +60,20 @@ class StrategyManager:
                 open_price = open_prices.get(pa.stock_code) or pa.current_price
                 cost = pa.quantity * open_price
                 total_cost += cost
-                pos_list.append({
-                    "stock_code": pa.stock_code,
-                    "stock_name": pa.stock_name,
-                    "quantity": pa.quantity,
-                    "avg_cost": open_price,
-                })
+                pos_list.append(_make_position(
+                    stock_code=pa.stock_code,
+                    stock_name=pa.stock_name,
+                    quantity=pa.quantity,
+                    avg_cost=open_price,
+                ))
             if total_cost > data.allocated_funds:
                 raise ValueError(f"持仓总成本({total_cost:.2f})超过分配金额({data.allocated_funds:.2f})")
-            strategy.positions = pos_list
-            strategy.available_cash = data.allocated_funds - total_cost
+            strategy = strategy.model_copy(update={
+                "positions": pos_list,
+                "available_cash": data.allocated_funds - total_cost,
+            })
 
-        self._strategies[strategy.id] = strategy
-        return strategy
+        return self._persist(strategy)
 
     def get(self, strategy_id: str) -> Optional[Strategy]:
         """获取单个策略"""
@@ -105,10 +81,7 @@ class StrategyManager:
 
     def find_by_token(self, token: str) -> Optional[Strategy]:
         """根据 token 查找策略"""
-        for s in self._strategies.values():
-            if s.token == token:
-                return s
-        return None
+        return self._repo.get_by_token(token)
 
     def list_all(self) -> List[dict]:
         """列出所有策略"""
@@ -120,99 +93,45 @@ class StrategyManager:
 
     def update(self, strategy_id: str, data: StrategyUpdate) -> Optional[Strategy]:
         """更新策略"""
-        strategy = self._strategies.get(strategy_id)
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return None
         update_data = data.model_dump(exclude_unset=True)
-
-        # 先处理 positions（在对 allocated_funds 之前），
-        # 因为 positions 变化会影响 available_cash 的计算基础
         positions_value = update_data.pop("positions", None)
 
-        for key, value in update_data.items():
-            if key == "allocated_funds":
-                diff = value - strategy.allocated_funds
-                strategy.allocated_funds = value
-                strategy.available_cash += diff
-            else:
-                setattr(strategy, key, value)
+        if "allocated_funds" in update_data:
+            diff = update_data["allocated_funds"] - strategy.allocated_funds
+            update_data["available_cash"] = strategy.available_cash + diff
 
-        # 处理持仓重新分配（成本价结合 xtquant open_price 和已有成本综合计算）
+        update_data["updated_at"] = _now_iso()
+
         if positions_value is not None:
-            # 获取所有涉及股票的开盘价
-            codes = set(pa["stock_code"] for pa in positions_value)
-            codes.update(pos["stock_code"] for pos in strategy.positions)
-            open_prices = fetch_open_prices_from_xtdata(codes)
+            new_positions, new_cash = self._rebuild_positions(
+                strategy.positions, positions_value, strategy.available_cash
+            )
+            update_data["positions"] = new_positions
+            update_data["available_cash"] = new_cash
 
-            new_by_code = {}
-            for pa in positions_value:
-                code = pa["stock_code"]
-                open_price = open_prices.get(code) or pa.get("current_price", 0)
-                new_by_code[code] = {
-                    "stock_code": code,
-                    "stock_name": pa.get("stock_name", ""),
-                    "quantity": pa["quantity"],
-                    "avg_cost": open_price,
-                }
-
-            kept = []
-            for pos in strategy.positions:
-                code = pos["stock_code"]
-                if code in new_by_code:
-                    old_qty = pos["quantity"]
-                    old_avg = pos["avg_cost"]
-                    new_pos = new_by_code[code]
-                    new_qty = new_pos["quantity"]
-                    open_price = open_prices.get(code) or new_pos["avg_cost"]
-
-                    if new_qty > old_qty:
-                        # 加仓：加权平均 (旧成本 × 旧数量 + 开盘价 × 增量) / 新数量
-                        new_pos["avg_cost"] = round(
-                            (old_qty * old_avg + (new_qty - old_qty) * open_price) / new_qty, 4
-                        )
-                    else:
-                        # 减仓或不变：保留原成本价
-                        new_pos["avg_cost"] = old_avg
-
-                    old_cost = old_qty * old_avg
-                    new_cost = new_pos["avg_cost"] * new_qty
-                    strategy.available_cash += (old_cost - new_cost)
-                    kept.append(new_pos)
-                    del new_by_code[code]
-                else:
-                    strategy.available_cash += pos["avg_cost"] * pos["quantity"]
-
-            # 新增持仓：成本价取 open_price
-            for new_pos in new_by_code.values():
-                open_price = open_prices.get(new_pos["stock_code"]) or new_pos["avg_cost"]
-                new_pos["avg_cost"] = open_price
-                strategy.available_cash -= open_price * new_pos["quantity"]
-                kept.append(new_pos)
-
-            if strategy.available_cash < 0:
-                raise ValueError("可用资金不足，无法完成持仓分配")
-
-            strategy.positions = kept
-
-        strategy.updated_at = datetime.now().isoformat()
-        self._strategies[strategy_id] = strategy
-        return strategy
+        new_strategy = strategy.model_copy(deep=True, update=update_data)
+        return self._persist(new_strategy)
 
     def delete(self, strategy_id: str) -> bool:
         """删除策略"""
-        if strategy_id in self._strategies:
-            del self._strategies[strategy_id]
-            return True
-        return False
+        result = self._repo.delete(strategy_id)
+        if result:
+            self._strategies.pop(strategy_id, None)
+        return result
 
     def toggle(self, strategy_id: str) -> Optional[Strategy]:
         """切换启用/禁用"""
-        strategy = self._strategies.get(strategy_id)
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return None
-        strategy.enabled = not strategy.enabled
-        strategy.updated_at = datetime.now().isoformat()
-        return strategy
+        new_strategy = strategy.model_copy(update={
+            "enabled": not strategy.enabled,
+            "updated_at": _now_iso(),
+        })
+        return self._persist(new_strategy)
 
     def is_enabled(self, strategy_id: str) -> bool:
         """检查策略是否启用"""
@@ -221,21 +140,37 @@ class StrategyManager:
 
     def update_position(self, strategy_id: str, stock_code: str,
                         direction: str, quantity: int, price: float):
-        """更新策略持仓数量和可用资金（买卖信号执行后调用），行情数据由 list_all_enriched 实时计算"""
-        strategy = self._strategies.get(strategy_id)
+        """按实际成交更新策略持仓（可用数量和总数量同步变更）。"""
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return
 
-        positions = self._apply_position_change(
-            list(strategy.positions), strategy, stock_code, direction, quantity, price
+        new_positions, new_cash = self._apply_actual_fill(
+            strategy.positions,
+            strategy.available_cash,
+            stock_code,
+            direction,
+            quantity,
+            price,
         )
-        strategy.positions = positions
-        strategy.updated_at = datetime.now().isoformat()
+        new_strategy = strategy.model_copy(update={
+            "positions": new_positions,
+            "available_cash": new_cash,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
 
     def apply_optimistic_position(self, strategy_id: str, stock_code: str,
                                   direction: str, quantity: int, price: float):
-        """下单时乐观更新策略持仓，并返回更新前的持仓快照用于后续回滚或修正。"""
-        strategy = self._strategies.get(strategy_id)
+        """下单时冻结对应数量，并返回更新前的持仓快照用于后续回滚或修正。
+
+        买入/卖出委托未成交期间：
+        - 总数量 quantity 不变
+        - 可用数量 available_quantity 减少
+        - 冻结数量 frozen_quantity 增加
+        - 可用资金按委托金额预先扣减/增加
+        """
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return None
 
@@ -245,41 +180,62 @@ class StrategyManager:
         snapshot = {
             "stock_code": stock_code,
             "quantity": old_pos["quantity"] if old_pos else 0,
+            "available_quantity": old_pos["available_quantity"] if old_pos else 0,
+            "frozen_quantity": old_pos["frozen_quantity"] if old_pos else 0,
             "avg_cost": old_pos["avg_cost"] if old_pos else 0.0,
             "available_cash": strategy.available_cash,
         }
 
-        self.update_position(strategy_id, stock_code, direction, quantity, price)
+        new_positions, new_cash = self._freeze_position(
+            strategy.positions,
+            strategy.available_cash,
+            stock_code,
+            direction,
+            quantity,
+            price,
+        )
+        new_strategy = strategy.model_copy(update={
+            "positions": new_positions,
+            "available_cash": new_cash,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
         return snapshot
 
     def rollback_position(self, strategy_id: str, snapshot: Optional[dict]):
-        """根据快照撤销乐观持仓更新。"""
-        strategy = self._strategies.get(strategy_id)
+        """根据快照撤销乐观持仓更新（解冻）。"""
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy or not snapshot:
             return
 
-        strategy.available_cash = snapshot["available_cash"]
         positions = [
             p for p in strategy.positions
             if p["stock_code"] != snapshot["stock_code"]
         ]
-        if snapshot["quantity"] > 0:
-            positions.append({
-                "stock_code": snapshot["stock_code"],
-                "stock_name": "",
-                "quantity": snapshot["quantity"],
-                "avg_cost": snapshot["avg_cost"],
-            })
+        total_qty = snapshot["quantity"] + snapshot["frozen_quantity"]
+        if total_qty > 0:
+            positions.append(_make_position(
+                stock_code=snapshot["stock_code"],
+                stock_name="",
+                quantity=snapshot["quantity"],
+                avg_cost=snapshot["avg_cost"],
+                available_quantity=snapshot["available_quantity"],
+                frozen_quantity=snapshot["frozen_quantity"],
+            ))
 
-        strategy.positions = positions
-        strategy.updated_at = datetime.now().isoformat()
+        new_strategy = strategy.model_copy(update={
+            "available_cash": snapshot["available_cash"],
+            "positions": positions,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
 
     def reconcile_position(self, strategy_id: str, stock_code: str,
                            direction: str, requested_qty: int,
                            filled_qty: int, filled_price: float,
                            snapshot: Optional[dict]):
-        """实际成交与委托不一致时，先恢复到快照再按实际成交修正持仓。"""
-        strategy = self._strategies.get(strategy_id)
+        """实际成交与委托不一致时，先解冻再按实际成交修正持仓。"""
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return
 
@@ -287,77 +243,200 @@ class StrategyManager:
             self.rollback_position(strategy_id, snapshot)
             return
 
-        # 恢复到乐观更新前的快照状态
-        strategy.available_cash = snapshot["available_cash"]
-        positions = [
-            p for p in strategy.positions
-            if p["stock_code"] != stock_code
-        ]
-        if snapshot["quantity"] > 0:
-            positions.append({
-                "stock_code": stock_code,
-                "stock_name": "",
-                "quantity": snapshot["quantity"],
-                "avg_cost": snapshot["avg_cost"],
-            })
+        # 先回滚到委托前快照（完全解冻）
+        self.rollback_position(strategy_id, snapshot)
 
-        # 按实际成交重新应用
-        positions = self._apply_position_change(
-            positions, strategy, stock_code, direction, filled_qty, filled_price
+        # 再按真实成交数量更新持仓
+        strategy = self._repo.get_by_id(strategy_id)
+        new_positions, new_cash = self._apply_actual_fill(
+            strategy.positions,
+            strategy.available_cash,
+            stock_code,
+            direction,
+            filled_qty,
+            filled_price,
         )
-        strategy.positions = positions
-        strategy.updated_at = datetime.now().isoformat()
+        new_strategy = strategy.model_copy(update={
+            "available_cash": new_cash,
+            "positions": new_positions,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
 
-    def _apply_position_change(self, positions: List[dict], strategy,
-                               stock_code: str, direction: str,
-                               quantity: int, price: float) -> List[dict]:
-        """在传入的 positions 列表上应用买卖变动，返回新的 positions 列表。"""
+    @staticmethod
+    def _apply_actual_fill(
+        positions: List[dict],
+        available_cash: float,
+        stock_code: str,
+        direction: str,
+        quantity: int,
+        price: float,
+    ) -> tuple:
+        """按真实成交更新持仓。买入增加总数量和可用数量，卖出减少。"""
         cost = quantity * price
+        positions = [dict(p) for p in positions]
+        new_cash = available_cash
 
         if direction == "buy":
-            strategy.available_cash -= cost
+            new_cash -= cost
             found = False
             for pos in positions:
                 if pos["stock_code"] == stock_code:
                     total_qty = pos["quantity"] + quantity
                     total_cost = pos["avg_cost"] * pos["quantity"] + cost
                     pos["quantity"] = total_qty
+                    pos["available_quantity"] = pos.get("available_quantity", 0) + quantity
                     pos["avg_cost"] = round(total_cost / total_qty, 4) if total_qty > 0 else 0
                     found = True
                     break
             if not found:
-                positions.append({
-                    "stock_code": stock_code,
-                    "stock_name": "",
-                    "quantity": quantity,
-                    "avg_cost": price,
-                })
+                positions.append(_make_position(
+                    stock_code=stock_code,
+                    stock_name="",
+                    quantity=quantity,
+                    avg_cost=price,
+                ))
         elif direction == "sell":
-            strategy.available_cash += cost
+            new_cash += cost
             for pos in positions:
                 if pos["stock_code"] == stock_code:
                     pos["quantity"] -= quantity
+                    pos["available_quantity"] = pos.get("available_quantity", 0) - quantity
                     if pos["quantity"] <= 0:
                         positions = [p for p in positions if p["stock_code"] != stock_code]
                     break
 
-        return positions
+        return positions, new_cash
+
+    @staticmethod
+    def _freeze_position(
+        positions: List[dict],
+        available_cash: float,
+        stock_code: str,
+        direction: str,
+        quantity: int,
+        price: float,
+    ) -> tuple:
+        """下单时冻结待成交数量。总数量不变，可用数量减少，冻结数量增加。"""
+        cost = quantity * price
+        positions = [dict(p) for p in positions]
+        new_cash = available_cash
+
+        if direction == "buy":
+            new_cash -= cost
+            found = False
+            for pos in positions:
+                if pos["stock_code"] == stock_code:
+                    pos["available_quantity"] = max(
+                        0, pos.get("available_quantity", 0) - quantity
+                    )
+                    pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
+                    found = True
+                    break
+            if not found:
+                # 买入新股票但尚未成交：总数量为 0，全部冻结
+                positions.append(_make_position(
+                    stock_code=stock_code,
+                    stock_name="",
+                    quantity=0,
+                    avg_cost=price,
+                    available_quantity=0,
+                    frozen_quantity=quantity,
+                ))
+        elif direction == "sell":
+            new_cash += cost
+            for pos in positions:
+                if pos["stock_code"] == stock_code:
+                    pos["available_quantity"] = max(
+                        0, pos.get("available_quantity", 0) - quantity
+                    )
+                    pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
+                    break
+
+        return positions, new_cash
+
+    def _rebuild_positions(self, current_positions: List[dict], positions_value: List[dict], available_cash: float) -> tuple:
+        """根据更新请求重建持仓列表，返回 (new_positions, new_cash)。"""
+        codes = set(pa["stock_code"] for pa in positions_value)
+        codes.update(pos["stock_code"] for pos in current_positions)
+        open_prices = fetch_open_prices_from_xtdata(codes)
+
+        new_by_code = {}
+        for pa in positions_value:
+            code = pa["stock_code"]
+            open_price = open_prices.get(code) or pa.get("current_price", 0)
+            new_by_code[code] = {
+                "stock_code": code,
+                "stock_name": pa.get("stock_name", ""),
+                "quantity": pa["quantity"],
+                "avg_cost": open_price,
+            }
+
+        kept = []
+        for pos in current_positions:
+            code = pos["stock_code"]
+            if code in new_by_code:
+                old_qty = pos["quantity"]
+                old_avg = pos["avg_cost"]
+                new_pos = new_by_code[code]
+                new_qty = new_pos["quantity"]
+                open_price = open_prices.get(code) or new_pos["avg_cost"]
+
+                if new_qty > old_qty:
+                    new_pos["avg_cost"] = round(
+                        (old_qty * old_avg + (new_qty - old_qty) * open_price) / new_qty, 4
+                    )
+                else:
+                    new_pos["avg_cost"] = old_avg
+
+                old_cost = old_qty * old_avg
+                new_cost = new_pos["avg_cost"] * new_qty
+                available_cash += (old_cost - new_cost)
+                kept.append(new_pos)
+                del new_by_code[code]
+            else:
+                available_cash += pos["avg_cost"] * pos["quantity"]
+
+        for new_pos in new_by_code.values():
+            open_price = open_prices.get(new_pos["stock_code"]) or new_pos["avg_cost"]
+            new_pos["avg_cost"] = open_price
+            available_cash -= open_price * new_pos["quantity"]
+            kept.append(new_pos)
+
+        if available_cash < 0:
+            raise ValueError("可用资金不足，无法完成持仓分配")
+
+        # 重建后的持仓默认可用数量等于总数量，冻结为 0
+        result = [
+            _make_position(
+                stock_code=p["stock_code"],
+                stock_name=p.get("stock_name", ""),
+                quantity=p["quantity"],
+                avg_cost=p["avg_cost"],
+            )
+            for p in kept
+        ]
+        return result, available_cash
 
     def add_trading_record(self, strategy_id: str, record: dict):
         """添加买卖记录"""
-        strategy = self._strategies.get(strategy_id)
+        strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return
         records = list(strategy.trading_records)
         records.append(record)
-        strategy.trading_records = records
+        new_strategy = strategy.model_copy(update={
+            "trading_records": records,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
 
     def list_all_enriched(self, trader, account) -> List[dict]:
-        """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）"""
+        """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）。"""
+        self._refresh_cache()
         if not self._strategies:
             return []
 
-        # 从 QMT 获取实时持仓行情
         qmt_positions = []
         try:
             qmt_positions_raw = trader.query_stock_positions(account)
@@ -373,11 +452,9 @@ class StrategyManager:
         except Exception:
             pass
 
-        # 收集所有策略涉及的股票代码，从行情模块批量获取前收盘价
         all_codes = {pos["stock_code"] for s in self._strategies.values() for pos in s.positions if pos["stock_code"]}
         preclose_map = fetch_preclose_from_xtdata(all_codes)
 
-        # 构建 QMT 数据索引 {stock_code: {market_value, volume, current_price}}
         qmt_index = {}
         for p in qmt_positions:
             code = p.get("stock_code", "")
@@ -400,25 +477,23 @@ class StrategyManager:
             enriched_positions = []
             for pos in s.positions:
                 code = pos["stock_code"]
-                enriched = dict(pos)  # 拷贝原始字段：stock_code, stock_name, quantity, avg_cost
+                enriched = dict(pos)
 
                 qty = pos["quantity"]
                 qmt_data = qmt_index.get(code)
                 qmt_vol = qmt_data["volume"] if qmt_data else 0
 
-                # 最新价：从 QMT 市值/数量计算
                 if qmt_data and qmt_data["current_price"] > 0:
                     enriched["current_price"] = qmt_data["current_price"]
                 else:
                     enriched["current_price"] = 0.0
 
-                # 计算市值：按策略占比分配 QMT 市值
                 if qmt_data and qmt_vol > 0:
                     ratio = qty / qmt_vol
                     enriched["market_value"] = round(qmt_data["market_value"] * ratio, 2)
                 else:
                     enriched["market_value"] = round(enriched["current_price"] * qty, 2)
-                # 计算当日盈亏：(市值 - 前收盘价 × 数量)
+
                 preclose = preclose_map.get(code)
                 mv = enriched["market_value"]
                 if preclose is not None and preclose > 0 and qty > 0:
@@ -428,7 +503,6 @@ class StrategyManager:
                 enriched["daily_pnl"] = pos_daily_pnl
                 daily_pnl_total += pos_daily_pnl
 
-                # 累计盈亏 = 市值 - 成本价 × 数量
                 avg_cost = pos.get("avg_cost", 0)
                 enriched["total_pnl"] = round(mv - avg_cost * qty, 2) if qty > 0 else 0.0
 
@@ -445,3 +519,15 @@ class StrategyManager:
 
         self._daily_profit = round(global_daily_profit, 2)
         return result
+
+    def _persist(self, strategy: Strategy) -> Strategy:
+        """保存策略并同步内存缓存。"""
+        saved = self._repo.save(strategy)
+        self._strategies[saved.id] = saved
+        return saved
+
+    def _refresh_cache(self):
+        """从 Repository 刷新内存缓存。"""
+        self._strategies = {
+            s.id: s for s in self._repo.list_all(include_disabled=True)
+        }

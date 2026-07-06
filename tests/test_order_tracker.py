@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from backend.order_tracker import OrderTracker, OrderState, TrackedOrder
+from backend.db.repositories.order import InMemoryOrderRepository
 from backend.qmt_xtconstant import (
     ORDER_REPORTED,
     ORDER_PART_SUCC,
@@ -242,3 +243,46 @@ class TestOrderTrackerPoll:
         assert len(resolved) == 1
         assert resolved[0].status == OrderState.FILLED
         assert tracker.get_order(str(oid)).status == OrderState.FILLED
+
+
+class TestOrderTrackerLoadHistory:
+    def test_loads_filled_orders_on_init(self):
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+            status=OrderState.FILLED,
+        ))
+
+        tracker = OrderTracker(repository=repo)
+        orders = tracker.list_all()
+        assert len(orders) == 1
+        assert orders[0].order_id == "100001"
+        assert orders[0].status == OrderState.FILLED
+
+    def test_loads_pending_and_filled_orders(self):
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100001", stock_code="000001.SZ", jq_code="000001.XSHE",
+            direction="buy", quantity=100, order_type=23,
+            strategy_id="abc", strategy_name="测试策略", price=10.0,
+            status=OrderState.PENDING,
+        ))
+        repo.save(TrackedOrder(
+            order_id="100002", stock_code="000002.SZ", jq_code="000002.XSHE",
+            direction="sell", quantity=100, order_type=24,
+            strategy_id="abc", strategy_name="测试策略", price=12.0,
+            status=OrderState.FAILED,
+        ))
+
+        tracker = OrderTracker(repository=repo)
+        orders = tracker.list_all()
+        assert len(orders) == 2
+        assert tracker.get_pending_orders()[0].order_id == "100001"

@@ -277,9 +277,13 @@ class TestStrategyManagerOptimisticUpdates:
         sid = self._first_id(mgr)
         snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
         s = mgr.get(sid)
-        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["quantity"] == 0
+        assert s.positions[0]["available_quantity"] == 0
+        assert s.positions[0]["frozen_quantity"] == 100
         assert s.available_cash == 100000 - 1000
         assert snapshot["quantity"] == 0
+        assert snapshot["available_quantity"] == 0
+        assert snapshot["frozen_quantity"] == 0
         assert snapshot["available_cash"] == 100000
 
     def test_apply_optimistic_position_sell(self, mgr):
@@ -287,9 +291,13 @@ class TestStrategyManagerOptimisticUpdates:
         mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)
         snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
         s = mgr.get(sid)
-        assert s.positions[0]["quantity"] == 200
+        assert s.positions[0]["quantity"] == 300
+        assert s.positions[0]["available_quantity"] == 200
+        assert s.positions[0]["frozen_quantity"] == 100
         assert s.available_cash == 100000 - 3000 + 1200
         assert snapshot["quantity"] == 300
+        assert snapshot["available_quantity"] == 300
+        assert snapshot["frozen_quantity"] == 0
         assert snapshot["avg_cost"] == 10.0
 
     def test_rollback_buy_position(self, mgr):

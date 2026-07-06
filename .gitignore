@@ -34,6 +34,10 @@ logs/
 # Claude Code
 .claude/
 
+# Database
+data/
+*.db
+
 # QMT
 *.dat
 *.exe

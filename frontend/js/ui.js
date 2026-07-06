@@ -262,13 +262,14 @@ export const UI = {
 
         const norm = positions.map(p => {
             const qty = p.quantity || 0;
+            const availableQty = p.available_quantity || 0;
             const mv = p.market_value || 0;
             const currentPrice = p.current_price || (qty > 0 ? mv / qty : 0);
             return {
                 stock_code: p.stock_code,
                 stock_name: p.stock_name || '',
                 volume: qty,
-                canUse: qty,
+                canUse: availableQty,
                 openPrice: p.avg_cost || 0,
                 currentPrice: currentPrice,
                 marketValue: mv,

@@ -12,6 +12,11 @@ class Settings:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "")
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
+    PERSISTENCE_MODE: str = os.getenv("PERSISTENCE_MODE", "sqlite")
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///./data/qmt_live_assistant.db"
+    )
 
 
 settings = Settings()

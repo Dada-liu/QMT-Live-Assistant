@@ -17,6 +17,7 @@
 - 策略概览：查看各策略的可用资金、总资产、当日盈亏与订单数量，点击策略卡片展开持仓明细表
 - 聚宽风格下单：远程策略服务器通过 `/api/jukuan_order*` 接口下单，自动关联策略并更新持仓
 - 策略 Token 认证：每个策略拥有独立 Token，远程下单携带策略 Token 即可关联
+- 数据持久化：策略、持仓、订单、信号日志等默认落库 SQLite，服务重启数据不丢失
 - 实时订单监控面板，支持按日期、策略和状态筛选
 - 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
 - 聚宽格式 ↔ QMT 格式代码转换；策略持仓统一持久化为 QMT 格式（.SZ/.SH/.BJ）
@@ -26,7 +27,7 @@
 
 ## 技术栈
 
-- **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK
+- **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK / SQLAlchemy 2.0 / Alembic / SQLite
 - **前端**: 原生 HTML + CSS + JS（ES Module）
 - **设计**: Coinbase 设计风格
 
@@ -40,6 +41,14 @@ QMT-live-assistant/
 │   ├── qmt_client.py        # miniQMT 连接
 │   ├── order_tracker.py     # 订单状态跟踪
 │   ├── strategy_manager.py  # 策略管理器（多策略支持）
+│   ├── models/              # Pydantic / dataclass 领域模型
+│   │   ├── strategy.py
+│   │   └── order.py
+│   ├── db/                  # 数据库模型、Repository、迁移
+│   │   ├── base.py
+│   │   ├── models/
+│   │   ├── repositories/
+│   │   └── migrations/
 │   ├── utils.py             # 工具函数（含 jq_to_qmt / qmt_to_jq / normalize_to_qmt）
 │   ├── jukuan_orders.py     # 聚宽风格下单
 │   ├── logger.py            # 日志系统
@@ -67,7 +76,11 @@ QMT-live-assistant/
 │   ├── test_signal_handler.py
 │   ├── test_strategy_manager.py
 │   ├── test_jukuan_orders.py
-│   └── test_utils.py
+│   ├── test_utils.py
+│   └── repositories/        # Repository 层测试
+│       ├── test_strategy_repository.py
+│       ├── test_order_repository.py
+│       └── test_signal_log_repository.py
 ├── requirements.txt
 └── README.md
 ```
@@ -78,9 +91,29 @@ QMT-live-assistant/
 
 ```bash
 pip install -r requirements.txt
+alembic upgrade head
 ```
 
 > **注意**: `xtquant` SDK 仅在 Windows 上可用。在 macOS/Linux 上，项目自动使用 mock 实现进行开发和测试。
+
+## 数据持久化
+
+默认使用 SQLite 存储策略、持仓、订单、信号日志等数据（共 7 张表，包括 accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）。首次运行前执行：
+
+```bash
+alembic upgrade head
+```
+
+数据文件位于 `./data/qmt_live_assistant.db`。
+
+可通过环境变量切换模式：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PERSISTENCE_MODE` | `sqlite` | `sqlite` 或 `memory` |
+| `DATABASE_URL` | `sqlite:///./data/qmt_live_assistant.db` | SQLAlchemy 数据库 URL |
+
+测试直接实例化 InMemory Repository 或使用内存 SQLite，无需执行迁移。
 
 ## 运行
 
@@ -240,5 +273,7 @@ pytest tests/ -v
 | `ACCOUNT_ID` | `` | 券商账户ID |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `WECHAT_WEBHOOK_URL` | `` | 企业微信通知 |
+| `PERSISTENCE_MODE` | `sqlite` | 数据持久化模式：sqlite / memory |
+| `DATABASE_URL` | `sqlite:///./data/qmt_live_assistant.db` | SQLAlchemy 数据库 URL |
 
 

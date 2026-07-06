@@ -1,0 +1,54 @@
+"""策略领域模型（Pydantic）。"""
+import uuid
+import secrets
+from datetime import datetime, timezone
+from typing import Optional, List
+from pydantic import BaseModel, Field
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class Strategy(BaseModel):
+    """策略抽象实体"""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    name: str
+    description: str = ""
+    enabled: bool = True
+    token: str = Field(default_factory=lambda: secrets.token_hex(16))
+    allocated_funds: float = 0.0
+    available_cash: float = 0.0
+    total_asset: float = 0.0
+    daily_pnl: float = 0.0
+    positions: list = []
+    trading_records: list = []
+    deleted_at: Optional[str] = None
+    created_at: str = Field(default_factory=_now_iso)
+    updated_at: str = Field(default_factory=_now_iso)
+
+
+class PositionAssignment(BaseModel):
+    """单条持仓分配"""
+    stock_code: str
+    stock_name: str = ""
+    quantity: int = Field(gt=0)
+    current_price: float = Field(gt=0)
+
+
+class StrategyCreate(BaseModel):
+    """创建策略请求体"""
+    name: str = Field(min_length=1)
+    description: str = ""
+    allocated_funds: float = Field(gt=0)
+    enabled: bool = True
+    positions: List[PositionAssignment] = []
+
+
+class StrategyUpdate(BaseModel):
+    """更新策略请求体"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    allocated_funds: Optional[float] = None
+    enabled: Optional[bool] = None
+    positions: Optional[List[PositionAssignment]] = None

@@ -207,3 +207,69 @@ class TestJukuanOrderTargetValue:
         result = handler.jukuan_order_target_value("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
+
+
+class TestJukuanOrderStrategyScoped:
+    """策略 token 场景下应使用策略级持仓/资金进行计算与校验。"""
+
+    @pytest.fixture
+    def handler(self):
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+
+        # 账户持有 100 股，与策略持仓不同
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 100
+        mock_pos.market_value = 1000.0
+        mock_pos.open_price = 10.0
+        trader.query_stock_positions.return_value = [mock_pos]
+
+        account = MagicMock()
+
+        strategy = MagicMock()
+        strategy.available_cash = 50000.0
+        strategy.positions = [
+            {
+                "stock_code": "000001.SZ",
+                "quantity": 300,
+                "available_quantity": 300,
+                "frozen_quantity": 0,
+                "avg_cost": 12.0,
+            }
+        ]
+
+        strategy_manager = MagicMock()
+        strategy_manager.get.return_value = strategy
+
+        return JukuanOrderHandler(
+            trader=trader, account=account, strategy_manager=strategy_manager
+        )
+
+    def test_target_uses_strategy_quantity(self, handler):
+        result = handler.jukuan_order_target("000001.SZ", 500, strategy_id="strat-1")
+        assert result["direction"] == "buy"
+        # 策略当前 300，目标 500，缺口 200
+        assert result["quantity"] == 200
+
+    def test_target_sell_rejected_when_strategy_short(self, handler):
+        # 将策略可用持仓设为 0（全部冻结），此时 target=0 需要卖出 300 股，应被拒绝
+        handler.strategy_manager.get.return_value.positions[0]["available_quantity"] = 0
+        with pytest.raises(ValueError, match="策略可用持仓不足"):
+            handler.jukuan_order_target("000001.SZ", 0, strategy_id="strat-1")
+
+    def test_value_buy_capped_by_strategy_cash(self, handler):
+        # 策略可用资金 50000，价格 12，最多可买 4100 股（按手数 100 取整）
+        result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
+        assert result["direction"] == "buy"
+        assert result["quantity"] == 4100
+
+    def test_value_sell_rejected_when_strategy_short(self, handler):
+        with pytest.raises(ValueError, match="策略可用持仓不足"):
+            handler.jukuan_order_value("000001.SZ", -100000, strategy_id="strat-1")
+
+    def test_target_value_uses_strategy_current_value(self, handler):
+        # 策略当前 300 股 * 12 = 3600，目标 6000，delta=2400，可买 200 股
+        result = handler.jukuan_order_target_value("000001.SZ", 6000, strategy_id="strat-1")
+        assert result["direction"] == "buy"
+        assert result["quantity"] == 200

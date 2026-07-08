@@ -30,3 +30,4 @@ class TrackedOrder:
     resolved_at: Optional[datetime] = None
     error_msg: Optional[str] = None
     optimistic_position_applied: bool = False
+    optimistic_snapshot: Optional[dict] = None

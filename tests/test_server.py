@@ -465,10 +465,8 @@ class TestOrderTrackingIntegration:
         )
         assert response.status_code == 200
         s = server.strategy_manager.get(strategy["id"])
-        assert s.positions[0]["quantity"] == 0
-        assert s.positions[0]["available_quantity"] == 0
-        assert s.positions[0]["frozen_quantity"] == 100
-        assert s.positions[0]["stock_code"] == "000001.SZ"
+        # 买入未成交前不创建 position 行，仅资金被冻结
+        assert len(s.positions) == 0
 
     def test_strategy_jukuan_order_resolves_on_poll(self, client, server):
         strategy = self._create_strategy(client, server)
@@ -505,3 +503,113 @@ class TestOrderTrackingIntegration:
         strategy_data = next(s for s in data if s["id"] == strategy["id"])
         assert "signal_count" not in strategy_data
         assert strategy_data["order_count"] == 1
+
+    def test_strategy_two_pending_orders_same_stock(self, client, server):
+        """同一策略 token 对同一只股票连续下两单，第一单成交后第二单冻结应保留。"""
+        from backend.qmt_xtconstant import ORDER_SUCCEEDED
+
+        strategy = self._create_strategy(client, server)
+
+        response_a = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response_a.status_code == 200
+        order_id_a = response_a.json()["data"]["order_id"]
+
+        response_b = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response_b.status_code == 200
+        order_id_b = response_b.json()["data"]["order_id"]
+
+        # 两单均为 pending，买入未成交前不创建 position 行
+        s = server.strategy_manager.get(strategy["id"])
+        assert len(s.positions) == 0
+
+        # 手动驱动第一单成交（模拟 QMT 回调）
+        server.order_tracker.update_from_callback(
+            order_id_a, ORDER_SUCCEEDED, 100, 12.50
+        )
+
+        tracked_a = server.order_tracker.get_order(order_id_a)
+        assert tracked_a.status == "filled"
+
+        # 第一单成交后创建 position
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["available_quantity"] == 100
+        assert s.positions[0]["frozen_quantity"] == 0
+
+        # 手动驱动第二单成交
+        server.order_tracker.update_from_callback(
+            order_id_b, ORDER_SUCCEEDED, 100, 12.50
+        )
+
+        tracked_b = server.order_tracker.get_order(order_id_b)
+        assert tracked_b.status == "filled"
+
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.positions[0]["quantity"] == 200
+        assert s.positions[0]["available_quantity"] == 200
+        assert s.positions[0]["frozen_quantity"] == 0
+
+    def test_strategy_jukuan_order_target_uses_strategy_quantity(self, client, server):
+        """策略 token 调仓应基于策略自身持仓，而非账户持仓。"""
+        from backend.models.strategy import PositionAssignment
+
+        strategy = self._create_strategy(client, server)
+        # 给策略分配 300 股，与 mock 账户的 100 股不同
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata", return_value={"000001.SZ": 12.0}):
+            client.put(
+                f"/api/strategies/{strategy['id']}",
+                json={
+                    "positions": [
+                        {
+                            "stock_code": "000001.XSHE",
+                            "stock_name": "平安银行",
+                            "quantity": 300,
+                            "current_price": 12.0,
+                        }
+                    ]
+                },
+                headers={"X-Token": server.token},
+            )
+
+        response = client.post(
+            "/api/jukuan_order_target",
+            json={"security": "000001.XSHE", "amount": 500},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["direction"] == "buy"
+        assert data["quantity"] == 200
+
+    def test_strategy_jukuan_order_value_capped_by_strategy_cash(self, client, server):
+        """策略 token 按金额买入不应超出策略可用资金。"""
+        strategy = self._create_strategy(client, server)
+        # 策略可用资金 100000，mock 行情价格 12.55，最多买 7900 股（按手数 100 取整）
+        response = client.post(
+            "/api/jukuan_order_value",
+            json={"security": "000001.XSHE", "value": 200000},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["direction"] == "buy"
+        assert data["quantity"] == 7900
+
+    def test_strategy_jukuan_order_sell_rejected_without_position(self, client, server):
+        """无持仓策略 token 卖出应被拒绝。"""
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": -100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 500
+        assert "策略可用持仓不足" in response.json()["detail"]

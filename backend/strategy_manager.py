@@ -83,6 +83,30 @@ class StrategyManager:
         """根据 token 查找策略"""
         return self._repo.get_by_token(token)
 
+    def get_position(self, strategy_id: str, stock_code: str) -> Optional[dict]:
+        """获取策略下某只股票的持仓字典（只读）。"""
+        strategy = self._strategies.get(strategy_id)
+        if not strategy:
+            return None
+        return next(
+            (p for p in strategy.positions if p["stock_code"] == stock_code), None
+        )
+
+    def get_quantity(self, strategy_id: str, stock_code: str) -> int:
+        """获取策略下某只股票的总持仓数量。"""
+        pos = self.get_position(strategy_id, stock_code)
+        return pos["quantity"] if pos else 0
+
+    def get_available_quantity(self, strategy_id: str, stock_code: str) -> int:
+        """获取策略下某只股票的可用持仓数量。"""
+        pos = self.get_position(strategy_id, stock_code)
+        return pos.get("available_quantity", 0) if pos else 0
+
+    def get_available_cash(self, strategy_id: str) -> float:
+        """获取策略可用资金。"""
+        strategy = self._strategies.get(strategy_id)
+        return strategy.available_cash if strategy else 0.0
+
     def list_all(self) -> List[dict]:
         """列出所有策略"""
         result = []
@@ -162,13 +186,13 @@ class StrategyManager:
 
     def apply_optimistic_position(self, strategy_id: str, stock_code: str,
                                   direction: str, quantity: int, price: float):
-        """下单时冻结对应数量，并返回更新前的持仓快照用于后续回滚或修正。
+        """下单时乐观更新策略持仓/资金，并返回本订单的增量快照。
 
-        买入/卖出委托未成交期间：
-        - 总数量 quantity 不变
-        - 可用数量 available_quantity 减少
-        - 冻结数量 frozen_quantity 增加
-        - 可用资金按委托金额预先扣减/增加
+        买入：未成交前只冻结资金，不创建/修改 position 行。
+        卖出：减少可用数量、增加冻结数量、增加预期资金；可用数量不足时返回 None。
+
+        返回的 snapshot 包含本订单造成的增量（delta_*），多笔同股票订单并发
+        时 rollback / reconcile 只撤销本订单的增量，不影响其他待成交订单。
         """
         strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
@@ -177,16 +201,13 @@ class StrategyManager:
         old_pos = next(
             (p for p in strategy.positions if p["stock_code"] == stock_code), None
         )
-        snapshot = {
-            "stock_code": stock_code,
-            "quantity": old_pos["quantity"] if old_pos else 0,
-            "available_quantity": old_pos["available_quantity"] if old_pos else 0,
-            "frozen_quantity": old_pos["frozen_quantity"] if old_pos else 0,
-            "avg_cost": old_pos["avg_cost"] if old_pos else 0.0,
-            "available_cash": strategy.available_cash,
-        }
+        pre_quantity = old_pos["quantity"] if old_pos else 0
+        pre_available = old_pos["available_quantity"] if old_pos else 0
+        pre_frozen = old_pos["frozen_quantity"] if old_pos else 0
+        pre_avg_cost = old_pos["avg_cost"] if old_pos else 0.0
+        pre_cash = strategy.available_cash
 
-        new_positions, new_cash = self._freeze_position(
+        freeze_result = self._freeze_position(
             strategy.positions,
             strategy.available_cash,
             stock_code,
@@ -194,6 +215,33 @@ class StrategyManager:
             quantity,
             price,
         )
+        if freeze_result is None:
+            return None
+        new_positions, new_cash = freeze_result
+
+        new_pos = next(
+            (p for p in new_positions if p["stock_code"] == stock_code), None
+        )
+        post_available = new_pos["available_quantity"] if new_pos else pre_available
+        post_frozen = new_pos["frozen_quantity"] if new_pos else pre_frozen
+
+        snapshot = {
+            "stock_code": stock_code,
+            "direction": direction,
+            "requested_quantity": quantity,
+            "price": price,
+            # 冻结前状态（保留以兼容现有测试与调试）
+            "quantity": pre_quantity,
+            "available_quantity": pre_available,
+            "frozen_quantity": pre_frozen,
+            "avg_cost": pre_avg_cost,
+            "available_cash": pre_cash,
+            # 本订单造成的增量
+            "delta_available_quantity": post_available - pre_available,
+            "delta_frozen_quantity": post_frozen - pre_frozen,
+            "delta_cash": new_cash - pre_cash,
+        }
+
         new_strategy = strategy.model_copy(update={
             "positions": new_positions,
             "available_cash": new_cash,
@@ -202,30 +250,53 @@ class StrategyManager:
         self._persist(new_strategy)
         return snapshot
 
+    @staticmethod
+    def _rollback_position_deltas(positions: List[dict], stock_code: str,
+                                   delta_available: int, delta_frozen: int) -> List[dict]:
+        """仅撤销指定订单的冻结增量，保留其他订单的冻结状态。"""
+        result = []
+        for pos in positions:
+            if pos["stock_code"] != stock_code:
+                result.append(dict(pos))
+                continue
+
+            new_pos = dict(pos)
+            new_pos["available_quantity"] = (
+                new_pos.get("available_quantity", 0) - delta_available
+            )
+            new_pos["frozen_quantity"] = max(
+                0, new_pos.get("frozen_quantity", 0) - delta_frozen
+            )
+            # 维持 invariant：可用数量 = 总数量 - 冻结数量
+            new_pos["available_quantity"] = (
+                new_pos["quantity"] - new_pos["frozen_quantity"]
+            )
+
+            if (new_pos.get("quantity", 0) == 0 and
+                    new_pos.get("available_quantity", 0) == 0 and
+                    new_pos.get("frozen_quantity", 0) == 0):
+                continue
+
+            result.append(new_pos)
+        return result
+
     def rollback_position(self, strategy_id: str, snapshot: Optional[dict]):
-        """根据快照撤销乐观持仓更新（解冻）。"""
+        """根据增量快照撤销乐观持仓更新（解冻）。"""
         strategy = self._repo.get_by_id(strategy_id)
         if not strategy or not snapshot:
             return
 
-        positions = [
-            p for p in strategy.positions
-            if p["stock_code"] != snapshot["stock_code"]
-        ]
-        total_qty = snapshot["quantity"] + snapshot["frozen_quantity"]
-        if total_qty > 0:
-            positions.append(_make_position(
-                stock_code=snapshot["stock_code"],
-                stock_name="",
-                quantity=snapshot["quantity"],
-                avg_cost=snapshot["avg_cost"],
-                available_quantity=snapshot["available_quantity"],
-                frozen_quantity=snapshot["frozen_quantity"],
-            ))
+        new_positions = self._rollback_position_deltas(
+            strategy.positions,
+            snapshot["stock_code"],
+            snapshot.get("delta_available_quantity", 0),
+            snapshot.get("delta_frozen_quantity", 0),
+        )
+        new_cash = strategy.available_cash - snapshot.get("delta_cash", 0.0)
 
         new_strategy = strategy.model_copy(update={
-            "available_cash": snapshot["available_cash"],
-            "positions": positions,
+            "available_cash": new_cash,
+            "positions": new_positions,
             "updated_at": _now_iso(),
         })
         self._persist(new_strategy)
@@ -243,7 +314,7 @@ class StrategyManager:
             self.rollback_position(strategy_id, snapshot)
             return
 
-        # 先回滚到委托前快照（完全解冻）
+        # 先回滚本订单的乐观冻结（仅撤销本订单增量，不影响其他待成交订单）
         self.rollback_position(strategy_id, snapshot)
 
         # 再按真实成交数量更新持仓
@@ -272,7 +343,7 @@ class StrategyManager:
         quantity: int,
         price: float,
     ) -> tuple:
-        """按真实成交更新持仓。买入增加总数量和可用数量，卖出减少。"""
+        """按真实成交更新持仓，并维持 available_quantity = quantity - frozen_quantity。"""
         cost = quantity * price
         positions = [dict(p) for p in positions]
         new_cash = available_cash
@@ -285,8 +356,10 @@ class StrategyManager:
                     total_qty = pos["quantity"] + quantity
                     total_cost = pos["avg_cost"] * pos["quantity"] + cost
                     pos["quantity"] = total_qty
-                    pos["available_quantity"] = pos.get("available_quantity", 0) + quantity
                     pos["avg_cost"] = round(total_cost / total_qty, 4) if total_qty > 0 else 0
+                    pos["available_quantity"] = (
+                        pos["quantity"] - pos.get("frozen_quantity", 0)
+                    )
                     found = True
                     break
             if not found:
@@ -301,7 +374,10 @@ class StrategyManager:
             for pos in positions:
                 if pos["stock_code"] == stock_code:
                     pos["quantity"] -= quantity
-                    pos["available_quantity"] = pos.get("available_quantity", 0) - quantity
+                    # frozen 已在 rollback 时清除本订单冻结，此处保持不变
+                    pos["available_quantity"] = (
+                        pos["quantity"] - pos.get("frozen_quantity", 0)
+                    )
                     if pos["quantity"] <= 0:
                         positions = [p for p in positions if p["stock_code"] != stock_code]
                     break
@@ -316,42 +392,31 @@ class StrategyManager:
         direction: str,
         quantity: int,
         price: float,
-    ) -> tuple:
-        """下单时冻结待成交数量。总数量不变，可用数量减少，冻结数量增加。"""
+    ) -> Optional[tuple]:
+        """下单时乐观冻结：买入只冻结资金；卖出冻结持仓可用数量。
+
+        返回 (new_positions, new_cash)；若卖出可用数量不足则返回 None。
+        """
         cost = quantity * price
         positions = [dict(p) for p in positions]
         new_cash = available_cash
 
         if direction == "buy":
             new_cash -= cost
-            found = False
-            for pos in positions:
-                if pos["stock_code"] == stock_code:
-                    pos["available_quantity"] = max(
-                        0, pos.get("available_quantity", 0) - quantity
-                    )
-                    pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
-                    found = True
-                    break
-            if not found:
-                # 买入新股票但尚未成交：总数量为 0，全部冻结
-                positions.append(_make_position(
-                    stock_code=stock_code,
-                    stock_name="",
-                    quantity=0,
-                    avg_cost=price,
-                    available_quantity=0,
-                    frozen_quantity=quantity,
-                ))
+            # 买入未成交前不创建/修改 position 行，仅冻结资金
         elif direction == "sell":
+            pos = next(
+                (p for p in positions if p["stock_code"] == stock_code), None
+            )
+            if pos is None:
+                return None
+            available = pos.get("available_quantity", pos.get("quantity", 0))
+            if available < quantity:
+                return None
+
             new_cash += cost
-            for pos in positions:
-                if pos["stock_code"] == stock_code:
-                    pos["available_quantity"] = max(
-                        0, pos.get("available_quantity", 0) - quantity
-                    )
-                    pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
-                    break
+            pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
+            pos["available_quantity"] = pos["quantity"] - pos["frozen_quantity"]
 
         return positions, new_cash
 

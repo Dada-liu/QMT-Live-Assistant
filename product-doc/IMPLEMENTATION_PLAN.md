@@ -425,8 +425,9 @@ graph LR
 - `create(data)` — 若提供了 positions，通过 `fetch_open_prices_from_xtdata`（来自 `backend.utils`）获取开盘价作为 avg_cost，计算总成本并校验 ≤ allocated_funds，从 available_cash 扣除持仓成本
 - `update(id, data)` — 支持 positions 对账；加仓时 avg_cost = (旧成本×旧量 + open_price×增量)/新量，减仓保留原成本，新增取 open_price
 - `find_by_token(token)` — 通过 Repository 按 Token 查找策略
+- `get_position(strategy_id, stock_code)` / `get_quantity(...)` / `get_available_quantity(...)` / `get_available_cash(...)` — 策略级只读查询，供 `JukuanOrderHandler` 在 strategy token 下单时做计算与校验
 - `update_position(...)` — 按实际成交更新持仓数量、可用数量与可用资金
-- `apply_optimistic_position(...)` — 下单时冻结对应数量（总数量不变，available_quantity 减少，frozen_quantity 增加），并返回快照用于回滚/修正
+- `apply_optimistic_position(...)` — 下单时按买入/卖出分别处理：买入仅冻结资金，不创建/修改 position 行；卖出校验策略可用持仓充足后减少 available_quantity、增加 frozen_quantity，并增加预期资金。返回增量快照用于回滚/修正
 - `rollback_position(...)` — 订单失败或撤单时根据快照解冻持仓
 - `reconcile_position(...)` — 实际成交与委托不一致时，先回滚到快照再按真实成交修正持仓
 - `add_trading_record(...)` — 添加买卖记录
@@ -488,9 +489,14 @@ graph LR
 `JukuanOrderHandler` 类：
 - 实现聚宽 API 风格的下单方法：`jukuan_order`、`jukuan_order_target`、`jukuan_order_value`、`jukuan_order_target_value`
 - 所有方法接收 QMT 格式代码（`stock_code`），内部通过 `qmt_to_jq()` 在订单备注中保留原始聚宽代码
-- `_get_price(trader, account, stock_code)` — 优先从当前持仓（市值/数量）获取参考价；无持仓时调用 `fetch_latest_prices_from_xtdata` 通过 QMT 全推行情获取 `lastPrice`；均无法获取时抛出异常
-- `_get_volume(...)` — 查询当前持仓数量
-- 价值下单/目标价值下单时自动获取最新价并计算下单量，按每手股数向下取整
+- 当调用方传入 `strategy_id` 时，下单数量与校验优先基于**策略级**数据：
+  - `_get_price(..., strategy_manager, strategy_id)` — 优先读取策略持仓 `avg_cost`；无策略或策略无持仓时，fallback 到账户持仓市值/行情价
+  - `_get_volume(..., strategy_manager, strategy_id)` — 优先返回策略持仓 `quantity`；无策略时返回账户持仓数量
+  - `jukuan_order_target` 的 `当前持仓` 使用策略持仓
+  - `jukuan_order_value` / `jukuan_order_target_value` 的当前市值、可买数量使用策略数据，且买入金额受 `strategy.available_cash` 限制
+- `_submit_order` 中对策略 token 订单做前置校验：
+  - 卖出：校验策略可用持仓 `available_quantity >= quantity`
+  - 买入：若已知委托价格，校验 `strategy.available_cash >= quantity * price`
 - 期货品种特殊处理：每手为 1，且支持 `side='short'` 反向开平仓
 - 返回结果包含 `stock_code`（QMT）和 `jq_code`（聚宽）双格式，便于上层 OrderTracker 记录与展示
 - 所有函数/方法已补充中文注释/文档字符串

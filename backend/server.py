@@ -421,9 +421,9 @@ class QMTServer:
 
                 method = getattr(handler, method_name)
                 if method_name in ('jukuan_order', 'jukuan_order_target'):
-                    result = method(qmt_code, amount, side=side)
+                    result = method(qmt_code, amount, side=side, strategy_id=strategy_id)
                 else:
-                    result = method(qmt_code, value, side=side)
+                    result = method(qmt_code, value, side=side, strategy_id=strategy_id)
 
                 # 保留原始聚宽代码便于返回和日志
                 result['jq_code'] = security

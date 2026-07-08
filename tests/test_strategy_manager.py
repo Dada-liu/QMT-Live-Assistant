@@ -157,6 +157,49 @@ class TestStrategyManagerCRUD:
         assert mgr.is_enabled("nonexistent") is False
 
 
+class TestStrategyManagerQueries:
+    @pytest.fixture
+    def mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        return mgr
+
+    def _first_id(self, mgr):
+        return list(mgr._strategies.keys())[0]
+
+    def test_get_position_found(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        pos = mgr.get_position(sid, "000001.SZ")
+        assert pos is not None
+        assert pos["quantity"] == 100
+
+    def test_get_position_not_found(self, mgr):
+        sid = self._first_id(mgr)
+        assert mgr.get_position(sid, "000001.SZ") is None
+
+    def test_get_position_strategy_not_found(self, mgr):
+        assert mgr.get_position("nonexistent", "000001.SZ") is None
+
+    def test_get_quantity(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        assert mgr.get_quantity(sid, "000001.SZ") == 100
+        assert mgr.get_quantity(sid, "999999.SZ") == 0
+        assert mgr.get_quantity("nonexistent", "000001.SZ") == 0
+
+    def test_get_available_quantity(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        assert mgr.get_available_quantity(sid, "000001.SZ") == 100
+        assert mgr.get_available_quantity("nonexistent", "000001.SZ") == 0
+
+    def test_get_available_cash(self, mgr):
+        sid = self._first_id(mgr)
+        assert mgr.get_available_cash(sid) == 100000
+        assert mgr.get_available_cash("nonexistent") == 0.0
+
+
 class TestStrategyManagerUpdate:
     @pytest.fixture
     def mgr(self):
@@ -277,14 +320,15 @@ class TestStrategyManagerOptimisticUpdates:
         sid = self._first_id(mgr)
         snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
         s = mgr.get(sid)
-        assert s.positions[0]["quantity"] == 0
-        assert s.positions[0]["available_quantity"] == 0
-        assert s.positions[0]["frozen_quantity"] == 100
+        # 买入未成交前不创建 position 行，仅冻结资金
+        assert len(s.positions) == 0
         assert s.available_cash == 100000 - 1000
         assert snapshot["quantity"] == 0
         assert snapshot["available_quantity"] == 0
         assert snapshot["frozen_quantity"] == 0
         assert snapshot["available_cash"] == 100000
+        assert snapshot["delta_cash"] == -1000
+        assert snapshot["delta_frozen_quantity"] == 0
 
     def test_apply_optimistic_position_sell(self, mgr):
         sid = self._first_id(mgr)
@@ -353,6 +397,131 @@ class TestStrategyManagerOptimisticUpdates:
         s = mgr.get(sid)
         assert len(s.positions) == 0
         assert s.available_cash == 100000
+
+
+class TestStrategyManagerMultiplePendingOrders:
+    @pytest.fixture
+    def mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        return mgr
+
+    def _first_id(self, mgr):
+        return list(mgr._strategies.keys())[0]
+
+    def _find_pos(self, mgr, stock_code="000001.SZ"):
+        s = mgr.get(self._first_id(mgr))
+        for p in s.positions:
+            if p["stock_code"] == stock_code:
+                return p
+        return None
+
+    def test_two_buys_pending_no_position_row(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot_a = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        snapshot_b = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 200, 11.0)
+
+        s = mgr.get(sid)
+        # 买入 pending 不创建 position 行，仅累计冻结资金
+        assert len(s.positions) == 0
+        assert s.available_cash == 100000 - 1000 - 2200
+
+        assert snapshot_a["delta_available_quantity"] == 0
+        assert snapshot_a["delta_frozen_quantity"] == 0
+        assert snapshot_a["delta_cash"] == -1000
+
+        assert snapshot_b["delta_available_quantity"] == 0
+        assert snapshot_b["delta_frozen_quantity"] == 0
+        assert snapshot_b["delta_cash"] == -2200
+
+    def test_two_buys_filled_create_position(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot_a = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        snapshot_b = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 200, 11.0)
+
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 100, 10.5, snapshot_a)
+
+        s = mgr.get(sid)
+        pos = s.positions[0]
+        assert pos["quantity"] == 100
+        assert pos["available_quantity"] == 100
+        assert pos["frozen_quantity"] == 0
+        assert pos["avg_cost"] == 10.5
+        assert s.available_cash == 100000 - 100 * 10.5 - 200 * 11.0
+
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 200, 200, 11.5, snapshot_b)
+
+        s = mgr.get(sid)
+        pos = s.positions[0]
+        assert pos["quantity"] == 300
+        assert pos["available_quantity"] == 300
+        assert pos["frozen_quantity"] == 0
+        assert pos["avg_cost"] == round((100 * 10.5 + 200 * 11.5) / 300, 4)
+
+    def test_rollback_buy_restores_cash_only(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.rollback_position(sid, snapshot)
+
+        s = mgr.get(sid)
+        assert len(s.positions) == 0
+        assert s.available_cash == 100000
+
+    def test_two_sells_interleaved(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 500, 10.0)
+
+        snapshot_a = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+        snapshot_b = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 200, 13.0)
+
+        pos = self._find_pos(mgr)
+        assert pos["quantity"] == 500
+        assert pos["available_quantity"] == 200
+        assert pos["frozen_quantity"] == 300
+        assert mgr.get(sid).available_cash == 100000 - 5000 + 1200 + 2600
+
+        mgr.reconcile_position(sid, "000001.SZ", "sell", 100, 100, 12.5, snapshot_a)
+
+        pos = self._find_pos(mgr)
+        assert pos["quantity"] == 400
+        assert pos["available_quantity"] == 200
+        assert pos["frozen_quantity"] == 200
+        assert mgr.get(sid).available_cash == 100000 - 5000 + 100 * 12.5 + 200 * 13.0
+
+        mgr.reconcile_position(sid, "000001.SZ", "sell", 200, 200, 13.5, snapshot_b)
+
+        pos = self._find_pos(mgr)
+        assert pos["quantity"] == 200
+        assert pos["available_quantity"] == 200
+        assert pos["frozen_quantity"] == 0
+        assert mgr.get(sid).available_cash == 100000 - 5000 + 100 * 12.5 + 200 * 13.5
+
+    def test_rollback_sell_keeps_other_sell_frozen(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 500, 10.0)
+
+        snapshot_a = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+        mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 200, 13.0)
+
+        mgr.rollback_position(sid, snapshot_a)
+
+        pos = self._find_pos(mgr)
+        assert pos["quantity"] == 500
+        assert pos["available_quantity"] == 300
+        assert pos["frozen_quantity"] == 200
+        assert mgr.get(sid).available_cash == 100000 - 5000 + 200 * 13.0
+
+    def test_sell_exceeds_available_rejected(self, mgr):
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 200, 12.0)
+        assert snapshot is None
+
+        pos = self._find_pos(mgr)
+        assert pos["quantity"] == 100
+        assert pos["available_quantity"] == 100
+        assert pos["frozen_quantity"] == 0
 
 
 class TestStrategyManagerTradingRecords:

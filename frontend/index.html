@@ -216,6 +216,16 @@
               <option value="">全部策略</option>
             </select>
           </div>
+          <div class="filter-group">
+            <label class="filter-label">状态</label>
+            <select class="form-input filter-select" id="filter-status">
+              <option value="">全部状态</option>
+              <option value="pending">待成交</option>
+              <option value="partial">部分成交</option>
+              <option value="filled">已成交</option>
+              <option value="failed">失败</option>
+            </select>
+          </div>
           <button class="btn btn-secondary btn-filter" id="btn-apply-filters">筛选</button>
           <button class="btn btn-secondary btn-filter" id="btn-reset-filters">重置</button>
         </div>
@@ -225,6 +235,7 @@
         <div class="signal-list" id="order-list">
           <div class="signal-empty">暂无订单记录，下单后将在此显示。</div>
         </div>
+        <div class="order-list-footer" id="order-list-footer">共 0 条订单</div>
       </div>
     </section>
 

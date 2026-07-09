@@ -7,6 +7,11 @@ export const UI = {
     _positionSortMode: null,
     _positionData: [],
     _selectedStrategyId: null,
+    _orderFilterHandler: null,
+
+    setOrderFilterHandler(handler) {
+        this._orderFilterHandler = handler;
+    },
 
     initDashboardInteraction() {
         const dashboard = document.getElementById('dashboard');
@@ -86,12 +91,14 @@ export const UI = {
 
     renderOrders() {
         const list = document.getElementById('order-list');
+        const footer = document.getElementById('order-list-footer');
         if (!list) return;
 
         const orders = getState('orders');
 
         if (orders.length === 0) {
             list.innerHTML = '<div class="signal-empty">暂无订单记录，下单后将在此显示。</div>';
+            if (footer) footer.textContent = '共 0 条订单';
             return;
         }
 
@@ -143,6 +150,7 @@ export const UI = {
         }).join('');
 
         list.innerHTML = header + rows;
+        if (footer) footer.textContent = `共 ${orders.length} 条订单`;
     },
 
     addOrder(order) {
@@ -467,7 +475,7 @@ export const UI = {
                 </div>
                 <div class="strategy-overview-footer">
                     <span class="strategy-meta">持仓 ${positionCount} 只</span>
-                    <span class="strategy-meta">订单 ${s.order_count || 0} 笔</span>
+                    <span class="strategy-meta strategy-order-count" data-strategy-name="${escapeHtml(s.name)}">订单 ${s.order_count || 0} 笔</span>
                 </div>
             </div>
             `;
@@ -475,6 +483,16 @@ export const UI = {
 
         // 事件委托：点击策略卡片
         grid.onclick = async (e) => {
+            const orderCount = e.target.closest('.strategy-order-count');
+            if (orderCount) {
+                e.stopPropagation();
+                const strategyName = orderCount.dataset.strategyName;
+                if (strategyName && this._orderFilterHandler) {
+                    this._orderFilterHandler(strategyName);
+                }
+                return;
+            }
+
             const card = e.target.closest('.strategy-overview-card.clickable');
             if (!card) return;
             const sid = card.dataset.strategyId;

@@ -29,6 +29,28 @@ export async function fetchOrders() {
     }
 }
 
+export function applyOrderFilters(filters) {
+    const startDateInput = document.getElementById('filter-start-date');
+    const endDateInput = document.getElementById('filter-end-date');
+    const strategyInput = document.getElementById('filter-strategy');
+    const statusInput = document.getElementById('filter-status');
+
+    if (startDateInput) startDateInput.value = filters.start_date || '';
+    if (endDateInput) endDateInput.value = filters.end_date || '';
+    if (strategyInput) strategyInput.value = filters.strategy_name || '';
+    if (statusInput) statusInput.value = filters.status || '';
+
+    setFilters({
+        start_date: filters.start_date || '',
+        end_date: filters.end_date || '',
+        strategy_name: filters.strategy_name || '',
+        status: filters.status || ''
+    });
+
+    UI.switchTab('trade');
+    fetchOrders();
+}
+
 export function initMonitor() {
     const btnApply = document.getElementById('btn-apply-filters');
     const btnReset = document.getElementById('btn-reset-filters');
@@ -39,7 +61,8 @@ export function initMonitor() {
             const startDate = document.getElementById('filter-start-date').value;
             const endDate = document.getElementById('filter-end-date').value;
             const strategyName = document.getElementById('filter-strategy').value;
-            setFilters({ start_date: startDate, end_date: endDate, strategy_name: strategyName });
+            const status = document.getElementById('filter-status').value;
+            setFilters({ start_date: startDate, end_date: endDate, strategy_name: strategyName, status });
             fetchOrders();
         });
     }
@@ -49,6 +72,7 @@ export function initMonitor() {
             document.getElementById('filter-start-date').value = '';
             document.getElementById('filter-end-date').value = '';
             document.getElementById('filter-strategy').value = '';
+            document.getElementById('filter-status').value = '';
             setFilters({});
             fetchOrders();
         });

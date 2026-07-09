@@ -564,7 +564,7 @@ graph LR
   #strategy-management — 策略管理（列表 + 添加/编辑/删除/启用禁用 + Token复制）
   #dashboard           — 账户仪表板（可用资金、持仓市值、总资产、当日盈亏）
   #strategy-overview   — 策略概览（各策略资产卡片 + 点击展开持仓明细表 + 刷新按钮）
-  #monitor             — 订单监控面板（筛选栏 + 实时订单列表）
+  #monitor             — 订单监控面板（日期/策略/状态筛选栏 + 实时订单列表 + 列表底部条数统计）
   #converter           — 聚宽代码转换工具
   #docs                — 文档浏览（Markdown 渲染）
 .footer                — 页脚
@@ -606,12 +606,13 @@ updateServerInfo(data), resetServerInfo(), renderOrders(), addOrder(order),
 clearOrders(), updateDashboard(data), disableForm(disable),
 toggleTheme(), initTheme(), showConnectPrompt(), hideConnectPrompt(),
 showSection(), hideSection(), switchTab(tabName), resetDashboard(),
-renderStrategyOverview(strategies), _renderPositionList(),
-_renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
+renderStrategyOverview(strategies), setOrderFilterHandler(handler),
+_renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 ```
+- `setOrderFilterHandler(handler)` — 注册策略订单数量被点击时的回调，回调接收 strategy_name，由 `app.js` 转发到 `applyOrderFilters` 实现跳转
 - `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
 - `_buildPositionRows()` — 可复用持仓表格行渲染函数，通过 opts 控制是否显示总盈亏列和可用数量列
-- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、订单数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）
+- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、订单数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）；订单数量可点击，点击后触发订单筛选跳转
 - `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染；现价使用 API 返回的实时 `current_price`，盈亏数据由后端计算
 
 **`config-panel.js`** — 配置面板
@@ -623,8 +624,10 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 **`strategy.js`** — 策略管理面板
 - `loadStrategies()` — 从 API 加载策略列表并渲染
 - `refreshStrategies()` — 调用刷新 API 更新行情数据（含当日盈亏）
-- 策略列表渲染：名称、描述、分配金额、可用资金、Token（可复制到剪贴板）、订单计数
+- 策略列表渲染：名称、描述、分配金额、可用资金、Token（可复制到剪贴板）、订单计数；订单计数可点击，点击后跳转至「买卖监控」并自动筛选该策略订单
 - 策略模态框：创建/编辑表单（名称必填、描述、分配金额必填、可选添加持仓）
+- 创建成功后展示策略 Token
+- `populateStrategyDropdown()` — 填充订单筛选的策略下拉
 - 编辑策略时先调用 `loadStrategies()` 刷新数据，确保分配数量输入框展示策略最新持仓数量
 - `loadAccountPositionsForAssign(strategy)` — 获取账户持仓并渲染分配数量输入框（step=100），计算可用数量（账户总量 - 其他策略已分配量）
 - 表单校验：名称不能为空、分配金额必须 > 0、分配数量须为 100 的整数倍且不超过可用数量、持仓总成本不超过分配金额
@@ -636,6 +639,7 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 - 实时订单列表渲染
 - 每 5 秒轮询 `/api/orders`，支持状态、日期、策略筛选参数
 - 筛选栏事件处理：日期选择器 + 策略下拉 + 状态筛选 + 筛选/重置
+- `applyOrderFilters(filters)` — 设置筛选栏各控件值、切换至「买卖监控」Tab 并拉取订单，用于策略订单数量点击跳转
 - 最多保留 200 条
 - 方向颜色：买入绿色、卖出红色
 
@@ -755,8 +759,10 @@ _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
 7. **聚宽下单**：用策略 Token 调用 `/api/jukuan_order` → 验证自动下单、OrderTracker 记录订单、策略持仓和资金自动更新
 8. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
-9. **订单筛选**：按状态、日期和策略筛选订单 → 验证筛选结果
-10. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
+9. **订单筛选**：按状态、日期和策略筛选订单 → 验证筛选结果；空列表时底部条数显示「共 0 条订单」
+10. **订单条数统计**：列表底部展示当前筛选结果条数，与列表实际数量一致
+11. **策略订单跳转**：点击策略概览卡片或策略管理列表中的「订单 N 笔」→ 验证自动跳转「买卖监控」并筛选对应策略
+12. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
 11. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
 12. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
 13. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘

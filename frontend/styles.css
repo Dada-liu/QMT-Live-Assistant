@@ -563,6 +563,13 @@ a:hover { text-decoration: underline; }
   color: var(--color-muted);
 }
 
+.order-list-footer {
+  padding: var(--spacing-sm) var(--spacing-base);
+  text-align: left;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
 /* --- Account Empty State --- */
 .account-empty-card {
   text-align: center;
@@ -885,6 +892,17 @@ a:hover { text-decoration: underline; }
   color: var(--color-muted);
 }
 
+.strategy-order-count {
+  cursor: pointer;
+  color: var(--color-primary);
+  transition: color 0.15s ease;
+}
+
+.strategy-order-count:hover {
+  color: var(--color-primary-hover, #003bb3);
+  text-decoration: underline;
+}
+
 /* Clickable strategy overview cards */
 .strategy-overview-card.clickable {
   cursor: pointer;
@@ -1085,6 +1103,16 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono);
   font-size: var(--text-caption);
   color: var(--color-primary);
+}
+
+.strategy-count.strategy-order-count {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.strategy-count.strategy-order-count:hover {
+  color: var(--color-primary-hover, #003bb3);
+  text-decoration: underline;
 }
 
 .strategy-token-row {

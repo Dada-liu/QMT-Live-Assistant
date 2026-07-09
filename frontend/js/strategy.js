@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { getState } from './state.js';
 import { UI } from './ui.js';
 import { Toast } from './toast.js';
+import { applyOrderFilters } from './monitor.js';
 
 let _strategies = [];
 
@@ -78,7 +79,7 @@ function renderStrategyList() {
             <div class="strategy-item-meta">
                 <span>分配: ${formatMoney(s.allocated_funds)}</span>
                 <span>可用: ${formatMoney(s.available_cash)}</span>
-                <span class="strategy-count">${s.order_count || 0} 订单</span>
+                <span class="strategy-count strategy-order-count" data-strategy-name="${escapeHtml(s.name)}">${s.order_count || 0} 订单</span>
             </div>
             <div class="strategy-item-status">
                 <button class="btn-sm btn-sm-toggle ${s.enabled ? 'enabled' : ''}" data-id="${s.id}" data-action="toggle">
@@ -145,6 +146,16 @@ function renderStrategyList() {
         btn.addEventListener('click', () => {
             const token = btn.dataset.token;
             copyToClipboard(token);
+        });
+    });
+
+    // Navigate to orders filtered by strategy
+    list.querySelectorAll('.strategy-order-count').forEach(el => {
+        el.addEventListener('click', () => {
+            const strategyName = el.dataset.strategyName;
+            if (strategyName) {
+                applyOrderFilters({ strategy_name: strategyName });
+            }
         });
     });
 }

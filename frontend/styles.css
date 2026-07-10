@@ -579,7 +579,7 @@ a:hover { text-decoration: underline; }
 
 .signal-log-item {
   display: grid;
-  grid-template-columns: 160px 120px 140px 1fr 100px 120px;
+  grid-template-columns: 160px 120px 200px 140px 120px 1fr;
   align-items: center;
   gap: var(--spacing-sm);
   padding: var(--spacing-sm) var(--spacing-base);

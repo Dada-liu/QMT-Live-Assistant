@@ -237,6 +237,44 @@
         </div>
         <div class="order-list-footer" id="order-list-footer">共 0 条订单</div>
       </div>
+
+      <div class="section-header" style="margin-top: var(--spacing-xl);">
+        <span class="section-label">信号日志</span>
+        <h2 class="section-title">接收日志</h2>
+        <p class="section-desc">记录远程策略服务器发送到本地下单接口的请求与处理结果，默认展示异常信号。</p>
+      </div>
+      <div class="card">
+        <div class="signal-filter-bar" id="signal-log-filter-bar">
+          <div class="filter-group">
+            <label class="filter-label">开始日期</label>
+            <input type="date" class="form-input filter-date" id="signal-log-start-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">结束日期</label>
+            <input type="date" class="form-input filter-date" id="signal-log-end-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">策略</label>
+            <select class="form-input filter-select" id="signal-log-strategy">
+              <option value="">全部策略</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">状态</label>
+            <select class="form-input filter-select" id="signal-log-status">
+              <option value="error">异常</option>
+              <option value="">全部</option>
+              <option value="success">正常</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-filter" id="btn-apply-signal-log-filters">筛选</button>
+          <button class="btn btn-secondary btn-filter" id="btn-reset-signal-log-filters">重置</button>
+        </div>
+        <div class="signal-log-list" id="signal-log-list">
+          <div class="signal-empty">暂无信号日志。</div>
+        </div>
+        <div class="order-list-footer" id="signal-log-footer">共 0 条信号</div>
+      </div>
     </section>
 
     <!-- 策略管理 -->

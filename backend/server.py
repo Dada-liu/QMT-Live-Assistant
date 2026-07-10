@@ -337,6 +337,62 @@ class QMTServer:
             result.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
             return {'success': True, 'data': result}
 
+        @app.get('/api/signal-logs')
+        async def get_signal_logs(
+            status: Optional[str] = None,
+            strategy_name: Optional[str] = None,
+            start_date: Optional[str] = None,
+            end_date: Optional[str] = None,
+            token: str = Depends(_verify_token),
+        ):
+            if _current_server._signal_log_repository is None:
+                return {'success': True, 'data': []}
+
+            strategies = _current_server.strategy_manager.list_all()
+            strategy_map = {s['id']: s['name'] for s in strategies}
+            name_to_id = {s['name']: s['id'] for s in strategies}
+
+            filters = {}
+            if strategy_name:
+                strategy_id = name_to_id.get(strategy_name)
+                if strategy_id:
+                    filters['strategy_id'] = strategy_id
+                else:
+                    return {'success': True, 'data': []}
+
+            logs = _current_server._signal_log_repository.list_all(**filters)
+
+            result = []
+            for log in logs:
+                is_error = bool(log.error_msg)
+                if status == 'error' and not is_error:
+                    continue
+                if status == 'success' and is_error:
+                    continue
+
+                received_at = log.received_at.isoformat() if log.received_at else None
+                date_part = (received_at or '')[:10]
+                if start_date and date_part < start_date:
+                    continue
+                if end_date and date_part > end_date:
+                    continue
+
+                result.append({
+                    "id": log.id,
+                    "strategy_id": log.strategy_id,
+                    "strategy_name": strategy_map.get(log.strategy_id, log.strategy_id or '--'),
+                    "endpoint": log.endpoint,
+                    "source_platform": log.source_platform,
+                    "payload": log.payload,
+                    "processed_order_id": log.processed_order_id,
+                    "error_msg": log.error_msg,
+                    "received_at": received_at,
+                    "status": "error" if is_error else "success",
+                })
+
+            result.sort(key=lambda x: x.get("received_at") or "", reverse=True)
+            return {'success': True, 'data': result}
+
         @app.get('/api/account-asset')
         async def account_asset(token: str = Depends(_verify_token)):
             try:

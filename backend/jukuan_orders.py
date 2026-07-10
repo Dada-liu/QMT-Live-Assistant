@@ -8,7 +8,7 @@ from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq
 from backend.qmt_client import create_trader
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
-from backend.qmt_xtconstant import LATEST_PRICE
+from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE
 
 FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
 
@@ -202,14 +202,21 @@ class JukuanOrderHandler:
         elif order_type == STOCK_BUY:
             self._check_strategy_buy_cash(stock_code, quantity, price, strategy_id)
 
+        if price > 0:
+            price_type = FIX_PRICE
+            order_price = price
+        else:
+            price_type = LATEST_PRICE
+            order_price = 0
+
         jq_code = qmt_to_jq(stock_code)
         order_id = self.trader.order_stock(
             self.account,
             stock_code=stock_code,
             order_type=order_type,
             order_volume=quantity,
-            price_type=LATEST_PRICE,
-            price=0,
+            price_type=price_type,
+            price=order_price,
             strategy_name=strategy_name,
             order_remark=jq_code,
         )
@@ -218,6 +225,8 @@ class JukuanOrderHandler:
             f"股票:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
             f"数量:{quantity} "
+            f"价格类型:{'限价' if price > 0 else '市价'} "
+            f"价格:{order_price:.2f} "
             f"订单编号:{order_id}"
         )
         return order_id
@@ -264,9 +273,14 @@ class JukuanOrderHandler:
 
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
+        price = _get_price(
+            self.trader, self.account, stock_code,
+            strategy_manager=self.strategy_manager, strategy_id=strategy_id,
+        )
+
         try:
             order_id = self._submit_order(
-                stock_code, order_type, quantity, price=0.0, strategy_id=strategy_id
+                stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
             msg = f"聚宽下单: {direction} {stock_code} {quantity}股"
             return {
@@ -275,7 +289,7 @@ class JukuanOrderHandler:
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': quantity,
-                'price': 0.0,
+                'price': price,
                 'order_type': order_type,
                 'message': msg,
             }
@@ -344,9 +358,14 @@ class JukuanOrderHandler:
 
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
+        price = _get_price(
+            self.trader, self.account, stock_code,
+            strategy_manager=self.strategy_manager, strategy_id=strategy_id,
+        )
+
         try:
             order_id = self._submit_order(
-                stock_code, order_type, quantity, price=0.0, strategy_id=strategy_id
+                stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
             msg = f"聚宽调仓: {direction} {stock_code} {quantity}股 (当前:{current_qty}→目标:{amount})"
             return {
@@ -355,7 +374,7 @@ class JukuanOrderHandler:
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': quantity,
-                'price': 0.0,
+                'price': price,
                 'order_type': order_type,
                 'message': msg,
             }

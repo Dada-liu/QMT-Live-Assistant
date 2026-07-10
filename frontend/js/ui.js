@@ -153,6 +153,65 @@ export const UI = {
         if (footer) footer.textContent = `共 ${orders.length} 条订单`;
     },
 
+    renderSignalLogs() {
+        const list = document.getElementById('signal-log-list');
+        const footer = document.getElementById('signal-log-footer');
+        if (!list) return;
+
+        const logs = getState('signalLogs') || [];
+
+        if (logs.length === 0) {
+            list.innerHTML = '<div class="signal-empty">暂无信号日志。</div>';
+            if (footer) footer.textContent = '共 0 条信号';
+            return;
+        }
+
+        const header = `
+          <div class="signal-log-item header">
+            <span>时间</span>
+            <span>策略</span>
+            <span>端点</span>
+            <span>代码</span>
+            <span>方向/数量</span>
+            <span>状态</span>
+          </div>
+        `;
+
+        const rows = logs.map(log => {
+            const time = log.received_at ? new Date(log.received_at).toLocaleString() : '--';
+            const strategyName = log.strategy_name || '--';
+            const endpoint = log.endpoint || '--';
+            const payload = log.payload || {};
+            const security = payload.security || '--';
+            const amount = payload.amount || 0;
+            const side = payload.side || '--';
+            const directionAmount = `${side} / ${amount}`;
+            const status = log.status || '--';
+            const errorMsg = log.error_msg || '';
+
+            let statusBadge = '';
+            if (status === 'error') statusBadge = '<span class="badge badge-error">异常</span>';
+            else if (status === 'success') statusBadge = '<span class="badge badge-success">正常</span>';
+            else statusBadge = `<span class="badge badge-warning">${status}</span>`;
+
+            const errorTip = errorMsg ? `<span class="signal-log-error" title="${escapeHtml(errorMsg)}">${escapeHtml(errorMsg)}</span>` : '';
+
+            return `
+              <div class="signal-log-item">
+                <span class="signal-time">${time}</span>
+                <span>${escapeHtml(strategyName)}</span>
+                <span>${escapeHtml(endpoint)}</span>
+                <span class="signal-msg">${escapeHtml(security)}</span>
+                <span>${escapeHtml(directionAmount)}</span>
+                <span>${statusBadge}${errorTip}</span>
+              </div>
+            `;
+        }).join('');
+
+        list.innerHTML = header + rows;
+        if (footer) footer.textContent = `共 ${logs.length} 条信号`;
+    },
+
     addOrder(order) {
         const orders = getState('orders');
         orders.push(order);

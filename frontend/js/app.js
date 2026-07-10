@@ -2,7 +2,7 @@ import { UI } from './ui.js';
 import { api } from './api.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { initConfigPanel } from './config-panel.js';
-import { initMonitor, fetchOrders, startStatusCheck, stopStatusCheck, applyOrderFilters } from './monitor.js';
+import { initMonitor, fetchOrders, fetchSignalLogs, startStatusCheck, stopStatusCheck, applyOrderFilters } from './monitor.js';
 import { initDashboard, refreshDashboard } from './dashboard.js';
 import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
@@ -117,6 +117,7 @@ function initTabNavigation() {
             UI.switchTab(targetId);
             if (targetId === 'trade') {
                 fetchOrders();
+                fetchSignalLogs();
             }
         });
     });

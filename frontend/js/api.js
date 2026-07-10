@@ -148,6 +148,18 @@ class APIClient {
             headers: { 'X-Token': token },
         });
     }
+
+    async getSignalLogs(token, filters = {}) {
+        const params = new URLSearchParams();
+        if (filters.status) params.append('status', filters.status);
+        if (filters.strategy_name) params.append('strategy_name', filters.strategy_name);
+        if (filters.start_date) params.append('start_date', filters.start_date);
+        if (filters.end_date) params.append('end_date', filters.end_date);
+        const query = params.toString();
+        return this.request(`api/signal-logs${query ? '?' + query : ''}`, {
+            headers: { 'X-Token': token },
+        });
+    }
 }
 
 export const api = new APIClient();

@@ -240,11 +240,21 @@ sequenceDiagram
     Svr->>Svr: 注入 daily_profit<br/>从 StrategyManager._daily_profit 读取
     Svr-->>Frontend: {cash, market_value, total_asset, daily_profit}
 
-    Note over 用户,QMT: === 订单监控轮询 ===
-    loop 每5秒
-        Frontend->>Svr: GET /api/orders (X-Token, ?status=&strategy_name=&start_date=)
-        Svr-->>Frontend: orders 列表
-        Frontend->>Frontend: 更新订单监控面板
+    Note over 用户,QMT: === 信号日志监控流程 ===
+    用户->>Frontend: 切换至「买卖监控」tab
+    Frontend->>Svr: GET /api/signal-logs (X-Token, ?status=error&strategy_name=...)
+    Svr->>Svr: 从 SignalLogRepository 读取日志，按日期/策略/状态过滤
+    Svr-->>Frontend: signal_logs 列表（含 payload、processed_order_id、error_msg）
+    Frontend->>Frontend: 渲染信号日志表格，默认展示异常信号
+
+    Note over 用户,QMT: === 信号日志写入流程 ===
+    Remote->>Main: POST /api/jukuan_order* {security, amount}
+    Main->>Svr: 校验策略 Token 并执行下单
+    Svr->>Svr: 写入 signal_logs（来源端点、payload、策略ID）
+    alt 下单成功
+        Svr->>Svr: 更新 signal_logs.processed_order_id
+    else 下单异常
+        Svr->>Svr: 更新 signal_logs.error_msg
     end
 ```
 
@@ -299,6 +309,7 @@ graph LR
         STATUS["GET /api/server-status"]
         CONN["GET /api/test-connection"]
         ORDERS["GET /api/orders<br/>(支持筛选参数)"]
+        SIG_LOGS["GET /api/signal-logs<br/>(支持筛选参数)"]
         ASSET["GET /api/account-asset"]
         POS["GET /api/account-positions"]
     end

@@ -2,7 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 
-_TOKEN = "8089f25305e39e97a8bb433836ef27b8"
+_TOKEN = "396cf0cf2c9a8b4da0e2ab7fc2b05cfc"
 
 def _load_client_class():
     """动态加载带横杠文件名的客户端模块"""
@@ -149,7 +149,7 @@ if __name__ == "__main__":
     client = create_client()
 
     # # 1. 按股数买入 100 股平安银行
-    result = order("000001.XSHE", 100, client=client)
+    result = order("000001.XSHE", 7000, client=client)
     print(f"按股数买入: {result}")
 
     # # 2. 按金额买入价值 10000 元的平安银行
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     # print(f"按金额卖出: {result}")
 
     # # 4. 将平安银行持仓调整到 200 股
-    # result = order_target("000001.XSHE", 8000, client=client)
+    # result = order_target("000001.XSHE", 800, client=client)
     # print(f"目标股数调仓: {result}")
 
     # # 5. 将平安银行持仓全部清仓

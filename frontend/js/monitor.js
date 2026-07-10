@@ -4,6 +4,7 @@ import { getState, setState, getStoredToken } from './state.js';
 import { refreshDashboard } from './dashboard.js';
 
 let currentFilters = {};
+let currentSignalLogFilters = { status: 'error' };
 
 export function setFilters(filters) {
     currentFilters = { ...filters };
@@ -11,6 +12,14 @@ export function setFilters(filters) {
 
 export function getCurrentFilters() {
     return { ...currentFilters };
+}
+
+export function setSignalLogFilters(filters) {
+    currentSignalLogFilters = { ...filters };
+}
+
+export function getCurrentSignalLogFilters() {
+    return { ...currentSignalLogFilters };
 }
 
 export async function fetchOrders() {
@@ -23,6 +32,21 @@ export async function fetchOrders() {
         if (result.success && result.data) {
             setState('orders', result.data);
             UI.renderOrders();
+        }
+    } catch (error) {
+        // silently ignore polling errors
+    }
+}
+
+export async function fetchSignalLogs() {
+    const token = getState('token');
+    if (!token) return;
+    const filters = getCurrentSignalLogFilters();
+    try {
+        const result = await api.getSignalLogs(token, filters);
+        if (result.success && result.data) {
+            setState('signalLogs', result.data);
+            UI.renderSignalLogs();
         }
     } catch (error) {
         // silently ignore polling errors
@@ -81,6 +105,35 @@ export function initMonitor() {
     if (btnClear) {
         btnClear.addEventListener('click', () => {
             UI.clearOrders();
+        });
+    }
+
+    initSignalLogMonitor();
+}
+
+function initSignalLogMonitor() {
+    const btnApply = document.getElementById('btn-apply-signal-log-filters');
+    const btnReset = document.getElementById('btn-reset-signal-log-filters');
+
+    if (btnApply) {
+        btnApply.addEventListener('click', () => {
+            const startDate = document.getElementById('signal-log-start-date').value;
+            const endDate = document.getElementById('signal-log-end-date').value;
+            const strategyName = document.getElementById('signal-log-strategy').value;
+            const status = document.getElementById('signal-log-status').value;
+            setSignalLogFilters({ start_date: startDate, end_date: endDate, strategy_name: strategyName, status });
+            fetchSignalLogs();
+        });
+    }
+
+    if (btnReset) {
+        btnReset.addEventListener('click', () => {
+            document.getElementById('signal-log-start-date').value = '';
+            document.getElementById('signal-log-end-date').value = '';
+            document.getElementById('signal-log-strategy').value = '';
+            document.getElementById('signal-log-status').value = 'error';
+            setSignalLogFilters({ status: 'error' });
+            fetchSignalLogs();
         });
     }
 }

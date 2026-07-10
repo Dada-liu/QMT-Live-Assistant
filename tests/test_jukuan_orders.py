@@ -8,6 +8,7 @@ from backend.jukuan_orders import (
     JukuanOrderHandler, _is_future, _lot_size, _round_down_to_lot,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
+from backend.qmt_xtconstant import FIX_PRICE
 
 
 class TestHelpers:
@@ -50,11 +51,20 @@ class TestJukuanOrder:
         assert result["order_id"] == 200001
         assert result["stock_code"] == "000001.SZ"
         assert result["jq_code"] == "000001.XSHE"
+        # 无持仓时从行情获取价格，mock 行情价为 12.55
+        assert result["price"] == 12.55
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.55
 
     def test_sell(self, handler):
         result = handler.jukuan_order("000001.SZ", -100)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
+        assert result["price"] == 12.55
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.55
 
     def test_zero_quantity_below_lot(self, handler):
         result = handler.jukuan_order("000001.SZ", 50)
@@ -63,19 +73,28 @@ class TestJukuanOrder:
         assert result["quantity"] == 0
 
     def test_future_long(self, handler):
-        result = handler.jukuan_order("RB8888.XSGE", 3, side="long")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"RB8888.XSGE": 4500.0}):
+            result = handler.jukuan_order("RB8888.XSGE", 3, side="long")
         assert result["direction"] == "buy"
         assert result["quantity"] == 3
         assert result["stock_code"] == "RB8888.XSGE"
         assert result["jq_code"] == "RB8888.XSGE"
+        assert result["price"] == 4500.0
 
     def test_future_short_open(self, handler):
-        result = handler.jukuan_order("RB8888.XSGE", 3, side="short")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"RB8888.XSGE": 4500.0}):
+            result = handler.jukuan_order("RB8888.XSGE", 3, side="short")
         assert result["direction"] == "sell"
+        assert result["price"] == 4500.0
 
     def test_future_short_cover(self, handler):
-        result = handler.jukuan_order("RB8888.XSGE", -3, side="short")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"RB8888.XSGE": 4500.0}):
+            result = handler.jukuan_order("RB8888.XSGE", -3, side="short")
         assert result["direction"] == "buy"
+        assert result["price"] == 4500.0
 
     def test_order_error(self, handler):
         handler.trader.order_stock.side_effect = Exception("下单失败")
@@ -111,11 +130,20 @@ class TestJukuanOrderTarget:
         assert result["direction"] == "buy"
         assert result["quantity"] == 100
         assert result["order_id"] == 200001
+        # _get_price 使用市值/数量 = 1200/100 = 12.0
+        assert result["price"] == 12.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.0
 
     def test_decrease(self, handler):
         result = handler.jukuan_order_target("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
+        assert result["price"] == 12.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.0
 
     def test_delta_below_lot(self, handler):
         handler.trader.query_stock_positions.return_value = []
@@ -145,11 +173,19 @@ class TestJukuanOrderValue:
         assert result["direction"] == "buy"
         assert result["quantity"] == 1000
         assert result["order_id"] == 200001
+        assert result["price"] == 10.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.0
 
     def test_sell_by_value(self, handler):
         result = handler.jukuan_order_value("000001.SZ", -5000)
         assert result["direction"] == "sell"
         assert result["quantity"] == 500
+        assert result["price"] == 10.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.0
 
     def test_value_too_small(self, handler):
         result = handler.jukuan_order_value("000001.SZ", 500)
@@ -202,11 +238,19 @@ class TestJukuanOrderTargetValue:
         assert result["direction"] == "buy"
         assert result["quantity"] == 200
         assert result["order_id"] == 200001
+        assert result["price"] == 10.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.0
 
     def test_decrease_value(self, handler):
         result = handler.jukuan_order_target_value("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
+        assert result["price"] == 10.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.0
 
 
 class TestJukuanOrderStrategyScoped:
@@ -251,6 +295,11 @@ class TestJukuanOrderStrategyScoped:
         assert result["direction"] == "buy"
         # 策略当前 300，目标 500，缺口 200
         assert result["quantity"] == 200
+        # 使用策略持仓 avg_cost=12.0 作为限价
+        assert result["price"] == 12.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.0
 
     def test_target_sell_rejected_when_strategy_short(self, handler):
         # 将策略可用持仓设为 0（全部冻结），此时 target=0 需要卖出 300 股，应被拒绝
@@ -263,6 +312,10 @@ class TestJukuanOrderStrategyScoped:
         result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
         assert result["direction"] == "buy"
         assert result["quantity"] == 4100
+        assert result["price"] == 12.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.0
 
     def test_value_sell_rejected_when_strategy_short(self, handler):
         with pytest.raises(ValueError, match="策略可用持仓不足"):
@@ -273,3 +326,7 @@ class TestJukuanOrderStrategyScoped:
         result = handler.jukuan_order_target_value("000001.SZ", 6000, strategy_id="strat-1")
         assert result["direction"] == "buy"
         assert result["quantity"] == 200
+        assert result["price"] == 12.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.0

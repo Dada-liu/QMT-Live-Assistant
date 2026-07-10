@@ -410,14 +410,19 @@ export function initStrategyPanel() {
 }
 
 export function populateStrategyDropdown() {
-    const select = document.getElementById('filter-strategy');
-    if (!select) return;
-    const currentValue = select.value;
-    select.innerHTML = '<option value="">全部策略</option>';
-    _strategies.forEach(s => {
-        select.innerHTML += `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`;
+    const selects = [
+        document.getElementById('filter-strategy'),
+        document.getElementById('signal-log-strategy'),
+    ];
+    selects.forEach(select => {
+        if (!select) return;
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">全部策略</option>';
+        _strategies.forEach(s => {
+            select.innerHTML += `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`;
+        });
+        select.value = currentValue;
     });
-    select.value = currentValue;
 }
 
 function escapeHtml(str) {

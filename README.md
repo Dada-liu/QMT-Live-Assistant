@@ -19,6 +19,7 @@
 - 策略 Token 认证：每个策略拥有独立 Token，远程下单携带策略 Token 即可关联
 - 数据持久化：策略、持仓、订单、信号日志等默认落库 SQLite，服务重启数据不丢失
 - 实时订单监控面板，支持按日期、策略和状态筛选；列表底部展示当前筛选结果条数
+- 信号日志面板，记录远程策略服务器发送到本地下单接口的请求与处理结果，支持按日期、策略和状态（异常/正常）筛选，默认展示异常信号，便于排查问题
 - 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
 - 聚宽格式 ↔ QMT 格式代码转换；策略持仓统一持久化为 QMT 格式（.SZ/.SH/.BJ）
 - 聚宽风格下单：支持按数量/金额/目标仓位下单，无持仓时自动通过 QMT 全推行情获取最新价
@@ -209,6 +210,7 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 | GET | `/api/account-asset` | 账户资产 |
 | GET | `/api/account-positions` | 账户持仓明细 |
 | GET | `/api/orders` | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`） |
+| GET | `/api/signal-logs` | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | QMT→聚宽 转换 |
 | POST | `/api/jukuan_order` | 聚宽风格按数量下单 |

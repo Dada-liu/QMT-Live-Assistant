@@ -141,6 +141,10 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
                 "available_quantity": p.available_quantity,
                 "frozen_quantity": p.frozen_quantity,
                 "avg_cost": float(p.avg_cost),
+                "yesterday_quantity": p.yesterday_quantity,
+                "yesterday_close": float(p.yesterday_close),
+                "today_bought_quantity": p.today_bought_quantity,
+                "today_bought_cost": float(p.today_bought_cost),
             }
             for p in row.positions
         ]
@@ -156,6 +160,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
                 p["avg_cost"] * p["quantity"] for p in positions
             ),
             daily_pnl=0.0,
+            last_rollover_date=row.last_rollover_date,
             positions=positions,
             trading_records=list(row.trading_records or []),
             deleted_at=row.deleted_at.isoformat() if row.deleted_at else None,
@@ -184,6 +189,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
         model.enabled = strategy.enabled
         model.allocated_funds = strategy.allocated_funds
         model.available_cash = strategy.available_cash
+        model.last_rollover_date = strategy.last_rollover_date
         model.trading_records = list(strategy.trading_records or [])
         model.updated_at = datetime.now(timezone.utc)
 
@@ -213,6 +219,10 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
                 available_quantity=pos.get("available_quantity", pos.get("quantity", 0)),
                 frozen_quantity=pos.get("frozen_quantity", 0),
                 avg_cost=pos.get("avg_cost", 0.0),
+                yesterday_quantity=pos.get("yesterday_quantity", 0),
+                yesterday_close=pos.get("yesterday_close", 0.0),
+                today_bought_quantity=pos.get("today_bought_quantity", 0),
+                today_bought_cost=pos.get("today_bought_cost", 0.0),
             ))
         return models
 

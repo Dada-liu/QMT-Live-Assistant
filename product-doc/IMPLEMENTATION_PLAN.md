@@ -223,10 +223,12 @@ sequenceDiagram
     Strat->>Client: trader.query_stock_positions(account)
     Client->>QMT: 查询持仓行情
     QMT-->>Client: 持仓数据（含市值、数量、当前价=市值/数量）
-    Strat->>QMT: xtdata.get_market_data<br/>获取 preClose（前收盘价）
+    Strat->>QMT: xtdata.get_market_data<br/>获取 preClose（前收盘价）<br/>用于跨日合并时作为 yesterday_close
     QMT-->>Strat: 日线K线数据
-    Strat->>Strat: 计算当日盈亏<br/>daily_pnl = market_value - preClose × quantity
-    Strat->>Strat: 按 QMT 总持仓比例分配市值到各策略
+    Strat->>Strat: 每日首次查询时自动跨日合并<br/>today_bought → yesterday，yesterday_close = preClose（失败则回退到 avg_cost）
+    Strat->>Strat: 计算策略分摊市值与现价
+    Strat->>Strat: 计算当日盈亏 daily_pnl<br/>= (current_price - yesterday_close) × yesterday_quantity<br/>+ (current_price × today_bought_quantity - today_bought_cost)
+    Strat->>Strat: 计算持仓盈亏 total_pnl<br/>= 策略分摊市值 - avg_cost × quantity
     Strat-->>Svr: 富化后的策略列表（含current_price/market_value/daily_pnl/total_pnl）
     Svr->>Ord: 按 strategy_id 统计订单数量
     Svr-->>Frontend: 策略概览数据（含 daily_pnl, order_count）
@@ -416,8 +418,9 @@ graph LR
 - id（自动生成 12 位 hex）、name（必填）、description、enabled
 - token（自动生成 32 位 hex，用于远程聚宽风格下单认证）
 - allocated_funds（必填，> 0）、available_cash（可用资金）
-- total_asset（总资产）、daily_pnl（当日盈亏，从 QMT 行情 + xtdata preClose 计算）
-- positions（持久化字段：stock_code 统一为 QMT 格式，stock_name, quantity, available_quantity, frozen_quantity, avg_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
+- total_asset（总资产）、daily_pnl（当日盈亏，由 list_all_enriched 根据昨日持仓和今日买入拆分计算后注入）
+- positions（持久化字段：stock_code 统一为 QMT 格式，stock_name, quantity, available_quantity, frozen_quantity, avg_cost, yesterday_quantity, yesterday_close, today_bought_quantity, today_bought_cost；行情字段 current_price/market_value/daily_pnl/total_pnl 由 list_all_enriched 实时计算注入）
+- last_rollover_date（上次跨日合并日期，格式 YYYYMMDD，用于每日首次查询时自动合并 today_bought → yesterday）
 - trading_records（买卖记录数组）
 - deleted_at（软删除标记，None 表示未删除）
 
@@ -442,7 +445,7 @@ graph LR
 - `rollback_position(...)` — 订单失败或撤单时根据快照解冻持仓
 - `reconcile_position(...)` — 实际成交与委托不一致时，先回滚到快照再按真实成交修正持仓
 - `add_trading_record(...)` — 添加买卖记录
-- `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取市值/数量 → 按策略占比分配 → 从 xtdata 获取 preClose → 计算 current_price (= 市值/数量)、market_value、daily_pnl (= 市值 - preClose×数量)、total_pnl (= 市值 - avg_cost×数量)；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
+- `list_all_enriched(trader, account)` → List[dict] — 返回所有策略，并用 QMT 实时行情富化持仓：从 QMT 获取账户持仓市值/数量 → 按策略持仓数量占账户总持仓比例分配市值 → 每日首次调用时检测 `last_rollover_date`，跨日自动将 `today_bought_quantity` 合并到 `yesterday_quantity` 并以昨日收盘价作为 `yesterday_close`；计算 `current_price` (= 市值/数量)、`market_value`（策略分摊市值）；`daily_pnl` 拆分为「昨日持仓部分：current_price×yesterday_quantity − yesterday_close×yesterday_quantity」+「今日买入部分：current_price×today_bought_quantity − today_bought_cost」；`total_pnl` = 策略分摊市值 − avg_cost×quantity；同时计算策略级 total_asset 和 daily_pnl。替代原 refresh_from_qmt+list_all 两步调用
 - `daily_profit` property — 返回全局当日盈亏（所有策略汇总）
 - 策略持仓统一以 QMT 格式（.SZ/.SH/.BJ）持久化，不再维护独立的信号计数
 

@@ -20,6 +20,10 @@ class PositionModel(Base):
     available_quantity: Mapped[int] = mapped_column(Integer, default=0)
     frozen_quantity: Mapped[int] = mapped_column(Integer, default=0)
     avg_cost: Mapped[float] = mapped_column(Numeric(19, 4), default=0)
+    yesterday_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    yesterday_close: Mapped[float] = mapped_column(Numeric(19, 4), default=0)
+    today_bought_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    today_bought_cost: Mapped[float] = mapped_column(Numeric(19, 4), default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow

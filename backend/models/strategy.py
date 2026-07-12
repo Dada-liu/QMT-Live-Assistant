@@ -21,6 +21,7 @@ class Strategy(BaseModel):
     available_cash: float = 0.0
     total_asset: float = 0.0
     daily_pnl: float = 0.0
+    last_rollover_date: Optional[str] = None
     positions: list = []
     trading_records: list = []
     deleted_at: Optional[str] = None

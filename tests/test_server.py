@@ -485,7 +485,7 @@ class TestOrderTrackingIntegration:
         s = server.strategy_manager.get(strategy["id"])
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["stock_code"] == "000001.SZ"
-        assert s.available_cash == 100000 - 1250
+        assert s.available_cash == 100000 - 1255
 
     def test_strategy_order_count_replaces_signal_count(self, client, server):
         strategy = self._create_strategy(client, server)

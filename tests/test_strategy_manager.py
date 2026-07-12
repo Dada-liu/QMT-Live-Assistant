@@ -573,6 +573,9 @@ class TestStrategyManagerDailyProfit:
         mgr = StrategyManager()
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
         mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        # 固定交易日，避免触发跨日合并
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(update={"last_rollover_date": "20260712"}))
 
         trader = MagicMock()
         mock_pos = MagicMock()
@@ -582,21 +585,85 @@ class TestStrategyManagerDailyProfit:
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
-        with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
-                   return_value={"000001.SZ": 10.0}):
+        with patch.object(mgr, "_current_trade_date", return_value="20260712"):
             result = mgr.list_all_enriched(trader, account)
 
         d = result[0]
         assert d["positions"][0]["market_value"] == 1200.0
         assert d["positions"][0]["daily_pnl"] == 200.0
         assert d["positions"][0]["current_price"] == 12.0  # 1200 / 100
+        assert d["positions"][0]["today_bought_quantity"] == 100
+        assert d["positions"][0]["today_bought_cost"] == 1000.0
         assert d["daily_pnl"] == 200.0
         assert mgr.daily_profit == 200.0
 
-    def test_list_all_enriched_no_preclose(self):
+    def test_list_all_enriched_today_bought_pnl(self):
         mgr = StrategyManager()
         s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
         mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(update={"last_rollover_date": "20260712"}))
+
+        trader = MagicMock()
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 100
+        mock_pos.market_value = 1500.0
+        trader.query_stock_positions.return_value = [mock_pos]
+        account = MagicMock()
+
+        with patch.object(mgr, "_current_trade_date", return_value="20260712"):
+            result = mgr.list_all_enriched(trader, account)
+
+        d = result[0]
+        # current_price=15, today_bought_cost=1000, today_qty=100
+        assert d["positions"][0]["daily_pnl"] == 500.0
+        assert d["daily_pnl"] == 500.0
+
+    def test_list_all_enriched_mixed_yesterday_and_today(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        # 先买入 100 股，并模拟成昨日持仓
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        pos["yesterday_quantity"] = 100
+        pos["yesterday_close"] = 10.0
+        pos["today_bought_quantity"] = 0
+        pos["today_bought_cost"] = 0.0
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(deep=True))
+        # 今日再买入 50 股（成交价 12）
+        mgr.update_position(s.id, "000001.SZ", "buy", 50, 12.0)
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(update={"last_rollover_date": "20260712"}))
+
+        trader = MagicMock()
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 150
+        mock_pos.market_value = 1950.0  # current_price=13
+        trader.query_stock_positions.return_value = [mock_pos]
+        account = MagicMock()
+
+        with patch.object(mgr, "_current_trade_date", return_value="20260712"):
+            result = mgr.list_all_enriched(trader, account)
+
+        d = result[0]
+        # yesterday: (13-10)*100 = 300
+        # today: 13*50 - 12*50 = 50
+        assert d["positions"][0]["daily_pnl"] == 350.0
+        assert d["daily_pnl"] == 350.0
+
+    def test_list_all_enriched_no_today_cost_fallback(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        pos["today_bought_cost"] = 0.0  # 模拟缺失成本
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(deep=True))
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(update={"last_rollover_date": "20260712"}))
 
         trader = MagicMock()
         mock_pos = MagicMock()
@@ -606,14 +673,12 @@ class TestStrategyManagerDailyProfit:
         trader.query_stock_positions.return_value = [mock_pos]
         account = MagicMock()
 
-        with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
-                   return_value={}):
+        with patch.object(mgr, "_current_trade_date", return_value="20260712"):
             result = mgr.list_all_enriched(trader, account)
 
         d = result[0]
+        # today_cost 为 0，今日部分不贡献 daily_pnl
         assert d["positions"][0]["daily_pnl"] == 0.0
-        assert d["daily_pnl"] == 0.0
-        assert mgr.daily_profit == 0.0
 
 
 class TestStrategyManagerCreateWithPositions:
@@ -636,9 +701,14 @@ class TestStrategyManagerCreateWithPositions:
         assert s.positions[0]["stock_code"] == "000001.SZ"
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["avg_cost"] == 12.45  # xtquant open_price
+        assert s.positions[0]["yesterday_quantity"] == 0
+        assert s.positions[0]["today_bought_quantity"] == 100
+        assert s.positions[0]["today_bought_cost"] == 1245.0
         assert s.positions[1]["stock_code"] == "000002.SZ"
         assert s.positions[1]["quantity"] == 200
         assert s.positions[1]["avg_cost"] == 8.10  # xtquant open_price
+        assert s.positions[1]["today_bought_quantity"] == 200
+        assert s.positions[1]["today_bought_cost"] == 1620.0
         # 100*12.45 + 200*8.10 = 1245 + 1620 = 2865
         assert s.available_cash == 100000 - 2865
 
@@ -685,6 +755,9 @@ class TestStrategyManagerUpdatePositions:
         assert len(s.positions) == 1
         assert s.positions[0]["stock_code"] == "000002.SZ"
         assert s.positions[0]["quantity"] == 50
+        assert s.positions[0]["yesterday_quantity"] == 0
+        assert s.positions[0]["today_bought_quantity"] == 50
+        assert s.positions[0]["today_bought_cost"] == 50 * s.positions[0]["avg_cost"]
 
     def test_update_positions_none_unchanged(self, mgr):
         sid = self._first_id(mgr)
@@ -698,3 +771,179 @@ class TestStrategyManagerUpdatePositions:
         assert len(s.positions) == 0
         # 移除持仓后退还市场价值
         assert s.available_cash == 100000
+
+
+class TestStrategyManagerFifoAndRollover:
+    def test_sell_fifo_deducts_yesterday_first(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        # 先买入 100 股，并模拟成昨日持仓
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        pos["yesterday_quantity"] = 100
+        pos["yesterday_close"] = 10.0
+        pos["today_bought_quantity"] = 0
+        pos["today_bought_cost"] = 0.0
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(deep=True))
+        # 今日再买入 50 股，成交价 12
+        mgr.update_position(s.id, "000001.SZ", "buy", 50, 12.0)
+
+        # 卖出 120 股：先扣 100 昨日，再扣 20 今日
+        mgr.update_position(s.id, "000001.SZ", "sell", 120, 15.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        assert pos["quantity"] == 30
+        assert pos["yesterday_quantity"] == 0
+        assert pos["today_bought_quantity"] == 30
+        assert pos["today_bought_cost"] == 30 * 12.0
+        # 卖出后剩余 30 股全部为今日买入，avg_cost 应更新为今日买入价 12.0
+        assert pos["avg_cost"] == 12.0
+
+    def test_sell_partial_yesterday_only(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        pos["yesterday_quantity"] = 100
+        pos["yesterday_close"] = 10.0
+        pos["today_bought_quantity"] = 0
+        pos["today_bought_cost"] = 0.0
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(deep=True))
+
+        mgr.update_position(s.id, "000001.SZ", "sell", 30, 15.0)
+        pos = mgr.get_position(s.id, "000001.SZ")
+        assert pos["quantity"] == 70
+        assert pos["yesterday_quantity"] == 70
+        assert pos["today_bought_quantity"] == 0
+
+    def test_rollover_merges_today_into_yesterday(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+
+        trader = MagicMock()
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 100
+        mock_pos.market_value = 1200.0
+        trader.query_stock_positions.return_value = [mock_pos]
+        account = MagicMock()
+
+        with patch.object(mgr, "_current_trade_date", return_value="20260713"):
+            with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
+                       return_value={"000001.SZ": 11.0}):
+                result = mgr.list_all_enriched(trader, account)
+
+        s = mgr.get(s.id)
+        assert s.last_rollover_date == "20260713"
+        pos = s.positions[0]
+        assert pos["yesterday_quantity"] == 100
+        assert pos["yesterday_close"] == 11.0
+        assert pos["today_bought_quantity"] == 0
+        assert pos["today_bought_cost"] == 0.0
+
+    def test_rollover_fallback_to_avg_cost_when_preclose_missing(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+
+        trader = MagicMock()
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 100
+        mock_pos.market_value = 1200.0
+        trader.query_stock_positions.return_value = [mock_pos]
+        account = MagicMock()
+
+        with patch.object(mgr, "_current_trade_date", return_value="20260713"):
+            with patch("backend.strategy_manager.fetch_preclose_from_xtdata",
+                       return_value={}):
+                mgr.list_all_enriched(trader, account)
+
+        s = mgr.get(s.id)
+        assert s.last_rollover_date == "20260713"
+        pos = s.positions[0]
+        assert pos["yesterday_quantity"] == 100
+        assert pos["yesterday_close"] == 10.0  # 回退到 avg_cost
+        assert pos["today_bought_quantity"] == 0
+        assert pos["today_bought_cost"] == 0.0
+
+    def test_total_pnl_uses_strategy_market_value(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        mgr.update_position(s.id, "000001.SZ", "buy", 100, 10.0)
+        strategy = mgr.get(s.id)
+        mgr._persist(strategy.model_copy(update={"last_rollover_date": "20260712"}))
+
+        # QMT 账户总持仓 500 股，市值 6275.0，策略只占 100 股
+        trader = MagicMock()
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 500
+        mock_pos.market_value = 6275.0
+        trader.query_stock_positions.return_value = [mock_pos]
+        account = MagicMock()
+
+        with patch.object(mgr, "_current_trade_date", return_value="20260712"):
+            result = mgr.list_all_enriched(trader, account)
+
+        d = result[0]
+        pos = d["positions"][0]
+        # 策略分摊市值 = 6275 * (100/500) = 1255.0
+        assert pos["market_value"] == 1255.0
+        # total_pnl 必须基于策略自身市值，而不是 QMT 账户总市值 6275.0
+        assert pos["total_pnl"] == round(1255.0 - 100 * 10.0, 2)
+
+    def test_rebuild_positions_reduce_updates_avg_cost(self):
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 10.0}):
+            s = mgr.create(StrategyCreate(
+                name="策略1",
+                allocated_funds=100000,
+                positions=[
+                    PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=10.0),
+                ]
+            ))
+        # 将持仓更新为更少的数量（减仓），且新价格与旧成本不同
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 20.0}):
+            s = mgr.update(s.id, StrategyUpdate(positions=[
+                PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=50, current_price=20.0),
+            ]))
+
+        pos = s.positions[0]
+        assert pos["quantity"] == 50
+        # 减仓后 avg_cost 保持原值 10.0
+        assert pos["avg_cost"] == 10.0
+        # today_bought_cost 必须与 avg_cost * quantity 一致
+        assert pos["today_bought_cost"] == round(50 * 10.0, 4)
+        assert pos["today_bought_quantity"] == 50
+
+    def test_rebuild_positions_increase_updates_avg_cost(self):
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 10.0}):
+            s = mgr.create(StrategyCreate(
+                name="策略1",
+                allocated_funds=100000,
+                positions=[
+                    PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=100, current_price=10.0),
+                ]
+            ))
+        # 增仓：旧 100 股成本 10.0，新增 50 股按开盘价 12.0
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            s = mgr.update(s.id, StrategyUpdate(positions=[
+                PositionAssignment(stock_code="000001.SZ", stock_name="平安银行", quantity=150, current_price=12.0),
+            ]))
+
+        pos = s.positions[0]
+        assert pos["quantity"] == 150
+        # avg_cost = (100*10 + 50*12) / 150 = 10.6667
+        expected_avg_cost = round((100 * 10.0 + 50 * 12.0) / 150, 4)
+        assert pos["avg_cost"] == expected_avg_cost
+        # today_bought_cost 必须与 avg_cost * quantity 一致
+        assert pos["today_bought_cost"] == round(150 * expected_avg_cost, 4)
+        assert pos["today_bought_quantity"] == 150

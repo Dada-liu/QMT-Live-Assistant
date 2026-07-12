@@ -16,7 +16,11 @@ def _now_iso() -> str:
 
 def _make_position(stock_code: str, stock_name: str, quantity: int, avg_cost: float,
                    available_quantity: Optional[int] = None,
-                   frozen_quantity: int = 0) -> dict:
+                   frozen_quantity: int = 0,
+                   yesterday_quantity: int = 0,
+                   yesterday_close: float = 0.0,
+                   today_bought_quantity: int = 0,
+                   today_bought_cost: float = 0.0) -> dict:
     """构造标准化持仓字典。"""
     return {
         "stock_code": stock_code,
@@ -25,6 +29,10 @@ def _make_position(stock_code: str, stock_name: str, quantity: int, avg_cost: fl
         "available_quantity": available_quantity if available_quantity is not None else quantity,
         "frozen_quantity": frozen_quantity,
         "avg_cost": avg_cost,
+        "yesterday_quantity": yesterday_quantity,
+        "yesterday_close": yesterday_close,
+        "today_bought_quantity": today_bought_quantity,
+        "today_bought_cost": today_bought_cost,
     }
 
 
@@ -65,6 +73,8 @@ class StrategyManager:
                     stock_name=pa.stock_name,
                     quantity=pa.quantity,
                     avg_cost=open_price,
+                    today_bought_quantity=pa.quantity,
+                    today_bought_cost=round(cost, 4),
                 ))
             if total_cost > data.allocated_funds:
                 raise ValueError(f"持仓总成本({total_cost:.2f})超过分配金额({data.allocated_funds:.2f})")
@@ -360,6 +370,10 @@ class StrategyManager:
                     pos["available_quantity"] = (
                         pos["quantity"] - pos.get("frozen_quantity", 0)
                     )
+                    pos["today_bought_quantity"] = pos.get("today_bought_quantity", 0) + quantity
+                    pos["today_bought_cost"] = round(
+                        pos.get("today_bought_cost", 0.0) + cost, 4
+                    )
                     found = True
                     break
             if not found:
@@ -368,19 +382,59 @@ class StrategyManager:
                     stock_name="",
                     quantity=quantity,
                     avg_cost=price,
+                    today_bought_quantity=quantity,
+                    today_bought_cost=round(cost, 4),
                 ))
         elif direction == "sell":
             new_cash += cost
+            new_positions = []
             for pos in positions:
-                if pos["stock_code"] == stock_code:
-                    pos["quantity"] -= quantity
-                    # frozen 已在 rollback 时清除本订单冻结，此处保持不变
-                    pos["available_quantity"] = (
-                        pos["quantity"] - pos.get("frozen_quantity", 0)
+                if pos["stock_code"] != stock_code:
+                    new_positions.append(pos)
+                    continue
+
+                new_pos = dict(pos)
+                remaining = quantity
+
+                # 先进先出：先扣减昨日持仓
+                yest_qty = new_pos.get("yesterday_quantity", 0)
+                if yest_qty > 0:
+                    deduct = min(remaining, yest_qty)
+                    new_pos["yesterday_quantity"] = yest_qty - deduct
+                    remaining -= deduct
+
+                # 再扣减今日买入持仓
+                if remaining > 0:
+                    today_qty = new_pos.get("today_bought_quantity", 0)
+                    today_cost = new_pos.get("today_bought_cost", 0.0)
+                    deduct = min(remaining, today_qty)
+                    avg_buy_price = (today_cost / today_qty) if today_qty > 0 else 0.0
+                    new_pos["today_bought_quantity"] = today_qty - deduct
+                    new_pos["today_bought_cost"] = round(
+                        today_cost - deduct * avg_buy_price, 4
                     )
-                    if pos["quantity"] <= 0:
-                        positions = [p for p in positions if p["stock_code"] != stock_code]
-                    break
+                    remaining -= deduct
+
+                new_pos["quantity"] = max(0, pos["quantity"] - quantity)
+                new_pos["available_quantity"] = max(
+                    0, new_pos["quantity"] - new_pos.get("frozen_quantity", 0)
+                )
+
+                # 卖出后按剩余持仓的拆分成本重新计算 avg_cost
+                if new_pos["quantity"] > 0:
+                    remaining_cost = (
+                        new_pos["yesterday_quantity"] * new_pos["yesterday_close"]
+                        + new_pos["today_bought_cost"]
+                    )
+                    new_pos["avg_cost"] = round(
+                        remaining_cost / new_pos["quantity"], 4
+                    )
+                else:
+                    new_pos["avg_cost"] = 0.0
+
+                if new_pos["quantity"] > 0:
+                    new_positions.append(new_pos)
+            positions = new_positions
 
         return positions, new_cash
 
@@ -430,11 +484,16 @@ class StrategyManager:
         for pa in positions_value:
             code = pa["stock_code"]
             open_price = open_prices.get(code) or pa.get("current_price", 0)
+            cost = pa["quantity"] * open_price
             new_by_code[code] = {
                 "stock_code": code,
                 "stock_name": pa.get("stock_name", ""),
                 "quantity": pa["quantity"],
                 "avg_cost": open_price,
+                "yesterday_quantity": 0,
+                "yesterday_close": 0.0,
+                "today_bought_quantity": pa["quantity"],
+                "today_bought_cost": round(cost, 4),
             }
 
         kept = []
@@ -472,12 +531,17 @@ class StrategyManager:
             raise ValueError("可用资金不足，无法完成持仓分配")
 
         # 重建后的持仓默认可用数量等于总数量，冻结为 0
+        # today_bought_cost 与最终 avg_cost 保持一致
         result = [
             _make_position(
                 stock_code=p["stock_code"],
                 stock_name=p.get("stock_name", ""),
                 quantity=p["quantity"],
                 avg_cost=p["avg_cost"],
+                yesterday_quantity=p.get("yesterday_quantity", 0),
+                yesterday_close=p.get("yesterday_close", 0.0),
+                today_bought_quantity=p.get("today_bought_quantity", 0),
+                today_bought_cost=round(p["quantity"] * p["avg_cost"], 4),
             )
             for p in kept
         ]
@@ -496,11 +560,54 @@ class StrategyManager:
         })
         self._persist(new_strategy)
 
+    def _current_trade_date(self) -> str:
+        """返回当前本地日期 YYYYMMDD。未来可替换为交易日历。"""
+        return datetime.now().strftime("%Y%m%d")
+
+    def _rollover_positions_if_needed(self, strategies: Dict[str, Strategy]) -> Dict[str, Strategy]:
+        """每日首次查询时自动检测日期，将 today_bought 合并到 yesterday。"""
+        current_date = self._current_trade_date()
+        result: Dict[str, Strategy] = {}
+        for sid, strategy in strategies.items():
+            if strategy.last_rollover_date == current_date:
+                result[sid] = strategy
+                continue
+
+            codes = {p["stock_code"] for p in strategy.positions if p.get("stock_code")}
+            preclose_map = fetch_preclose_from_xtdata(codes)
+
+            new_positions = []
+            for pos in strategy.positions:
+                code = pos["stock_code"]
+                qty = pos.get("quantity", 0)
+                preclose = preclose_map.get(code)
+                fallback_close = pos.get("avg_cost", 0.0)
+                yesterday_close = preclose if preclose is not None and preclose > 0 else fallback_close
+
+                new_pos = dict(pos)
+                new_pos["yesterday_quantity"] = qty
+                new_pos["yesterday_close"] = round(yesterday_close, 4)
+                new_pos["today_bought_quantity"] = 0
+                new_pos["today_bought_cost"] = 0.0
+                new_positions.append(new_pos)
+
+            new_strategy = strategy.model_copy(deep=True, update={
+                "positions": new_positions,
+                "last_rollover_date": current_date,
+                "updated_at": _now_iso(),
+            })
+            new_strategy = self._persist(new_strategy)
+            result[sid] = new_strategy
+        return result
+
     def list_all_enriched(self, trader, account) -> List[dict]:
         """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）。"""
         self._refresh_cache()
         if not self._strategies:
             return []
+
+        # 每日首次查询时自动跨日合并
+        self._strategies = self._rollover_positions_if_needed(self._strategies)
 
         qmt_positions = []
         try:
@@ -516,9 +623,6 @@ class StrategyManager:
                     qmt_positions.append(p)
         except Exception:
             pass
-
-        all_codes = {pos["stock_code"] for s in self._strategies.values() for pos in s.positions if pos["stock_code"]}
-        preclose_map = fetch_preclose_from_xtdata(all_codes)
 
         qmt_index = {}
         for p in qmt_positions:
@@ -559,17 +663,23 @@ class StrategyManager:
                 else:
                     enriched["market_value"] = round(enriched["current_price"] * qty, 2)
 
-                preclose = preclose_map.get(code)
-                mv = enriched["market_value"]
-                if preclose is not None and preclose > 0 and qty > 0:
-                    pos_daily_pnl = round(mv - preclose * qty, 2)
-                else:
-                    pos_daily_pnl = 0.0
-                enriched["daily_pnl"] = pos_daily_pnl
+                yest_qty = pos.get("yesterday_quantity", 0)
+                yest_close = pos.get("yesterday_close", 0.0)
+                today_qty = pos.get("today_bought_quantity", 0)
+                today_cost = pos.get("today_bought_cost", 0.0)
+                current_price = enriched["current_price"]
+
+                pos_daily_pnl = 0.0
+                if current_price > 0:
+                    if yest_qty > 0 and yest_close > 0:
+                        pos_daily_pnl += current_price * yest_qty - yest_close * yest_qty
+                    if today_qty > 0 and today_cost > 0:
+                        pos_daily_pnl += current_price * today_qty - today_cost
+                enriched["daily_pnl"] = round(pos_daily_pnl, 2)
                 daily_pnl_total += pos_daily_pnl
 
                 avg_cost = pos.get("avg_cost", 0)
-                enriched["total_pnl"] = round(mv - avg_cost * qty, 2) if qty > 0 else 0.0
+                enriched["total_pnl"] = round(enriched["market_value"] - avg_cost * qty, 2) if qty > 0 else 0.0
 
                 enriched_positions.append(enriched)
 

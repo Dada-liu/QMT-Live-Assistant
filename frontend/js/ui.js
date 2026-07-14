@@ -349,6 +349,23 @@ export const UI = {
         container.classList.remove('hidden');
     },
 
+    _showStrategyPositionLoading() {
+        const container = document.getElementById('strategy-position-list-container');
+        const list = document.getElementById('strategy-position-list');
+        const title = document.getElementById('strategy-position-title');
+        if (!container || !list || !title) return;
+
+        title.textContent = '持仓明细';
+        list.innerHTML = '<div class="position-loading">加载中...</div>';
+        container.classList.remove('hidden');
+    },
+
+    _renderStrategyPositionLoadError() {
+        const list = document.getElementById('strategy-position-list');
+        if (!list) return;
+        list.innerHTML = '<div class="position-empty">加载失败，请刷新重试</div>';
+    },
+
     _hideStrategyPositionList() {
         const container = document.getElementById('strategy-position-list-container');
         if (container) container.classList.add('hidden');
@@ -569,8 +586,13 @@ export const UI = {
                 this.renderStrategyOverview(strategies);
             } else {
                 this._selectedStrategyId = sid;
-                const { loadStrategies } = await import('./strategy.js');
-                await loadStrategies();
+                this._showStrategyPositionLoading();
+                try {
+                    const { loadStrategies } = await import('./strategy.js');
+                    await loadStrategies();
+                } catch (error) {
+                    this._renderStrategyPositionLoadError();
+                }
             }
         };
 

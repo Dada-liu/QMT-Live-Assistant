@@ -255,6 +255,7 @@ sequenceDiagram
     Remote->>Main: POST /api/jukuan_order* {security, amount}
     Main->>Svr: 校验策略 Token 并执行下单
     Svr->>Svr: 写入 signal_logs（来源端点、payload、策略ID）
+    Note right of Svr: received_at / created_at 使用 datetime.now(timezone.utc)<br/>SQLite 读取后若为 naive datetime，Repository 会附加 UTC 时区
     alt 下单成功
         Svr->>Svr: 更新 signal_logs.processed_order_id
     else 下单异常
@@ -789,3 +790,4 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 16. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
 17. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
 18. **卡片加载状态**：点击策略概览卡片、持仓市值卡片或当日盈亏卡片 → 验证请求接口前列表区域先展示 "加载中..."，请求完成后取消 loading 并正确渲染持仓明细；模拟请求失败时展示 "加载失败，请刷新重试"
+19. **信号日志时间时区**：触发一笔聚宽下单后调用 `/api/signal-logs` → 验证返回的 `received_at` 带 `+00:00` 时区后缀，前端展示的时间与本地时间一致，不再出现订单列表与日志列表时间偏差

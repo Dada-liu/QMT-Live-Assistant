@@ -519,21 +519,25 @@ export const UI = {
                     <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
                 </div>
                 <div class="strategy-overview-metrics">
-                    <div class="strategy-metric">
-                        <span class="strategy-metric-label">可用资金</span>
-                        <span class="strategy-metric-value">${formatCurrency(s.available_cash)}</span>
+                    <div class="strategy-overview-metrics-row">
+                        <div class="strategy-metric">
+                            <span class="strategy-metric-label">总资产</span>
+                            <span class="strategy-metric-value">${formatCurrency(s.total_asset)}</span>
+                        </div>
+                        <div class="strategy-metric">
+                            <span class="strategy-metric-label">当日盈亏</span>
+                            <span class="strategy-metric-value ${pnlClass}">${formatPnl(s.daily_pnl)}</span>
+                        </div>
                     </div>
-                    <div class="strategy-metric">
-                        <span class="strategy-metric-label">总资产</span>
-                        <span class="strategy-metric-value">${formatCurrency(s.total_asset)}</span>
-                    </div>
-                    <div class="strategy-metric">
-                        <span class="strategy-metric-label">冻结资金</span>
-                        <span class="strategy-metric-value">${formatCurrency(s.frozen_cash || 0)}</span>
-                    </div>
-                    <div class="strategy-metric">
-                        <span class="strategy-metric-label">当日盈亏</span>
-                        <span class="strategy-metric-value ${pnlClass}">${formatPnl(s.daily_pnl)}</span>
+                    <div class="strategy-overview-metrics-row">
+                        <div class="strategy-metric">
+                            <span class="strategy-metric-label">可用资金</span>
+                            <span class="strategy-metric-value">${formatCurrency(s.available_cash)}</span>
+                        </div>
+                        <div class="strategy-metric">
+                            <span class="strategy-metric-label">冻结资金</span>
+                            <span class="strategy-metric-value">${formatCurrency(s.frozen_cash || 0)}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="strategy-overview-footer">

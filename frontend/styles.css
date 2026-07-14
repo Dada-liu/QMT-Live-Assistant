@@ -867,7 +867,7 @@ a:hover { text-decoration: underline; }
 /* --- Strategy Overview --- */
 .strategy-overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
   gap: var(--spacing-lg);
 }
 
@@ -890,10 +890,16 @@ a:hover { text-decoration: underline; }
 }
 
 .strategy-overview-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--spacing-sm);
   margin-bottom: var(--spacing-base);
+}
+
+.strategy-overview-metrics-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--spacing-sm);
 }
 
 .strategy-metric {

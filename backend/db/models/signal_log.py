@@ -1,10 +1,9 @@
 """信号日志数据库模型。"""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import String, DateTime, ForeignKey, JSON, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.db.base import Base, uuid4_str
-from backend.utils import now_beijing
 
 
 class SignalLogModel(Base):
@@ -18,5 +17,16 @@ class SignalLogModel(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     processed_order_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("orders.id"), index=True)
     error_msg: Mapped[Optional[str]] = mapped_column(Text)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_beijing)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_beijing)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    def __init__(self, **kwargs):
+        if kwargs.get("received_at") is None:
+            kwargs["received_at"] = datetime.now(timezone.utc)
+        if kwargs.get("created_at") is None:
+            kwargs["created_at"] = datetime.now(timezone.utc)
+        super().__init__(**kwargs)

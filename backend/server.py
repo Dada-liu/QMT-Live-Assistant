@@ -9,7 +9,7 @@ import inspect
 import secrets
 import asyncio
 from typing import Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
 from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt
@@ -466,6 +466,8 @@ class QMTServer:
                         source_platform=request.get("source_platform"),
                         source_ip=None,
                         payload=request,
+                        received_at=datetime.now(timezone.utc),
+                        created_at=datetime.now(timezone.utc),
                     )
                 )
 

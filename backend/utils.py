@@ -3,16 +3,8 @@
 提供时间格式化、订单类型解析、股票后缀补全等通用工具，
 以及基于 xtquant 的前收盘价、开盘价、最新价和合约名称获取函数。
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
-
-
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def now_beijing() -> datetime:
-    """返回当前北京时间（UTC+8）的带时区 datetime 对象。"""
-    return datetime.now(BEIJING_TZ)
 
 
 def add_stock_suffix(stock_code: str) -> str:

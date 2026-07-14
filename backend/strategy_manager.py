@@ -468,7 +468,7 @@ class StrategyManager:
             if available < quantity:
                 return None
 
-            new_cash += cost
+            # 卖出未成交前仅冻结持仓，不提前增加资金；资金在成交后由 _apply_actual_fill 处理
             pos["frozen_quantity"] = pos.get("frozen_quantity", 0) + quantity
             pos["available_quantity"] = pos["quantity"] - pos["frozen_quantity"]
 

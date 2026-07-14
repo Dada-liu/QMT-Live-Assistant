@@ -338,11 +338,12 @@ class TestStrategyManagerOptimisticUpdates:
         assert s.positions[0]["quantity"] == 300
         assert s.positions[0]["available_quantity"] == 200
         assert s.positions[0]["frozen_quantity"] == 100
-        assert s.available_cash == 100000 - 3000 + 1200
+        assert s.available_cash == 100000 - 3000
         assert snapshot["quantity"] == 300
         assert snapshot["available_quantity"] == 300
         assert snapshot["frozen_quantity"] == 0
         assert snapshot["avg_cost"] == 10.0
+        assert snapshot["delta_cash"] == 0
 
     def test_rollback_buy_position(self, mgr):
         sid = self._first_id(mgr)
@@ -361,6 +362,21 @@ class TestStrategyManagerOptimisticUpdates:
         assert s.positions[0]["quantity"] == 300
         assert s.positions[0]["avg_cost"] == 10.0
         assert s.available_cash == 100000 - 3000
+
+    def test_sell_pending_does_not_increase_cash(self, mgr):
+        """未成交卖出订单只冻结持仓，不增加可用资金。"""
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 100, 12.0)
+
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 300
+        assert s.positions[0]["available_quantity"] == 200
+        assert s.positions[0]["frozen_quantity"] == 100
+        # 关键：卖出未成交前可用资金不变
+        assert s.available_cash == 100000 - 3000
+        assert snapshot["delta_cash"] == 0
+        assert snapshot["delta_frozen_quantity"] == 100
 
     def test_reconcile_full_fill(self, mgr):
         sid = self._first_id(mgr)
@@ -478,7 +494,7 @@ class TestStrategyManagerMultiplePendingOrders:
         assert pos["quantity"] == 500
         assert pos["available_quantity"] == 200
         assert pos["frozen_quantity"] == 300
-        assert mgr.get(sid).available_cash == 100000 - 5000 + 1200 + 2600
+        assert mgr.get(sid).available_cash == 100000 - 5000
 
         mgr.reconcile_position(sid, "000001.SZ", "sell", 100, 100, 12.5, snapshot_a)
 
@@ -486,7 +502,8 @@ class TestStrategyManagerMultiplePendingOrders:
         assert pos["quantity"] == 400
         assert pos["available_quantity"] == 200
         assert pos["frozen_quantity"] == 200
-        assert mgr.get(sid).available_cash == 100000 - 5000 + 100 * 12.5 + 200 * 13.0
+        # 第二个订单仍 pending，不提前增加资金
+        assert mgr.get(sid).available_cash == 100000 - 5000 + 100 * 12.5
 
         mgr.reconcile_position(sid, "000001.SZ", "sell", 200, 200, 13.5, snapshot_b)
 
@@ -509,7 +526,7 @@ class TestStrategyManagerMultiplePendingOrders:
         assert pos["quantity"] == 500
         assert pos["available_quantity"] == 300
         assert pos["frozen_quantity"] == 200
-        assert mgr.get(sid).available_cash == 100000 - 5000 + 200 * 13.0
+        assert mgr.get(sid).available_cash == 100000 - 5000
 
     def test_sell_exceeds_available_rejected(self, mgr):
         sid = self._first_id(mgr)

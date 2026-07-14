@@ -630,8 +630,10 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 - `setOrderFilterHandler(handler)` — 注册策略订单数量被点击时的回调，回调接收 strategy_name，由 `app.js` 转发到 `applyOrderFilters` 实现跳转
 - `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
 - `_buildPositionRows()` — 可复用持仓表格行渲染函数，通过 opts 控制是否显示总盈亏列和可用数量列
-- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、订单数），卡片可点击选中，点击后在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）；订单数量可点击，点击后触发订单筛选跳转
+- `renderStrategyOverview()` — 渲染策略概览卡片（可用资金、总资产、当日盈亏、持仓数、订单数），卡片可点击选中，点击后先展示 loading，再调用 API 加载并在下方展示该策略持仓明细表（6列，与账户持仓明细列一致）；订单数量可点击，点击后触发订单筛选跳转
 - `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染；现价使用 API 返回的实时 `current_price`，盈亏数据由后端计算
+- `_showStrategyPositionLoading()` / `_renderStrategyPositionLoadError()` — 策略卡片点击后展示/取消 loading 与错误提示
+- `_showAccountPositionLoading()` / `_renderAccountPositionLoadError()` — 账户持仓市值/当日盈亏卡片点击后展示/取消 loading 与错误提示
 
 **`config-panel.js`** — 配置面板
 - 表单提交处理（启动/停止服务器）
@@ -663,7 +665,7 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 
 **`dashboard.js`** — 仪表板
 - 4 张卡片：可用资金、持仓市值、总资产、当日盈亏
-- 点击「持仓市值」或「当日盈亏」卡片展开持仓明细表（6列，含总盈亏和当日盈亏百分比）
+- 点击「持仓市值」或「当日盈亏」卡片展开持仓明细表（6列，含总盈亏和当日盈亏百分比）；点击后先展示 loading，API 请求成功或失败后再取消 loading
 - 数字使用 JetBrains Mono 字体
 - 连接成功后和连接测试后自动更新
 
@@ -781,8 +783,9 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 10. **订单条数统计**：列表底部展示当前筛选结果条数，与列表实际数量一致
 11. **策略订单跳转**：点击策略概览卡片或策略管理列表中的「订单 N 笔」→ 验证自动跳转「买卖监控」并筛选对应策略
 12. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
-11. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
-12. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
-13. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
-14. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
-15. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
+13. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
+14. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
+15. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
+16. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
+17. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
+18. **卡片加载状态**：点击策略概览卡片、持仓市值卡片或当日盈亏卡片 → 验证请求接口前列表区域先展示 "加载中..."，请求完成后取消 loading 并正确渲染持仓明细；模拟请求失败时展示 "加载失败，请刷新重试"

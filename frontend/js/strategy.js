@@ -79,6 +79,7 @@ function renderStrategyList() {
             <div class="strategy-item-meta">
                 <span>分配: ${formatMoney(s.allocated_funds)}</span>
                 <span>可用: ${formatMoney(s.available_cash)}</span>
+                <span>冻结: ${formatMoney(s.frozen_cash || 0)}</span>
                 <span class="strategy-count strategy-order-count" data-strategy-name="${escapeHtml(s.name)}">${s.order_count || 0} 订单</span>
             </div>
             <div class="strategy-item-status">

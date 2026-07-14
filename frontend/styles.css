@@ -891,7 +891,7 @@ a:hover { text-decoration: underline; }
 
 .strategy-overview-metrics {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--spacing-sm);
   margin-bottom: var(--spacing-base);
 }

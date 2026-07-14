@@ -528,6 +528,10 @@ export const UI = {
                         <span class="strategy-metric-value">${formatCurrency(s.total_asset)}</span>
                     </div>
                     <div class="strategy-metric">
+                        <span class="strategy-metric-label">冻结资金</span>
+                        <span class="strategy-metric-value">${formatCurrency(s.frozen_cash || 0)}</span>
+                    </div>
+                    <div class="strategy-metric">
                         <span class="strategy-metric-label">当日盈亏</span>
                         <span class="strategy-metric-value ${pnlClass}">${formatPnl(s.daily_pnl)}</span>
                     </div>

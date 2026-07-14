@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy import String, DateTime, ForeignKey, JSON, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.db.base import Base, uuid4_str
+from backend.utils import now_beijing
 
 
 class SignalLogModel(Base):
@@ -17,5 +18,5 @@ class SignalLogModel(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     processed_order_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("orders.id"), index=True)
     error_msg: Mapped[Optional[str]] = mapped_column(Text)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_beijing)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_beijing)

@@ -29,6 +29,7 @@ export const UI = {
             }
 
             UI._positionSortMode = sortMode;
+            UI._showAccountPositionLoading();
             const token = getStoredToken();
             if (token) {
                 try {
@@ -37,7 +38,8 @@ export const UI = {
                         UI._positionData = result.data;
                     }
                 } catch (error) {
-                    // 静默忽略，使用已有持仓数据渲染
+                    UI._renderAccountPositionLoadError();
+                    return;
                 }
             }
             UI._renderPositionList();
@@ -362,6 +364,23 @@ export const UI = {
 
     _renderStrategyPositionLoadError() {
         const list = document.getElementById('strategy-position-list');
+        if (!list) return;
+        list.innerHTML = '<div class="position-empty">加载失败，请刷新重试</div>';
+    },
+
+    _showAccountPositionLoading() {
+        const container = document.getElementById('position-list-container');
+        const list = document.getElementById('position-list');
+        const hint = document.getElementById('position-sort-hint');
+        if (!container || !list || !hint) return;
+
+        hint.textContent = '';
+        list.innerHTML = '<div class="position-loading">加载中...</div>';
+        container.classList.remove('hidden');
+    },
+
+    _renderAccountPositionLoadError() {
+        const list = document.getElementById('position-list');
         if (!list) return;
         list.innerHTML = '<div class="position-empty">加载失败，请刷新重试</div>';
     },

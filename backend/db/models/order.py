@@ -1,7 +1,7 @@
 """订单数据库模型。"""
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import String, Integer, Numeric, DateTime, ForeignKey, JSON, Text
+from sqlalchemy import String, Integer, Numeric, DateTime, ForeignKey, JSON, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.db.base import Base, uuid4_str
 
@@ -37,6 +37,8 @@ class OrderModel(Base):
     order_remark: Mapped[Optional[str]] = mapped_column(String(64))
     request_payload: Mapped[Optional[dict]] = mapped_column(JSON)
     response_payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    optimistic_position_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    optimistic_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow

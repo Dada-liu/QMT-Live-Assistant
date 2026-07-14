@@ -148,7 +148,8 @@ class QMTServer:
             strategy_name=strategy_name,
             price=price,
             optimistic_position_applied=optimistic_applied,
-        ).optimistic_snapshot = snapshot
+            optimistic_snapshot=snapshot,
+        )
 
     async def _poll_orders_loop(self):
         """后台轮询 pending 订单状态，补偿漏掉的回调。"""
@@ -557,6 +558,15 @@ class QMTServer:
             for s in strategies:
                 orders = _current_server.order_tracker.get_orders_by_strategy(s["id"])
                 s["order_count"] = len(orders)
+                frozen_cash = sum(
+                    o.quantity * o.price
+                    for o in orders
+                    if o.direction == "buy"
+                    and o.status in (OrderState.PENDING, OrderState.PARTIAL)
+                    and o.optimistic_position_applied
+                )
+                s["frozen_cash"] = round(frozen_cash, 2)
+                s["total_asset"] = round(s["total_asset"] + frozen_cash, 2)
             return strategies
 
         @app.get('/api/strategies')

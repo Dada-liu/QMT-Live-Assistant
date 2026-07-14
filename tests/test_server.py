@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.server import QMTServer, create_server
+from backend.order_tracker import OrderTracker
 
 
 @pytest.fixture
@@ -486,6 +487,117 @@ class TestOrderTrackingIntegration:
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["stock_code"] == "000001.SZ"
         assert s.available_cash == 100000 - 1255
+
+    def test_strategy_jukuan_order_optimistic_snapshot_persisted(self, client, server):
+        """买入下单时应把乐观持仓快照写入订单对象。"""
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        tracked = server.order_tracker.get_order(order_id)
+        assert tracked.optimistic_position_applied is True
+        assert tracked.optimistic_snapshot is not None
+        assert tracked.optimistic_snapshot.get("delta_cash") < 0
+
+    def test_strategy_jukuan_order_failed_rolls_back_cash(self, client, server):
+        """买入失败后应恢复策略可用资金。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+
+        strategy = self._create_strategy(client, server)
+        before_cash = server.strategy_manager.get(strategy["id"]).available_cash
+
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        # 乐观扣除后资金减少
+        after_place_cash = server.strategy_manager.get(strategy["id"]).available_cash
+        assert after_place_cash < before_cash
+
+        # 模拟撤单失败
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_CANCELED, 0, 0.0
+        )
+
+        tracked = server.order_tracker.get_order(order_id)
+        assert tracked.status == "failed"
+
+        # 资金应恢复
+        after_fail_cash = server.strategy_manager.get(strategy["id"]).available_cash
+        assert after_fail_cash == before_cash
+
+    def test_strategy_total_asset_includes_frozen_cash(self, client, server):
+        """未成交买入订单的冻结资金应加回到 total_asset。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        # 未成交时 total_asset 应保持为初始分配资金
+        list_resp = client.get(
+            "/api/strategies",
+            headers={"X-Token": server.token},
+        )
+        data = list_resp.json()["data"]
+        strategy_data = next(s for s in data if s["id"] == strategy["id"])
+        assert strategy_data["total_asset"] == strategy["allocated_funds"]
+        assert strategy_data["frozen_cash"] == 1255
+
+        # 失败后冻结资金释放，total_asset 仍保持
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_CANCELED, 0, 0.0
+        )
+
+        list_resp = client.get(
+            "/api/strategies",
+            headers={"X-Token": server.token},
+        )
+        data = list_resp.json()["data"]
+        strategy_data = next(s for s in data if s["id"] == strategy["id"])
+        assert strategy_data["total_asset"] == strategy["allocated_funds"]
+        assert strategy_data["frozen_cash"] == 0
+
+    def test_strategy_frozen_cash_cleared_after_fill(self, client, server):
+        """买入成交后 frozen_cash 应为 0，total_asset 按真实持仓计算。"""
+        from backend.qmt_xtconstant import ORDER_SUCCEEDED
+
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_SUCCEEDED, 100, 12.55
+        )
+
+        list_resp = client.get(
+            "/api/strategies",
+            headers={"X-Token": server.token},
+        )
+        data = list_resp.json()["data"]
+        strategy_data = next(s for s in data if s["id"] == strategy["id"])
+        assert strategy_data["frozen_cash"] == 0
+        assert strategy_data["total_asset"] == 100000
 
     def test_strategy_order_count_replaces_signal_count(self, client, server):
         strategy = self._create_strategy(client, server)

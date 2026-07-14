@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from datetime import datetime, timezone
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from backend.db.base import Base
@@ -110,6 +111,75 @@ class TestSQLAlchemyOrderRepository:
         all_orders = repo.list_all()
         assert len(all_orders) == 2
         assert {o.order_id for o in all_orders} == {"100001", "100002"}
+
+    def test_save_and_restore_optimistic_snapshot(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+            optimistic_position_applied=True,
+            optimistic_snapshot={"delta_quantity": 0, "delta_cash": -1000.0},
+        )
+        repo.save(order)
+
+        found = repo.get_by_id("100001")
+        assert found.optimistic_position_applied is True
+        assert found.optimistic_snapshot == {"delta_quantity": 0, "delta_cash": -1000.0}
+
+    def test_update_preserves_optimistic_snapshot(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+            optimistic_position_applied=True,
+            optimistic_snapshot={"delta_quantity": 0, "delta_cash": -1000.0},
+        )
+        repo.save(order)
+
+        order.status = OrderState.FAILED
+        order.resolved_at = datetime.now(timezone.utc)
+        repo.save(order)
+
+        found = repo.get_by_id("100001")
+        assert found.status == OrderState.FAILED
+        assert found.optimistic_position_applied is True
+        assert found.optimistic_snapshot == {"delta_quantity": 0, "delta_cash": -1000.0}
+
+    def test_list_pending_includes_optimistic_snapshot(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+            optimistic_position_applied=True,
+            optimistic_snapshot={"delta_quantity": 0, "delta_cash": -1000.0},
+        )
+        repo.save(order)
+
+        pending = repo.list_pending()
+        assert len(pending) == 1
+        assert pending[0].optimistic_position_applied is True
+        assert pending[0].optimistic_snapshot["delta_cash"] == -1000.0
 
     def test_list_all_with_limit(self, db_session):
         repo = SQLAlchemyOrderRepository(db_session)

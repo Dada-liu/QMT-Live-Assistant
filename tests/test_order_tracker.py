@@ -286,3 +286,25 @@ class TestOrderTrackerLoadHistory:
         orders = tracker.list_all()
         assert len(orders) == 2
         assert tracker.get_pending_orders()[0].order_id == "100001"
+
+    def test_loads_pending_order_with_optimistic_snapshot(self):
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+            status=OrderState.PENDING,
+            optimistic_position_applied=True,
+            optimistic_snapshot={"delta_quantity": 0, "delta_cash": -1000.0},
+        ))
+
+        tracker = OrderTracker(repository=repo)
+        loaded = tracker.get_order("100001")
+        assert loaded.optimistic_position_applied is True
+        assert loaded.optimistic_snapshot == {"delta_quantity": 0, "delta_cash": -1000.0}

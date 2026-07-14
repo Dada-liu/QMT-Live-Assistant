@@ -64,6 +64,7 @@ class OrderTracker:
         strategy_name: str,
         price: float,
         optimistic_position_applied: bool = False,
+        optimistic_snapshot: Optional[dict] = None,
     ) -> TrackedOrder:
         """注册一笔新订单。"""
         order = TrackedOrder(
@@ -77,6 +78,7 @@ class OrderTracker:
             strategy_name=str(strategy_name) if strategy_name else "",
             price=price,
             optimistic_position_applied=optimistic_position_applied,
+            optimistic_snapshot=optimistic_snapshot,
         )
         self._orders[order.order_id] = order
         self._repo.save(order)

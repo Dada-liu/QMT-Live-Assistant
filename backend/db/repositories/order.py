@@ -203,7 +203,8 @@ class SQLAlchemyOrderRepository(OrderRepository):
             placed_at=row.placed_at or datetime.now(timezone.utc),
             resolved_at=row.resolved_at,
             error_msg=row.error_msg,
-            optimistic_position_applied=False,
+            optimistic_position_applied=row.optimistic_position_applied or False,
+            optimistic_snapshot=row.optimistic_snapshot,
         )
         return order
 
@@ -227,6 +228,8 @@ class SQLAlchemyOrderRepository(OrderRepository):
             resolved_at=order.resolved_at,
             strategy_id=order.strategy_id,
             strategy_name=order.strategy_name,
+            optimistic_position_applied=order.optimistic_position_applied,
+            optimistic_snapshot=order.optimistic_snapshot,
         )
 
     def _update_model(self, model: OrderModel, order: TrackedOrder) -> None:
@@ -242,6 +245,8 @@ class SQLAlchemyOrderRepository(OrderRepository):
         model.status = order.status
         model.resolved_at = order.resolved_at
         model.error_msg = order.error_msg
+        model.optimistic_position_applied = order.optimistic_position_applied
+        model.optimistic_snapshot = order.optimistic_snapshot
         model.updated_at = datetime.now(timezone.utc)
 
     def _resolve_internal_id(self, order_id: str) -> str:

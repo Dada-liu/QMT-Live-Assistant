@@ -215,6 +215,7 @@ sequenceDiagram
     Ord->>Ord: poll_and_reconcile() 轮询 pending 订单
     Ord->>Strat: reconcile_position() / rollback_position()
     Strat-->>Ord: 修正后持仓
+    Note right of Ord: rollback 依赖订单上的 optimistic_snapshot<br/>该快照已随订单持久化到数据库<br/>服务重启后仍可从 Repository 恢复并正确回滚资金
 
     Note over 用户,QMT: === 行情刷新流程（含当日盈亏计算）===
     用户->>Frontend: 点击「刷新行情」
@@ -230,8 +231,9 @@ sequenceDiagram
     Strat->>Strat: 计算当日盈亏 daily_pnl<br/>= (current_price - yesterday_close) × yesterday_quantity<br/>+ (current_price × today_bought_quantity - today_bought_cost)
     Strat->>Strat: 计算持仓盈亏 total_pnl<br/>= 策略分摊市值 - avg_cost × quantity
     Strat-->>Svr: 富化后的策略列表（含current_price/market_value/daily_pnl/total_pnl）
-    Svr->>Ord: 按 strategy_id 统计订单数量
-    Svr-->>Frontend: 策略概览数据（含 daily_pnl, order_count）
+    Svr->>Ord: 按 strategy_id 统计订单数量，并计算 pending 买入订单的 frozen_cash
+    Svr->>Svr: total_asset += frozen_cash（冻结资金加回，展示总资产不受影响）
+    Svr-->>Frontend: 策略概览数据（含 daily_pnl, order_count, frozen_cash, total_asset）
 
     Note over 用户,QMT: === 仪表板资产查询 ===
     用户->>Frontend: 加载仪表板
@@ -475,7 +477,7 @@ graph LR
   - `GET /api/account-positions` — 返回账户持仓明细
   - `POST /api/convert/jq-to-qmt`、`POST /api/convert/qmt-to-jq` — 代码转换
   - `GET /api/docs`、`GET /api/docs/{name}` — 文档内容
-- 在 `/api/strategies` 和 `/api/strategies/refresh` 返回前，从 OrderTracker 统计每个策略的订单数量并注入 `order_count`
+- 在 `/api/strategies` 和 `/api/strategies/refresh` 返回前，从 OrderTracker 统计每个策略的订单数量并注入 `order_count`；同时计算 pending/partial 买入订单的 `frozen_cash` 并注入，且把 `frozen_cash` 加回到 `total_asset`，使接口返回的策略总资产不受未成交订单影响
 - 创建/更新策略时通过 `normalize_to_qmt()` 将持仓 stock_code 统一为 QMT 格式
 - 聚宽下单端点写入 `signal_logs`，记录来源平台、请求 payload、处理后订单 ID 及异常信息
 - `init_and_setup()` → `run()` → `stop()`，`stop()` 关闭数据库 Session
@@ -486,6 +488,8 @@ graph LR
 - order_id, stock_code（QMT 格式）, jq_code（聚宽格式）, direction, quantity, filled_quantity, filled_price
 - status（pending / partial / filled / failed）, order_type, strategy_id, strategy_name
 - placed_at, resolved_at, error_msg, optimistic_position_applied, optimistic_snapshot
+
+`OrderModel` 与 `OrderRepository` 已同步持久化 `optimistic_position_applied` 和 `optimistic_snapshot`，确保服务重启后从数据库加载的 pending 订单仍保留回滚所需快照，订单失败时能够正确恢复策略资金。
 
 `OrderTracker` 类：
 - 通过构造函数注入 `OrderRepository`，未传入时自动降级为 `InMemoryOrderRepository`

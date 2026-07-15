@@ -24,7 +24,7 @@ class StrategyRepository(ABC):
     def get_by_token(self, token: str) -> Optional[Strategy]: ...
 
     @abstractmethod
-    def list_all(self, include_disabled: bool = False) -> List[Strategy]: ...
+    def list_all(self, include_disabled: bool = False, include_deleted: bool = False) -> List[Strategy]: ...
 
     @abstractmethod
     def save(self, strategy: Strategy) -> Strategy: ...
@@ -52,11 +52,12 @@ class InMemoryStrategyRepository(StrategyRepository):
             return None
         return self.get_by_id(strategy_id)
 
-    def list_all(self, include_disabled: bool = False) -> List[Strategy]:
+    def list_all(self, include_disabled: bool = False, include_deleted: bool = False) -> List[Strategy]:
         return [
             s.model_copy(deep=True)
             for s in self._store.values()
-            if include_disabled or s.enabled
+            if (include_disabled or s.enabled)
+            and (include_deleted or s.deleted_at is None)
         ]
 
     def save(self, strategy: Strategy) -> Strategy:
@@ -98,10 +99,12 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             return None
         return self.get_by_id(token_row.strategy_id)
 
-    def list_all(self, include_disabled: bool = False) -> List[Strategy]:
+    def list_all(self, include_disabled: bool = False, include_deleted: bool = False) -> List[Strategy]:
         query = self._session.query(StrategyModel)
-        if not include_disabled:
+        if not include_deleted:
             query = query.filter(StrategyModel.deleted_at.is_(None))
+        if not include_disabled:
+            query = query.filter(StrategyModel.enabled.is_(True))
         return [self._to_domain(row) for row in query.all()]
 
     def save(self, strategy: Strategy) -> Strategy:

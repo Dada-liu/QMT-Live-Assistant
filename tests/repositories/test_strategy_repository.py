@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from unittest.mock import MagicMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from backend.db.base import Base
@@ -55,9 +56,33 @@ class TestSQLAlchemyStrategyRepository:
         strategy = repo.save(Strategy(name="待删除", allocated_funds=10000))
         assert repo.delete(strategy.id) is True
         assert repo.get_by_id(strategy.id) is None
-        all_including_disabled = repo.list_all(include_disabled=True)
-        assert len(all_including_disabled) == 1
-        assert all_including_disabled[0].deleted_at is not None
+        all_including_deleted = repo.list_all(include_deleted=True)
+        assert len(all_including_deleted) == 1
+        assert all_including_deleted[0].deleted_at is not None
+
+    def test_list_all_include_disabled_does_not_include_deleted(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        s1 = repo.save(Strategy(name="保留", allocated_funds=10000))
+        s2 = repo.save(Strategy(name="删除", allocated_funds=10000))
+        assert repo.delete(s2.id) is True
+
+        # 默认查询：既不禁用也不删除
+        default_list = repo.list_all()
+        assert len(default_list) == 1
+        assert default_list[0].id == s1.id
+
+        # include_disabled=True 应包含禁用策略，但不包含已删除策略
+        disabled_included = repo.list_all(include_disabled=True)
+        assert len(disabled_included) == 1
+        assert disabled_included[0].id == s1.id
+        assert all(s.deleted_at is None for s in disabled_included)
+
+        # include_deleted=True 才能看到已删除策略
+        deleted_included = repo.list_all(include_deleted=True)
+        assert len(deleted_included) == 2
+        deleted_ids = {s.id for s in deleted_included}
+        assert s1.id in deleted_ids
+        assert s2.id in deleted_ids
 
     def test_save_updates_positions(self, db_session):
         repo = SQLAlchemyStrategyRepository(db_session)
@@ -129,3 +154,19 @@ class TestStrategyManagerWithSQLAlchemyRepository:
         found = mgr.get(strategy.id)
         assert len(found.positions) == 0
         assert found.available_cash == 100000
+
+    def test_deleted_strategy_not_returned_after_refresh(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        mgr = StrategyManager(repository=repo)
+        strategy = mgr.create(StrategyCreate(name="将被删除", allocated_funds=100000))
+        assert mgr.delete(strategy.id) is True
+
+        # 新建一个 StrategyManager 强制从 Repository 刷新缓存
+        new_mgr = StrategyManager(repository=repo)
+        assert new_mgr.get(strategy.id) is None
+
+        trader = MagicMock()
+        trader.query_stock_positions.return_value = []
+        account = MagicMock()
+        result = new_mgr.list_all_enriched(trader, account)
+        assert result == []

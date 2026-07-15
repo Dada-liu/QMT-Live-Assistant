@@ -110,16 +110,42 @@ async function checkServerStatus() {
 }
 
 function initTabNavigation() {
+    const navLinks = document.querySelector('.top-nav-links');
+    const menuToggle = document.getElementById('mobile-menu-toggle');
+
+    function setMobileMenuOpen(open) {
+        if (!navLinks || !menuToggle) return;
+        navLinks.classList.toggle('open', open);
+        menuToggle.setAttribute('aria-expanded', String(open));
+    }
+
+    if (menuToggle && navLinks) {
+        menuToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = navLinks.classList.contains('open');
+            setMobileMenuOpen(!isOpen);
+        });
+    }
+
     document.querySelectorAll('.top-nav-links a').forEach(link => {
         link.addEventListener('click', (e) => {
             e.preventDefault();
             const targetId = link.getAttribute('href').substring(1);
             UI.switchTab(targetId);
+            setMobileMenuOpen(false);
             if (targetId === 'trade') {
                 fetchOrders();
                 fetchSignalLogs();
             }
         });
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!navLinks || !menuToggle) return;
+        const target = e.target;
+        if (!navLinks.contains(target) && !menuToggle.contains(target)) {
+            setMobileMenuOpen(false);
+        }
     });
 }
 

@@ -504,6 +504,11 @@ export const UI = {
                 link.classList.add('active');
             }
         });
+
+        const navLinks = document.querySelector('.top-nav-links');
+        const menuToggle = document.getElementById('mobile-menu-toggle');
+        if (navLinks) navLinks.classList.remove('open');
+        if (menuToggle) menuToggle.setAttribute('aria-expanded', 'false');
     },
 
     resetDashboard() {

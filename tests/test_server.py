@@ -306,13 +306,22 @@ class TestStrategyManagement:
 
 
 class TestJukuanOrderAPI:
-    """聚宽下单 API 端点测试"""
+    """聚宽下单 API 端点测试（仅支持策略 Token）"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "聚宽测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
 
     def test_jukuan_order_buy(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
             json={"security": "000001.XSHE", "amount": 100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
         data = response.json()
@@ -320,47 +329,51 @@ class TestJukuanOrderAPI:
         assert data["data"]["direction"] == "buy"
 
     def test_jukuan_order_sell(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
             json={"security": "000001.XSHE", "amount": -100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["data"]["direction"] == "sell"
+        assert response.status_code == 500
+        assert "策略可用持仓不足" in response.json()["detail"]
 
     def test_jukuan_order_missing_security(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
             json={"amount": 100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 400
         assert "请提供 security" in response.json()["detail"]
 
     def test_jukuan_order_target(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order_target",
             json={"security": "000001.XSHE", "amount": 200},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
 
     def test_jukuan_order_value(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order_value",
             json={"security": "000001.XSHE", "value": 5000},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
 
     def test_jukuan_order_target_value(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order_target_value",
             json={"security": "000001.XSHE", "value": 10000},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
         assert response.json()["success"] is True
@@ -372,9 +385,27 @@ class TestJukuanOrderAPI:
         )
         assert response.status_code == 422
 
+    def test_jukuan_order_rejects_master_token(self, client, server):
+        """主 Token 不允许调用聚宽下单接口。"""
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 403
+        assert "策略Token" in response.json()["detail"]
+
 
 class TestOrdersApi:
     """订单查询 API 测试"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "订单查询测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
 
     def test_get_orders_empty(self, client, server):
         response = client.get(
@@ -387,10 +418,11 @@ class TestOrdersApi:
         assert data["data"] == []
 
     def test_get_orders_with_jukuan_order(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
             json={"security": "000001.XSHE", "amount": 100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
 
@@ -409,10 +441,11 @@ class TestOrdersApi:
         assert order["stock_code"] == "000001.SZ"
 
     def test_get_orders_filter_by_status(self, client, server):
+        strategy = self._create_strategy(client, server)
         client.post(
             "/api/jukuan_order",
             json={"security": "000001.XSHE", "amount": 100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
 
         response = client.get(
@@ -446,10 +479,11 @@ class TestOrderTrackingIntegration:
         return response.json()["data"]
 
     def test_jukuan_order_tracks_order(self, client, server):
+        strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
             json={"security": "000001.XSHE", "amount": 100},
-            headers={"X-Token": server.token},
+            headers={"X-Token": strategy["token"]},
         )
         assert response.status_code == 200
         order_id = response.json()["data"]["order_id"]

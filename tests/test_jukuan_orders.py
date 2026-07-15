@@ -303,7 +303,7 @@ class TestJukuanOrderStrategyScoped:
 
     def test_target_sell_rejected_when_strategy_short(self, handler):
         # 将策略可用持仓设为 0（全部冻结），此时 target=0 需要卖出 300 股，应被拒绝
-        handler.strategy_manager.get.return_value.positions[0]["available_quantity"] = 0
+        handler.strategy_manager.apply_optimistic_position.return_value = None
         with pytest.raises(ValueError, match="策略可用持仓不足"):
             handler.jukuan_order_target("000001.SZ", 0, strategy_id="strat-1")
 
@@ -318,8 +318,32 @@ class TestJukuanOrderStrategyScoped:
         assert call.kwargs["price"] == 12.0
 
     def test_value_sell_rejected_when_strategy_short(self, handler):
+        handler.strategy_manager.apply_optimistic_position.return_value = None
         with pytest.raises(ValueError, match="策略可用持仓不足"):
             handler.jukuan_order_value("000001.SZ", -100000, strategy_id="strat-1")
+
+    def test_buy_rejected_when_strategy_cash_insufficient(self, handler):
+        """固定数量买入超出策略可用资金时应拒绝，并不调用 QMT。"""
+        handler.strategy_manager.apply_optimistic_position.return_value = None
+        with pytest.raises(ValueError, match="策略可用资金不足"):
+            handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
+        handler.trader.order_stock.assert_not_called()
+
+    def test_target_buy_rejected_when_strategy_cash_insufficient(self, handler):
+        """目标持仓买入超出策略可用资金时应拒绝，并不调用 QMT。"""
+        handler.strategy_manager.apply_optimistic_position.return_value = None
+        with pytest.raises(ValueError, match="策略可用资金不足"):
+            handler.jukuan_order_target("000001.SZ", 1000, strategy_id="strat-1")
+        handler.trader.order_stock.assert_not_called()
+
+    def test_buy_rollback_when_qmt_fails(self, handler):
+        """QMT 下单失败时应回滚已冻结的策略资金。"""
+        snapshot = {"stock_code": "000001.SZ", "delta_cash": -60000.0}
+        handler.strategy_manager.apply_optimistic_position.return_value = snapshot
+        handler.trader.order_stock.side_effect = Exception("QMT 连接失败")
+        with pytest.raises(Exception, match="QMT 连接失败"):
+            handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
+        handler.strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)
 
     def test_target_value_uses_strategy_current_value(self, handler):
         # 策略当前 300 股 * 12 = 3600，目标 6000，delta=2400，可买 200 股

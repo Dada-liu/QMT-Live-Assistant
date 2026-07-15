@@ -117,7 +117,7 @@ class QMTServer:
 
     def _track_and_apply_order(self, order_result: dict, strategy_id: Optional[str],
                                strategy_name: str) -> None:
-        """将订单注册到跟踪器，并对策略持仓进行乐观更新。"""
+        """将订单注册到跟踪器；乐观冻结已在下单前完成，这里仅传递快照。"""
         order_id = order_result.get('order_id')
         if not order_id:
             return
@@ -129,13 +129,8 @@ class QMTServer:
         order_type = order_result.get('order_type', 0)
         qmt_code = order_result.get('qmt_code') or normalize_to_qmt(jq_code)
 
-        snapshot = None
-        optimistic_applied = False
-        if strategy_id and direction in ('buy', 'sell') and quantity > 0:
-            snapshot = self.strategy_manager.apply_optimistic_position(
-                strategy_id, qmt_code, direction, quantity, price
-            )
-            optimistic_applied = snapshot is not None
+        snapshot = order_result.get('optimistic_snapshot')
+        optimistic_applied = snapshot is not None
 
         self.order_tracker.track_order(
             order_id=order_id,
@@ -451,6 +446,8 @@ class QMTServer:
 
         async def _jukuan_endpoint(request: dict, x_token: str, method_name: str):
             strategy_name, strategy_id = _resolve_strategy(request, x_token)
+            if strategy_id is None:
+                raise HTTPException(status_code=403, detail="聚宽下单接口仅支持策略Token")
             handler = _get_jukuan_handler()
 
             security = request.get('security', '').strip()

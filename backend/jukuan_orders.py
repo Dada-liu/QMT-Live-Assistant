@@ -155,52 +155,47 @@ class JukuanOrderHandler:
         strategy = self.strategy_manager.get(strategy_id)
         return strategy.available_cash if strategy else 0.0
 
-    def _check_strategy_sell_available(
-        self, stock_code: str, quantity: int, strategy_id: Optional[str]
-    ) -> None:
-        """当按策略 token 卖出时，检查策略持仓可用数量是否足够。"""
-        if not strategy_id or self.strategy_manager is None:
-            return
-        available = self._get_strategy_available_quantity(strategy_id, stock_code)
-        if available < quantity:
-            raise ValueError(
-                f"策略可用持仓不足: {stock_code} 可用 {available} 股, 需要卖出 {quantity} 股"
-            )
-
-    def _check_strategy_buy_cash(
-        self, stock_code: str, quantity: int, price: float, strategy_id: Optional[str]
-    ) -> None:
-        """当按策略 token 买入且能确定成本时，检查策略可用资金是否足够。"""
-        if not strategy_id or self.strategy_manager is None or price <= 0:
-            return
-        available_cash = self._get_strategy_available_cash(strategy_id)
-        cost = quantity * price
-        if available_cash < cost:
-            raise ValueError(
-                f"策略可用资金不足: {stock_code} 需要 {cost:.2f}, 可用 {available_cash:.2f}"
-            )
-
     def _submit_order(self, stock_code: str, order_type: int, quantity: int,
                       price: float = 0.0,
                       strategy_name: str = 'jukuan_order',
-                      strategy_id: Optional[str] = None) -> int:
-        """向QMT提交一笔委托。
+                      strategy_id: Optional[str] = None) -> dict:
+        """向QMT提交一笔委托，返回包含订单编号与乐观冻结快照的字典。
+
+        在调用 QMT 下单接口之前，先通过 strategy_manager 完成资金/持仓的
+        乐观冻结，使校验与占用成为原子步骤，避免并发请求出现可用资金被重复扣减。
 
         Args:
             stock_code: QMT格式的证券代码。
             order_type: 委托类型（买入或卖出）。
             quantity: 委托数量，已按手数取整。
-            price: 参考价格，用于策略级资金校验。
+            price: 参考价格，用于乐观冻结与策略级资金校验。
             strategy_name: 策略名称，写入QMT订单备注。
-            strategy_id: 策略ID，用于校验策略持仓可用数量与资金。
+            strategy_id: 策略ID，用于校验并冻结策略持仓/资金。
 
         Returns:
-            QMT返回的订单编号。
+            包含 order_id（QMT返回的订单编号）和 optimistic_snapshot
+            （乐观冻结快照，用于后续 reconcile / rollback）的字典。
         """
-        if order_type == STOCK_SELL:
-            self._check_strategy_sell_available(stock_code, quantity, strategy_id)
-        elif order_type == STOCK_BUY:
-            self._check_strategy_buy_cash(stock_code, quantity, price, strategy_id)
+        direction = 'buy' if order_type == STOCK_BUY else 'sell'
+
+        # 先原子性地冻结资金/持仓；返回 None 说明资金或持仓不足
+        optimistic_snapshot = None
+        if strategy_id and self.strategy_manager is not None:
+            optimistic_snapshot = self.strategy_manager.apply_optimistic_position(
+                strategy_id, stock_code, direction, quantity, price
+            )
+            if optimistic_snapshot is None:
+                if direction == 'buy':
+                    available_cash = self._get_strategy_available_cash(strategy_id)
+                    cost = quantity * price
+                    raise ValueError(
+                        f"策略可用资金不足: {stock_code} 需要 {cost:.2f}, 可用 {available_cash:.2f}"
+                    )
+                else:
+                    available = self._get_strategy_available_quantity(strategy_id, stock_code)
+                    raise ValueError(
+                        f"策略可用持仓不足: {stock_code} 可用 {available} 股, 需要卖出 {quantity} 股"
+                    )
 
         if price > 0:
             price_type = FIX_PRICE
@@ -210,16 +205,28 @@ class JukuanOrderHandler:
             order_price = 0
 
         jq_code = qmt_to_jq(stock_code)
-        order_id = self.trader.order_stock(
-            self.account,
-            stock_code=stock_code,
-            order_type=order_type,
-            order_volume=quantity,
-            price_type=price_type,
-            price=order_price,
-            strategy_name=strategy_name,
-            order_remark=jq_code,
-        )
+        try:
+            order_id = self.trader.order_stock(
+                self.account,
+                stock_code=stock_code,
+                order_type=order_type,
+                order_volume=quantity,
+                price_type=price_type,
+                price=order_price,
+                strategy_name=strategy_name,
+                order_remark=jq_code,
+            )
+        except Exception as e:
+            # QMT 下单失败时回滚已冻结的资金/持仓
+            if optimistic_snapshot is not None:
+                self.strategy_manager.rollback_position(strategy_id, optimistic_snapshot)
+            raise
+
+        if not order_id:
+            if optimistic_snapshot is not None:
+                self.strategy_manager.rollback_position(strategy_id, optimistic_snapshot)
+            raise ValueError("QMT 下单失败，返回空订单号")
+
         logger.info(
             f"{BLUE}【聚宽下单】{RESET} "
             f"股票:{jq_code}→{stock_code} "
@@ -229,7 +236,10 @@ class JukuanOrderHandler:
             f"价格:{order_price:.2f} "
             f"订单编号:{order_id}"
         )
-        return order_id
+        return {
+            'order_id': order_id,
+            'optimistic_snapshot': optimistic_snapshot,
+        }
 
     # ---- (1) jukuan_order ----
 
@@ -279,9 +289,11 @@ class JukuanOrderHandler:
         )
 
         try:
-            order_id = self._submit_order(
+            submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            order_id = submit_result['order_id']
+            optimistic_snapshot = submit_result.get('optimistic_snapshot')
             msg = f"聚宽下单: {direction} {stock_code} {quantity}股"
             return {
                 'order_id': order_id,
@@ -291,6 +303,7 @@ class JukuanOrderHandler:
                 'quantity': quantity,
                 'price': price,
                 'order_type': order_type,
+                'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
         except Exception as e:
@@ -364,9 +377,11 @@ class JukuanOrderHandler:
         )
 
         try:
-            order_id = self._submit_order(
+            submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            order_id = submit_result['order_id']
+            optimistic_snapshot = submit_result.get('optimistic_snapshot')
             msg = f"聚宽调仓: {direction} {stock_code} {quantity}股 (当前:{current_qty}→目标:{amount})"
             return {
                 'order_id': order_id,
@@ -376,6 +391,7 @@ class JukuanOrderHandler:
                 'quantity': quantity,
                 'price': price,
                 'order_type': order_type,
+                'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
         except Exception as e:
@@ -435,9 +451,11 @@ class JukuanOrderHandler:
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
         try:
-            order_id = self._submit_order(
+            submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            order_id = submit_result['order_id']
+            optimistic_snapshot = submit_result.get('optimistic_snapshot')
             msg = (f"聚宽价值下单: {direction} {stock_code} {quantity}股 "
                    f"(价值:{value:.2f}, 价格:{price:.2f})")
             return {
@@ -448,6 +466,7 @@ class JukuanOrderHandler:
                 'quantity': quantity,
                 'price': price,
                 'order_type': order_type,
+                'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
         except Exception as e:

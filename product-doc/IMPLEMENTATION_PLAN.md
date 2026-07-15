@@ -194,20 +194,31 @@ sequenceDiagram
     Strat-->>Svr: Strategy（含 token，positions 为 QMT 格式）
     Svr-->>Frontend: 策略数据 + Token
 
-    Note over 用户,QMT: === 聚宽风格下单流程（策略Token） ===
+    Note over 用户,QMT: === 聚宽风格下单流程（仅策略Token） ===
     actor Remote as ☁️ 远程策略服务器
     Remote->>Main: POST /api/jukuan_order<br/>{security, amount, side}<br/>X-Token: <策略Token>
     Main->>Svr: verify_any_token() → 识别策略
-    Svr->>Svr: normalize_to_qmt(security) 转为 QMT 代码
-    Svr->>JK: jukuan_order(stock_code, amount, side)
-    JK->>JK: 查询当前持仓价格；无持仓时调用 fetch_latest_prices_from_xtdata 获取 lastPrice
-    JK->>Client: trader.order_stock()
-    Client->>QMT: 下单
-    JK-->>Svr: 返回委托结果（含 stock_code / jq_code）
-    Svr->>Ord: track_order() 注册订单
-    Svr->>Strat: apply_optimistic_position() 乐观更新持仓
-    Svr->>Strat: add_trading_record() 记录交易
-    Main-->>Remote: {success: true, data: {...}}
+    alt Token 为主 Token
+        Main-->>Remote: 403 拒绝（仅策略Token可下单）
+    else Token 为策略 Token
+        Svr->>Svr: normalize_to_qmt(security) 转为 QMT 代码
+        Svr->>JK: jukuan_order(stock_code, amount, side, strategy_id)
+        JK->>JK: 查询当前持仓价格；无持仓时调用 fetch_latest_prices_from_xtdata 获取 lastPrice
+        JK->>Strat: apply_optimistic_position() 原子冻结资金/持仓
+        alt 冻结失败（资金或持仓不足）
+            JK-->>Svr: 抛异常，不调用 QMT
+        else 冻结成功
+            JK->>Client: trader.order_stock()
+            Client->>QMT: 下单
+            alt QMT 下单失败
+                JK->>Strat: rollback_position() 回滚冻结
+            end
+        end
+        JK-->>Svr: 返回委托结果（含 stock_code / jq_code / optimistic_snapshot）
+        Svr->>Ord: track_order() 注册订单（携带 optimistic_snapshot）
+        Svr->>Strat: add_trading_record() 记录交易
+        Main-->>Remote: {success: true, data: {...}}
+    end
 
     Note over 用户,QMT: === 订单状态同步流程 ===
     QMT-->>Client: 回调 on_stock_order() / on_stock_trade()
@@ -254,12 +265,16 @@ sequenceDiagram
     Note over 用户,QMT: === 信号日志写入流程 ===
     Remote->>Main: POST /api/jukuan_order* {security, amount}
     Main->>Svr: 校验策略 Token 并执行下单
-    Svr->>Svr: 写入 signal_logs（来源端点、payload、策略ID）
-    Note right of Svr: received_at / created_at 使用 datetime.now(timezone.utc)<br/>SQLite 读取后若为 naive datetime，Repository 会附加 UTC 时区
-    alt 下单成功
-        Svr->>Svr: 更新 signal_logs.processed_order_id
-    else 下单异常
-        Svr->>Svr: 更新 signal_logs.error_msg
+    alt Token 为主 Token
+        Svr->>Svr: 返回 403，不写入 signal_logs
+    else Token 为策略 Token
+        Svr->>Svr: 写入 signal_logs（来源端点、payload、策略ID）
+        Note right of Svr: received_at / created_at 使用 datetime.now(timezone.utc)<br/>SQLite 读取后若为 naive datetime，Repository 会附加 UTC 时区
+        alt 下单成功
+            Svr->>Svr: 更新 signal_logs.processed_order_id
+        else 下单异常
+            Svr->>Svr: 更新 signal_logs.error_msg
+        end
     end
 ```
 
@@ -468,11 +483,11 @@ graph LR
 - `init_trader()` — 调用 create_trader
 - `_ensure_account_record()` — 启用数据库时，启动前同步当前账户信息到 `accounts` 表
 - `convert_to_dict(obj)` — 递归转换 XtQuant 对象为 dict
-- `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker，并对策略持仓进行乐观更新
+- `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker；乐观冻结已在 `JukuanOrderHandler._submit_order` 中完成，本方法仅将 `optimistic_snapshot` 随订单一起持久化，用于后续 reconcile / rollback
 - `setup_routes()` — 注册所有端点：
   - 动态端点（trader 方法自动映射）
   - 策略 CRUD：GET/POST `/api/strategies`、PUT/DELETE `/api/strategies/{id}`、POST toggle、POST refresh
-  - 聚宽下单：`/api/jukuan_order`、`/api/jukuan_order_target`、`/api/jukuan_order_value`、`/api/jukuan_order_target_value`
+  - 聚宽下单：`/api/jukuan_order`、`/api/jukuan_order_target`、`/api/jukuan_order_value`、`/api/jukuan_order_target_value`（仅接受策略 Token，主 Token 返回 403）
   - `GET /api/orders` — 支持 `status`、`strategy_name`、`start_date`、`end_date` 筛选
   - `GET /api/account-asset` — 返回账户资产 + 持仓明细（含 stock_name、open_price、total_pnl 等字段）+ daily_profit
   - `GET /api/account-positions` — 返回账户持仓明细
@@ -513,9 +528,11 @@ graph LR
   - `_get_volume(..., strategy_manager, strategy_id)` — 优先返回策略持仓 `quantity`；无策略时返回账户持仓数量
   - `jukuan_order_target` 的 `当前持仓` 使用策略持仓
   - `jukuan_order_value` / `jukuan_order_target_value` 的当前市值、可买数量使用策略数据，且买入金额受 `strategy.available_cash` 限制
-- `_submit_order` 中对策略 token 订单做前置校验：
-  - 卖出：校验策略可用持仓 `available_quantity >= quantity`
-  - 买入：若已知委托价格，校验 `strategy.available_cash >= quantity * price`
+- `_submit_order` 对策略 token 订单执行**原子校验与冻结**：
+  - 在调用 `trader.order_stock()` 之前，先调用 `strategy_manager.apply_optimistic_position()` 冻结资金/持仓
+  - 冻结失败（资金或持仓不足）时直接抛异常，订单不会发往 QMT
+  - QMT 下单失败（抛异常或返回空 order_id）时，立即调用 `rollback_position()` 回滚已冻结资金/持仓
+  - 返回结果包含 `stock_code`（QMT）、`jq_code`（聚宽）以及 `optimistic_snapshot`，便于上层 OrderTracker 记录、回滚与展示
 - 期货品种特殊处理：每手为 1，且支持 `side='short'` 反向开平仓
 - 返回结果包含 `stock_code`（QMT）和 `jq_code`（聚宽）双格式，便于上层 OrderTracker 记录与展示
 - 所有函数/方法已补充中文注释/文档字符串
@@ -779,15 +796,18 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 5. **策略管理**：创建策略（名称和分配金额必填，可选分配账户持仓）→ 获取 Token → 点击策略概览卡片查看持仓明细 → 编辑/删除策略；编辑时分配数量默认显示策略当前持仓数量
 6. **行情刷新**：点击刷新按钮 → 验证 xtdata 获取 preClose 并正确计算当日盈亏
 7. **聚宽下单**：用策略 Token 调用 `/api/jukuan_order` → 验证自动下单、OrderTracker 记录订单、策略持仓和资金自动更新
-8. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
-9. **订单筛选**：按状态、日期和策略筛选订单 → 验证筛选结果；空列表时底部条数显示「共 0 条订单」
-10. **订单条数统计**：列表底部展示当前筛选结果条数，与列表实际数量一致
-11. **策略订单跳转**：点击策略概览卡片或策略管理列表中的「订单 N 笔」→ 验证自动跳转「买卖监控」并筛选对应策略
-12. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
-13. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
-14. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
-15. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
-16. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
-17. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
-18. **卡片加载状态**：点击策略概览卡片、持仓市值卡片或当日盈亏卡片 → 验证请求接口前列表区域先展示 "加载中..."，请求完成后取消 loading 并正确渲染持仓明细；模拟请求失败时展示 "加载失败，请刷新重试"
-19. **信号日志时间时区**：触发一笔聚宽下单后调用 `/api/signal-logs` → 验证返回的 `received_at` 带 `+00:00` 时区后缀，前端展示的时间与本地时间一致，不再出现订单列表与日志列表时间偏差
+8. **聚宽主Token拒绝**：用主 Token 调用 `/api/jukuan_order` → 验证返回 403，订单不发往 QMT
+9. **聚宽资金不足拒绝**：为策略设置少量可用资金，用策略 Token 调用 `/api/jukuan_order` 买入超出资金的固定数量 → 验证返回 500 且 `trader.order_stock` 未被调用
+10. **聚宽价值下单无持仓场景**：对当前无持仓的股票调用 `/api/jukuan_order_value` → 验证通过 `get_full_tick` 获取最新价并成功计算下单数量
+11. **订单筛选**：按状态、日期和策略筛选订单 → 验证筛选结果；空列表时底部条数显示「共 0 条订单」
+12. **订单条数统计**：列表底部展示当前筛选结果条数，与列表实际数量一致
+13. **策略订单跳转**：点击策略概览卡片或策略管理列表中的「订单 N 笔」→ 验证自动跳转「买卖监控」并筛选对应策略
+14. **代码转换**：验证 jq_to_qmt、qmt_to_jq 以及 `normalize_to_qmt()` 归一化行为正确性
+15. **代码归一化**：通过 `/api/strategies` 创建/更新持仓时使用聚宽代码（如 `000001.XSHE`），返回数据中 `stock_code` 应为 QMT 格式（`000001.SZ`）
+16. **订单计数**：下单后策略列表与策略概览卡片显示「订单 1 笔」，不再显示信号计数
+17. **桌面窗口模式**：`--window` 参数启动 → 验证 pywebview 原生窗口 + 系统托盘
+18. **系统托盘模式**：`--tray` 参数启动 → 验证托盘菜单功能
+19. **EXE 打包**：PyInstaller 打包 → 双击 .exe 验证完整功能
+20. **卡片加载状态**：点击策略概览卡片、持仓市值卡片或当日盈亏卡片 → 验证请求接口前列表区域先展示 "加载中..."，请求完成后取消 loading 并正确渲染持仓明细；模拟请求失败时展示 "加载失败，请刷新重试"
+21. **信号日志时间时区**：触发一笔聚宽下单后调用 `/api/signal-logs` → 验证返回的 `received_at` 带 `+00:00` 时区后缀，前端展示的时间与本地时间一致，不再出现订单列表与日志列表时间偏差
+22. **原子冻结与并发安全**：连续或并发对同一策略发起多笔买入，总金额超过 `available_cash` → 验证后续订单被拒绝，策略可用资金不会被扣成负数

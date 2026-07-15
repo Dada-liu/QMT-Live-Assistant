@@ -16,7 +16,7 @@
 - 账户仪表板：展示账户资产卡片，点击持仓市值或当日盈亏卡片可展开账户持仓明细表（加载期间展示 loading，失败时显示错误提示）
 - 多策略管理：创建多个交易策略，各自独立分配资金、跟踪持仓、接收聚宽风格下单
 - 策略概览：查看各策略的可用资金、总资产、当日盈亏、冻结资金与订单数量；点击策略卡片展开持仓明细表（加载期间展示 loading），点击订单数量可跳转至订单列表并自动筛选对应策略
-- 聚宽风格下单：远程策略服务器通过 `/api/jukuan_order*` 接口下单，自动关联策略并更新持仓
+- 聚宽风格下单：远程策略服务器通过 `/api/jukuan_order*` 接口下单，仅支持策略 Token，自动关联策略并更新持仓
 - 策略 Token 认证：每个策略拥有独立 Token，远程下单携带策略 Token 即可关联
 - 数据持久化：策略、持仓、订单、信号日志等默认落库 SQLite，服务重启数据不丢失
 - 实时订单监控面板，支持按日期、策略和状态筛选；列表底部展示当前筛选结果条数
@@ -208,21 +208,21 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 | POST | `/api/strategies/{id}/toggle` | 切换启用/禁用 |
 | POST | `/api/strategies/refresh` | 从 QMT 刷新策略持仓行情 |
 
-### 交易 API（需要 X-Token 头，主 Token 或策略 Token）
+### 交易 API
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/test-connection` | 测试连接，返回资产数据 |
-| GET | `/api/account-asset` | 账户资产 |
-| GET | `/api/account-positions` | 账户持仓明细 |
-| GET | `/api/orders` | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`） |
-| GET | `/api/signal-logs` | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
-| POST | `/api/convert/jq-to-qmt` | 聚宽→QMT 转换 |
-| POST | `/api/convert/qmt-to-jq` | QMT→聚宽 转换 |
-| POST | `/api/jukuan_order` | 聚宽风格按数量下单 |
-| POST | `/api/jukuan_order_target` | 聚宽风格目标持仓下单 |
-| POST | `/api/jukuan_order_value` | 聚宽风格按金额下单 |
-| POST | `/api/jukuan_order_target_value` | 聚宽风格目标市值下单 |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/test-connection` | X-Token（主 Token） | 测试连接，返回资产数据 |
+| GET | `/api/account-asset` | X-Token（主 Token） | 账户资产 |
+| GET | `/api/account-positions` | X-Token（主 Token） | 账户持仓明细 |
+| GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`） |
+| GET | `/api/signal-logs` | X-Token（主 Token） | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
+| POST | `/api/convert/jq-to-qmt` | X-Token（主 Token） | 聚宽→QMT 转换 |
+| POST | `/api/convert/qmt-to-jq` | X-Token（主 Token） | QMT→聚宽 转换 |
+| POST | `/api/jukuan_order` | X-Token（策略 Token） | 聚宽风格按数量下单 |
+| POST | `/api/jukuan_order_target` | X-Token（策略 Token） | 聚宽风格目标持仓下单 |
+| POST | `/api/jukuan_order_value` | X-Token（策略 Token） | 聚宽风格按金额下单 |
+| POST | `/api/jukuan_order_target_value` | X-Token（策略 Token） | 聚宽风格目标市值下单 |
 
 ### 动态端点（自动生成）
 
@@ -237,9 +237,7 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 
 ### 聚宽下单格式
 
-远程策略服务器使用策略 Token 调用 `/api/jukuan_order`：
-
-**使用策略 Token（推荐）**：订单自动关联到对应策略，执行后自动更新策略持仓和资金。
+远程策略服务器**必须使用策略 Token** 调用 `/api/jukuan_order`：
 
 ```json
 {
@@ -255,12 +253,13 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 - `amount`：目标数量，`jukuan_order` 中正数为买入、负数为卖出
 - `side`：方向，股票默认 `long`；期货可指定 `short`
 
+**注意**：`/api/jukuan_order*` 系列接口仅接受策略 Token，主 Token 调用会返回 403。
+
 ## Token 安全机制
 
-- 服务器主 Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同
-- 每个策略自动生成独立 Token（`secrets.token_hex(16)`），用于远程聚宽风格下单认证
+- 服务器主 Token 使用 `secrets.token_hex(32)` 随机生成，每次启动均不同，用于前端管理、策略 CRUD、账户查询等非聚宽下单接口
+- 每个策略自动生成独立 Token（`secrets.token_hex(16)`），用于远程聚宽风格下单认证；`/api/jukuan_order*` 仅接受策略 Token
 - 策略 Token 可在「配置」tab 的策略列表中查看和复制
-- `/api/jukuan_order*` 同时支持主 Token 和策略 Token
 - 前端通过 Session Storage 存储 Token（页面刷新不丢失，关闭标签页即清除）
 - `/api/server-info` 不再返回 Token，仅在 `/api/start-server` 响应中返回一次
 - `/api/stop-server` 需要 X-Token 鉴权

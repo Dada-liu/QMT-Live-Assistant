@@ -377,9 +377,11 @@ class StrategyManager:
                     found = True
                     break
             if not found:
+                name_map = fetch_stock_names_from_xtdata({stock_code})
+                stock_name = name_map.get(stock_code) or ""
                 positions.append(_make_position(
                     stock_code=stock_code,
-                    stock_name="",
+                    stock_name=stock_name,
                     quantity=quantity,
                     avg_cost=price,
                     today_bought_quantity=quantity,

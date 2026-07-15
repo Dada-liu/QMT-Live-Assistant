@@ -262,6 +262,29 @@ class TestStrategyManagerPositions:
         assert s.positions[0]["avg_cost"] == 10.0
         assert s.available_cash == 100000 - 1000
 
+    def test_buy_new_position_fetches_stock_name(self, mgr):
+        sid = self._first_id(mgr)
+        with patch("backend.strategy_manager.fetch_stock_names_from_xtdata",
+                   return_value={"000001.SZ": "平安银行"}):
+            mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        s = mgr.get(sid)
+        assert len(s.positions) == 1
+        pos = s.positions[0]
+        assert pos["stock_code"] == "000001.SZ"
+        assert pos["stock_name"] == "平安银行"
+        assert pos["quantity"] == 100
+        assert pos["avg_cost"] == 10.0
+
+    def test_buy_new_position_stock_name_fallback(self, mgr):
+        sid = self._first_id(mgr)
+        with patch("backend.strategy_manager.fetch_stock_names_from_xtdata",
+                   return_value={"000001.SZ": None}):
+            mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        s = mgr.get(sid)
+        assert len(s.positions) == 1
+        assert s.positions[0]["stock_code"] == "000001.SZ"
+        assert s.positions[0]["stock_name"] == ""
+
     def test_buy_add_to_existing(self, mgr):
         sid = self._first_id(mgr)
         mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
@@ -383,6 +406,19 @@ class TestStrategyManagerOptimisticUpdates:
         snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
         mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 100, 10.0, snapshot)
         s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["avg_cost"] == 10.0
+        assert s.available_cash == 100000 - 1000
+
+    def test_reconcile_full_fill_fetches_stock_name(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        with patch("backend.strategy_manager.fetch_stock_names_from_xtdata",
+                   return_value={"000001.SZ": "平安银行"}):
+            mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 100, 10.0, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["stock_code"] == "000001.SZ"
+        assert s.positions[0]["stock_name"] == "平安银行"
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["avg_cost"] == 10.0
         assert s.available_cash == 100000 - 1000

@@ -786,6 +786,11 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 57. 新增 `pytest.ini`，启用 `pytest-asyncio` 自动模式
 58. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
 
+### Phase 14: 策略持仓股票名称自动补全 ✅
+59. 修改 `backend/strategy_manager.py` 的 `_apply_actual_fill`：买入成交且策略原本没有该股票时，调用 `fetch_stock_names_from_xtdata` 获取股票名称并写入新持仓；对 `None` 或缺失值使用 `or ""` 回退
+60. 补充 `tests/test_strategy_manager.py`：新增买入新建持仓获取名称、名称缺失/为 `None` 时回退、`reconcile_position` 路径获取名称的测试
+61. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 
 ## 验证方案
 
@@ -811,3 +816,4 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 20. **卡片加载状态**：点击策略概览卡片、持仓市值卡片或当日盈亏卡片 → 验证请求接口前列表区域先展示 "加载中..."，请求完成后取消 loading 并正确渲染持仓明细；模拟请求失败时展示 "加载失败，请刷新重试"
 21. **信号日志时间时区**：触发一笔聚宽下单后调用 `/api/signal-logs` → 验证返回的 `received_at` 带 `+00:00` 时区后缀，前端展示的时间与本地时间一致，不再出现订单列表与日志列表时间偏差
 22. **原子冻结与并发安全**：连续或并发对同一策略发起多笔买入，总金额超过 `available_cash` → 验证后续订单被拒绝，策略可用资金不会被扣成负数
+23. **策略持仓股票名称自动补全**：通过策略 Token 对一只策略原本没有的股票调用 `/api/jukuan_order` 买入并成交 → 验证策略持仓列表中该股票的 `stock_name` 已被自动填充；行情接口缺失名称时回退为空字符串

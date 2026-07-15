@@ -85,6 +85,12 @@ export const Docs = {
 
       const html = marked.parse(result.data.content);
       content.innerHTML = `<div class="docs-article">${html}</div>`;
+      content.querySelectorAll('.docs-article table').forEach(table => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-scroll-wrapper';
+        table.parentNode.insertBefore(wrapper, table);
+        wrapper.appendChild(table);
+      });
       this.renderSubItems(docId);
     } catch (error) {
       if (requestId === this._requestId) {

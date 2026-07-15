@@ -202,6 +202,7 @@ sequenceDiagram
         Main-->>Remote: 403 拒绝（仅策略Token可下单）
     else Token 为策略 Token
         Svr->>Svr: normalize_to_qmt(security) 转为 QMT 代码
+        Svr->>Svr: fetch_stock_names_from_xtdata({stock_code}) 获取股票名称
         Svr->>JK: jukuan_order(stock_code, amount, side, strategy_id)
         JK->>JK: 查询当前持仓价格；无持仓时调用 fetch_latest_prices_from_xtdata 获取 lastPrice
         JK->>Strat: apply_optimistic_position() 原子冻结资金/持仓
@@ -215,10 +216,17 @@ sequenceDiagram
             end
         end
         JK-->>Svr: 返回委托结果（含 stock_code / jq_code / optimistic_snapshot）
-        Svr->>Ord: track_order() 注册订单（携带 optimistic_snapshot）
+        Svr->>Ord: track_order() 注册订单（携带 stock_name 与 optimistic_snapshot）
         Svr->>Strat: add_trading_record() 记录交易
         Main-->>Remote: {success: true, data: {...}}
     end
+
+    Note over 用户,QMT: === 订单展示流程 ===
+    用户->>Frontend: 切换至「买卖监控」tab
+    Frontend->>Svr: GET /api/orders (X-Token, ?status=&strategy_name=...)
+    Svr->>Svr: 从 OrderRepository 读取订单，按日期/策略/状态过滤
+    Svr-->>Frontend: orders 列表（含 stock_code / stock_name / jq_code / direction / status 等）
+    Frontend->>Frontend: 渲染订单表格，股票列展示 `股票名（stock_code）`；无名称时回退为仅展示代码
 
     Note over 用户,QMT: === 订单状态同步流程 ===
     QMT-->>Client: 回调 on_stock_order() / on_stock_trade()

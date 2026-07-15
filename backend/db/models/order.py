@@ -16,6 +16,7 @@ class OrderModel(Base):
     order_sysid: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     stock_code: Mapped[str] = mapped_column(String(16))
     source_code: Mapped[Optional[str]] = mapped_column(String(24))
+    stock_name: Mapped[Optional[str]] = mapped_column(String(64))
     source_platform: Mapped[Optional[str]] = mapped_column(String(32))
     direction: Mapped[str] = mapped_column(String(8))
     offset_flag: Mapped[Optional[str]] = mapped_column(String(16))

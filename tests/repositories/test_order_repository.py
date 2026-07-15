@@ -45,6 +45,76 @@ class TestSQLAlchemyOrderRepository:
         assert found.order_id == "100001"
         assert found.status == OrderState.PENDING
 
+    def test_save_and_get_by_id_includes_stock_name(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            stock_name="平安银行",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+        )
+        saved = repo.save(order)
+        found = repo.get_by_id(saved.order_id)
+        assert found is not None
+        assert found.stock_name == "平安银行"
+
+    def test_update_preserves_stock_name(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            stock_name="平安银行",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+        )
+        repo.save(order)
+
+        order.status = OrderState.FILLED
+        order.filled_quantity = 100
+        order.filled_price = 10.0
+        repo.save(order)
+
+        found = repo.get_by_id("100001")
+        assert found.stock_name == "平安银行"
+
+    def test_null_stock_name_defaults_to_empty_string(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        from backend.db.models.order import OrderModel
+        model = OrderModel(
+            id="test-null-name",
+            account_id="test_account",
+            external_order_id="100001",
+            stock_code="000001.SZ",
+            source_code="000001.XSHE",
+            stock_name=None,
+            direction="buy",
+            order_type=23,
+            price=10.0,
+            quantity=100,
+            filled_quantity=0,
+            filled_price=0.0,
+            filled_amount=0.0,
+            status=OrderState.PENDING,
+            placed_at=datetime.now(timezone.utc),
+        )
+        db_session.add(model)
+        db_session.commit()
+
+        found = repo.get_by_id("100001")
+        assert found is not None
+        assert found.stock_name == ""
+
     def test_list_pending(self, db_session):
         repo = SQLAlchemyOrderRepository(db_session)
         pending_order = TrackedOrder(
@@ -192,6 +262,26 @@ class TestSQLAlchemyOrderRepository:
 
         limited = repo.list_all(limit=2)
         assert len(limited) == 2
+
+    def test_in_memory_repository_preserves_stock_name(self):
+        repo = InMemoryOrderRepository()
+        order = TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            stock_name="平安银行",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc",
+            strategy_name="测试策略",
+            price=10.0,
+        )
+        repo.save(order)
+        found = repo.get_by_id("100001")
+        assert found is not None
+        assert found.stock_name == "平安银行"
+
 
 class TestInMemoryOrderRepository:
     def test_save_and_list_pending(self):

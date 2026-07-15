@@ -19,7 +19,7 @@ class TestOrderTracker:
     def tracker(self):
         return OrderTracker()
 
-    def _track_sample(self, tracker, order_id="100001"):
+    def _track_sample(self, tracker, order_id="100001", stock_name=""):
         return tracker.track_order(
             order_id=order_id,
             stock_code="000001.SZ",
@@ -31,6 +31,7 @@ class TestOrderTracker:
             strategy_name="测试策略",
             price=10.0,
             optimistic_position_applied=True,
+            stock_name=stock_name,
         )
 
     def test_track_new_order(self, tracker):
@@ -38,6 +39,30 @@ class TestOrderTracker:
         assert order.status == OrderState.PENDING
         assert order.order_id == "100001"
         assert tracker.get_order("100001") == order
+
+    def test_track_order_accepts_stock_name(self, tracker):
+        order = self._track_sample(tracker, stock_name="平安银行")
+        assert order.stock_name == "平安银行"
+        assert tracker.get_order("100001").stock_name == "平安银行"
+
+    def test_load_history_preserves_stock_name(self):
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            stock_name="平安银行",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc123",
+            strategy_name="测试策略",
+            price=10.0,
+        ))
+        tracker = OrderTracker(repository=repo)
+        loaded = tracker.get_order("100001")
+        assert loaded is not None
+        assert loaded.stock_name == "平安银行"
 
     def test_callback_reported_keeps_pending(self, tracker):
         self._track_sample(tracker)

@@ -22,6 +22,7 @@ class TrackedOrder:
     strategy_id: Optional[str]
     strategy_name: str
     price: float             # 委托价格，市价单为 0
+    stock_name: str = ""     # 股票名称，从 xtdata 获取
     status: str = OrderState.PENDING
     xtquant_status: Optional[int] = None
     filled_quantity: int = 0

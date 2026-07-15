@@ -63,6 +63,7 @@ class OrderTracker:
         strategy_id: Optional[str],
         strategy_name: str,
         price: float,
+        stock_name: str = "",
         optimistic_position_applied: bool = False,
         optimistic_snapshot: Optional[dict] = None,
     ) -> TrackedOrder:
@@ -71,6 +72,7 @@ class OrderTracker:
             order_id=str(order_id),
             stock_code=stock_code,
             jq_code=jq_code,
+            stock_name=stock_name,
             direction=direction,
             quantity=quantity,
             order_type=order_type,

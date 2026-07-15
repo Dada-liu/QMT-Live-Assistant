@@ -116,7 +116,7 @@ class QMTServer:
         self.order_tracker.on_state_change(on_state_change)
 
     def _track_and_apply_order(self, order_result: dict, strategy_id: Optional[str],
-                               strategy_name: str) -> None:
+                               strategy_name: str, stock_name: str = "") -> None:
         """将订单注册到跟踪器；乐观冻结已在下单前完成，这里仅传递快照。"""
         order_id = order_result.get('order_id')
         if not order_id:
@@ -136,6 +136,7 @@ class QMTServer:
             order_id=order_id,
             stock_code=qmt_code,
             jq_code=jq_code,
+            stock_name=stock_name,
             direction=direction,
             quantity=quantity,
             order_type=order_type,
@@ -306,6 +307,7 @@ class QMTServer:
                 result.append({
                     "order_id": o.order_id,
                     "stock_code": o.stock_code,
+                    "stock_name": o.stock_name,
                     "jq_code": o.jq_code,
                     "direction": o.direction,
                     "quantity": o.quantity,
@@ -471,6 +473,9 @@ class QMTServer:
             try:
                 qmt_code = normalize_to_qmt(security)
 
+                name_map = fetch_stock_names_from_xtdata({qmt_code})
+                stock_name = name_map.get(qmt_code) or ""
+
                 amount = request.get('amount', 0)
                 value = request.get('value', 0)
                 side = request.get('side', 'long')
@@ -488,7 +493,7 @@ class QMTServer:
                 if result.get('order_id'):
                     result['strategy_name'] = strategy_name or method_name
                     _current_server._track_and_apply_order(
-                        result, strategy_id, strategy_name or method_name
+                        result, strategy_id, strategy_name or method_name, stock_name=stock_name
                     )
 
                 # 策略记账

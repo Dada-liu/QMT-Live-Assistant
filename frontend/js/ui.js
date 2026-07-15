@@ -119,7 +119,11 @@ export const UI = {
             const time = o.placed_at ? new Date(o.placed_at).toLocaleTimeString() : '--';
             const orderId = o.order_id || '--';
             const direction = o.direction || '--';
-            const stockCode = o.jq_code || o.stock_code || '--';
+            const stockCode = o.stock_code || '--';
+            const stockName = o.stock_name || '';
+            const stockDisplay = stockName
+                ? `${escapeHtml(stockName)}(${escapeHtml(stockCode)})`
+                : escapeHtml(stockCode);
             const volume = `${o.filled_quantity || 0}/${o.quantity || '--'}`;
             const status = o.status || '--';
 
@@ -129,7 +133,7 @@ export const UI = {
             } else if (direction === 'sell') {
                 directionBadge = '<span class="badge badge-sell">卖出</span>';
             } else {
-                directionBadge = `<span class="badge badge-warning">${direction}</span>`;
+                directionBadge = `<span class="badge badge-warning">${escapeHtml(direction)}</span>`;
             }
 
             let statusBadge = '';
@@ -137,14 +141,14 @@ export const UI = {
             else if (status === 'partial') statusBadge = '<span class="badge badge-warning">部分成交</span>';
             else if (status === 'filled') statusBadge = '<span class="badge badge-success">已成交</span>';
             else if (status === 'failed') statusBadge = '<span class="badge badge-error">失败</span>';
-            else statusBadge = `<span class="badge badge-warning">${status}</span>`;
+            else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
             return `
               <div class="signal-item">
                 <span class="signal-time">${time}</span>
                 <span class="signal-code">${orderId}</span>
                 <span class="signal-direction">${directionBadge}</span>
-                <span class="signal-msg">${stockCode}</span>
+                <span class="signal-msg">${stockDisplay}</span>
                 <span>${volume}</span>
                 <span>${statusBadge}</span>
               </div>
@@ -194,7 +198,7 @@ export const UI = {
             let statusBadge = '';
             if (status === 'error') statusBadge = '<span class="badge badge-error">异常</span>';
             else if (status === 'success') statusBadge = '<span class="badge badge-success">正常</span>';
-            else statusBadge = `<span class="badge badge-warning">${status}</span>`;
+            else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
             const errorTip = errorMsg ? `<span class="signal-log-error" title="${escapeHtml(errorMsg)}">${escapeHtml(errorMsg)}</span>` : '';
 

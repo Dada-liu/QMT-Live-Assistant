@@ -417,7 +417,9 @@ class TestOrdersApi:
         assert data["success"] is True
         assert data["data"] == []
 
-    def test_get_orders_with_jukuan_order(self, client, server):
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_get_orders_with_jukuan_order(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
         strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
@@ -439,6 +441,30 @@ class TestOrdersApi:
         assert order["status"] == "pending"
         assert order["jq_code"] == "000001.XSHE"
         assert order["stock_code"] == "000001.SZ"
+        assert order["stock_name"] == "平安银行"
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_get_orders_stock_name_fallback(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+
+        response = client.get(
+            "/api/orders",
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["data"]) == 1
+        order = data["data"][0]
+        assert order["stock_code"] == "000001.SZ"
+        assert order["stock_name"] == ""
 
     def test_get_orders_filter_by_status(self, client, server):
         strategy = self._create_strategy(client, server)
@@ -478,7 +504,9 @@ class TestOrderTrackingIntegration:
         )
         return response.json()["data"]
 
-    def test_jukuan_order_tracks_order(self, client, server):
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_jukuan_order_tracks_order(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
         strategy = self._create_strategy(client, server)
         response = client.post(
             "/api/jukuan_order",
@@ -490,6 +518,7 @@ class TestOrderTrackingIntegration:
         tracked = server.order_tracker.get_order(order_id)
         assert tracked is not None
         assert tracked.direction == "buy"
+        assert tracked.stock_name == "平安银行"
 
     def test_strategy_jukuan_order_optimistic_update(self, client, server):
         strategy = self._create_strategy(client, server)

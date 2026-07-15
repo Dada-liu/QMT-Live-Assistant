@@ -19,7 +19,7 @@
 - 聚宽风格下单：远程策略服务器通过 `/api/jukuan_order*` 接口下单，仅支持策略 Token，自动关联策略并更新持仓
 - 策略 Token 认证：每个策略拥有独立 Token，远程下单携带策略 Token 即可关联
 - 数据持久化：策略、持仓、订单、信号日志等默认落库 SQLite，服务重启数据不丢失
-- 实时订单监控面板，支持按日期、策略和状态筛选；列表底部展示当前筛选结果条数
+- 实时订单监控面板，支持按日期、策略和状态筛选；股票列展示 `股票名（QMT股票代码）`，代码统一使用 QMT 格式（.SZ/.SH/.BJ），不再展示聚宽 source_code；列表底部展示当前筛选结果条数
 - 信号日志面板，记录远程策略服务器发送到本地下单接口的请求与处理结果，支持按日期、策略和状态（异常/正常）筛选，默认展示异常信号，便于排查问题；日志时间统一使用 UTC 带时区存储，前端按本地时区展示
 - 从 QMT 获取实时行情刷新策略持仓市值和当日盈亏
 - 聚宽格式 ↔ QMT 格式代码转换；策略持仓统一持久化为 QMT 格式（.SZ/.SH/.BJ）
@@ -215,7 +215,7 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 | GET | `/api/test-connection` | X-Token（主 Token） | 测试连接，返回资产数据 |
 | GET | `/api/account-asset` | X-Token（主 Token） | 账户资产 |
 | GET | `/api/account-positions` | X-Token（主 Token） | 账户持仓明细 |
-| GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`） |
+| GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`）；返回字段含 `stock_code`、`stock_name`、`jq_code` 等，`stock_name` 在下单时从 xtdata 获取并持久化 |
 | GET | `/api/signal-logs` | X-Token（主 Token） | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | X-Token（主 Token） | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | X-Token（主 Token） | QMT→聚宽 转换 |

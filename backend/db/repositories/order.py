@@ -197,6 +197,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             strategy_name=row.strategy_name or "",
             price=float(row.price),
             status=row.status,
+            stock_name=row.stock_name or "",
             xtquant_status=None,
             filled_quantity=row.filled_quantity,
             filled_price=float(row.filled_price),
@@ -215,6 +216,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             external_order_id=order.order_id,
             stock_code=order.stock_code,
             source_code=order.jq_code,
+            stock_name=order.stock_name,
             source_platform=None,
             direction=order.direction,
             order_type=order.order_type,
@@ -235,6 +237,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
     def _update_model(self, model: OrderModel, order: TrackedOrder) -> None:
         model.stock_code = order.stock_code
         model.source_code = order.jq_code
+        model.stock_name = order.stock_name
         model.direction = order.direction
         model.order_type = order.order_type
         model.price = order.price

@@ -3,7 +3,7 @@
 注册所有 API 端点（管理、策略、交易、聚宽下单、信号），
 管理 QMT 连接、策略生命周期、Token 认证与信号日志。
 """
-from fastapi import FastAPI, HTTPException, Header, Depends, Path
+from fastapi import FastAPI, HTTPException, Header, Depends, Path, Request
 from pydantic import BaseModel
 import inspect
 import secrets
@@ -22,9 +22,23 @@ from backend.db.repositories.signal_log import SignalLogRepository, InMemorySign
 from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
 from backend.db.models.account import AccountModel
+from backend.logger import logger
 from config.settings import settings
 
 _current_server = None
+
+
+def _get_client_ip(raw_request: Optional[Request]) -> Optional[str]:
+    """获取客户端真实 IP，优先读取反向代理头。"""
+    if raw_request is None:
+        return None
+    forwarded = raw_request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or None
+    real_ip = raw_request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+    return raw_request.client.host if raw_request.client else None
 
 
 async def _verify_token(x_token: str = Header(...)):
@@ -446,7 +460,8 @@ class QMTServer:
                 )
             return _current_server._jukuan_handler
 
-        async def _jukuan_endpoint(request: dict, x_token: str, method_name: str):
+        async def _jukuan_endpoint(request: dict, x_token: str, method_name: str,
+                                   raw_request: Optional[Request] = None):
             strategy_name, strategy_id = _resolve_strategy(request, x_token)
             if strategy_id is None:
                 raise HTTPException(status_code=403, detail="聚宽下单接口仅支持策略Token")
@@ -456,6 +471,21 @@ class QMTServer:
             if not security:
                 raise HTTPException(status_code=400, detail="请提供 security 参数")
 
+            client_ip = _get_client_ip(raw_request)
+            logger.info(
+                "【下单请求】endpoint=/api/%s ip=%s strategy=%s(%s) security=%s "
+                "side=%s amount=%s value=%s source_platform=%s",
+                method_name,
+                client_ip,
+                strategy_name,
+                strategy_id,
+                security,
+                request.get('side', 'long'),
+                request.get('amount'),
+                request.get('value'),
+                request.get('source_platform'),
+            )
+
             signal_log = None
             if _current_server._signal_log_repository is not None:
                 signal_log = _current_server._signal_log_repository.add(
@@ -463,7 +493,7 @@ class QMTServer:
                         strategy_id=strategy_id,
                         endpoint=f"/api/{method_name}",
                         source_platform=request.get("source_platform"),
-                        source_ip=None,
+                        source_ip=client_ip,
                         payload=request,
                         received_at=datetime.now(timezone.utc),
                         created_at=datetime.now(timezone.utc),
@@ -521,36 +551,36 @@ class QMTServer:
                 raise
 
         @app.post('/api/jukuan_order')
-        async def jukuan_order_endpoint(request: dict, x_token: str = Header(...)):
+        async def jukuan_order_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order')
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order', raw_request)
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_target')
-        async def jukuan_order_target_endpoint(request: dict, x_token: str = Header(...)):
+        async def jukuan_order_target_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target')
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target', raw_request)
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_value')
-        async def jukuan_order_value_endpoint(request: dict, x_token: str = Header(...)):
+        async def jukuan_order_value_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_value')
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_value', raw_request)
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_target_value')
-        async def jukuan_order_target_value_endpoint(request: dict, x_token: str = Header(...)):
+        async def jukuan_order_target_value_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target_value')
+                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target_value', raw_request)
             except HTTPException:
                 raise
             except Exception as e:

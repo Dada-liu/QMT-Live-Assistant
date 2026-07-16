@@ -280,16 +280,31 @@ export const UI = {
         const container = document.getElementById('position-list-container');
         const list = document.getElementById('position-list');
         const hint = document.getElementById('position-sort-hint');
+        const table = container ? container.querySelector('.position-table') : null;
+        const tableHeader = table ? table.querySelector('.position-table-header') : null;
         if (!container || !list || !hint) return;
 
         const positions = this._positionData;
         const sortMode = this._positionSortMode;
 
-        if (!sortMode || !positions || positions.length === 0) {
+        if (!sortMode) {
             container.classList.add('hidden');
             this._highlightActiveSortCard(null);
             return;
         }
+
+        if (!positions || positions.length === 0) {
+            hint.textContent = sortMode === 'market_value' ? '按市值排序' : '按盈亏排序（亏损在前）';
+            list.innerHTML = '<div class="position-empty">暂无持仓</div>';
+            if (table) table.classList.remove('hidden');
+            if (tableHeader) tableHeader.classList.add('hidden');
+            container.classList.remove('hidden');
+            this._highlightActiveSortCard(sortMode);
+            return;
+        }
+
+        if (table) table.classList.remove('hidden');
+        if (tableHeader) tableHeader.classList.remove('hidden');
 
         // 排序
         const sorted = [...positions].sort((a, b) => {
@@ -376,10 +391,14 @@ export const UI = {
         const container = document.getElementById('position-list-container');
         const list = document.getElementById('position-list');
         const hint = document.getElementById('position-sort-hint');
+        const table = container ? container.querySelector('.position-table') : null;
+        const tableHeader = table ? table.querySelector('.position-table-header') : null;
         if (!container || !list || !hint) return;
 
         hint.textContent = '';
         list.innerHTML = '<div class="position-loading">加载中...</div>';
+        if (table) table.classList.remove('hidden');
+        if (tableHeader) tableHeader.classList.add('hidden');
         container.classList.remove('hidden');
     },
 

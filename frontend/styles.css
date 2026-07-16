@@ -1741,4 +1741,36 @@ a:hover { text-decoration: underline; }
   .top-nav-links a:hover {
     background-color: var(--color-surface-soft);
   }
+
+  .strategy-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-sm);
+    min-width: auto;
+    padding: var(--spacing-base);
+  }
+
+  .strategy-item-info {
+    gap: var(--spacing-xs);
+  }
+
+  .strategy-item-meta {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs) var(--spacing-base);
+    font-size: var(--text-caption);
+  }
+
+  .strategy-item-status {
+    justify-content: flex-start;
+  }
+
+  .strategy-item-actions {
+    justify-content: flex-start;
+  }
+
+  .strategy-token-row {
+    flex-wrap: wrap;
+  }
 }

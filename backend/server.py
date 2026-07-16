@@ -22,7 +22,6 @@ from backend.db.repositories.signal_log import SignalLogRepository, InMemorySign
 from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
 from backend.db.models.account import AccountModel
-from backend.logger import logger
 from config.settings import settings
 
 _current_server = None
@@ -472,19 +471,6 @@ class QMTServer:
                 raise HTTPException(status_code=400, detail="请提供 security 参数")
 
             client_ip = _get_client_ip(raw_request)
-            logger.info(
-                "【下单请求】endpoint=/api/%s ip=%s strategy=%s(%s) security=%s "
-                "side=%s amount=%s value=%s source_platform=%s",
-                method_name,
-                client_ip,
-                strategy_name,
-                strategy_id,
-                security,
-                request.get('side', 'long'),
-                request.get('amount'),
-                request.get('value'),
-                request.get('source_platform'),
-            )
 
             signal_log = None
             if _current_server._signal_log_repository is not None:

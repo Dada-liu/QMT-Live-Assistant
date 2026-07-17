@@ -426,8 +426,24 @@ export const UI = {
     disableForm(disable) {
         const inputs = document.querySelectorAll('#config-form input');
         inputs.forEach(input => { input.disabled = disable; });
-        document.getElementById('btn-start').disabled = disable;
-        document.getElementById('btn-stop').disabled = !disable;
+        this._setConfigButtonStates(disable);
+    },
+
+    _isConfigFormComplete() {
+        const form = document.getElementById('config-form');
+        return form ? form.checkValidity() : false;
+    },
+
+    _setConfigButtonStates(serverRunning) {
+        const formComplete = this._isConfigFormComplete();
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        if (btnStart) btnStart.disabled = serverRunning || !formComplete;
+        if (btnStop) btnStop.disabled = !serverRunning || !formComplete;
+    },
+
+    updateConfigButtons() {
+        this._setConfigButtonStates(getState('serverRunning'));
     },
 
     toggleTheme() {

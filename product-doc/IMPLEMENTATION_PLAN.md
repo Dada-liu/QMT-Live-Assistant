@@ -651,7 +651,8 @@ clearOrders(), updateDashboard(data), disableForm(disable),
 toggleTheme(), initTheme(), showConnectPrompt(), hideConnectPrompt(),
 showSection(), hideSection(), switchTab(tabName), resetDashboard(),
 renderStrategyOverview(strategies), setOrderFilterHandler(handler),
-_renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts)
+_renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts),
+_isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButtons()
 ```
 - `setOrderFilterHandler(handler)` — 注册策略订单数量被点击时的回调，回调接收 strategy_name，由 `app.js` 转发到 `applyOrderFilters` 实现跳转
 - `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
@@ -666,6 +667,7 @@ _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows
 - 测试连接按钮
 - 复制 Token、清空订单、主题切换
 - 启动成功后加载策略数据
+- 表单完整性实时校验：监听 `#config-form` 所有 `input` 的 `input` 事件，调用 `UI.updateConfigButtons()`；当账号 ID、miniQMT 路径、服务器地址、端口任一必填项为空时，「启动服务器」与「停止服务器」按钮均禁用
 
 **`strategy.js`** — 策略管理面板
 - `loadStrategies()` — 从 API 加载策略列表并渲染

@@ -57,6 +57,13 @@ export function initConfigPanel() {
         }
     });
 
+    if (form) {
+        form.querySelectorAll('input').forEach(input => {
+            input.addEventListener('input', () => UI.updateConfigButtons());
+        });
+    }
+    UI.updateConfigButtons();
+
     const btnStop = el('btn-stop');
     if (btnStop) btnStop.addEventListener('click', async () => {
         if (!confirm('确定要停止服务器吗？停止后所有连接将断开。')) return;

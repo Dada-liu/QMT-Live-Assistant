@@ -2,6 +2,8 @@ import { api } from './api.js';
 import { UI } from './ui.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { refreshDashboard } from './dashboard.js';
+import { loadStrategies, populateStrategyDropdown } from './strategy.js';
+import { Toast } from './toast.js';
 
 let currentFilters = {};
 let currentSignalLogFilters = { status: 'error' };
@@ -108,7 +110,39 @@ export function initMonitor() {
         });
     }
 
+    initOrderActionDelegation();
     initSignalLogMonitor();
+}
+
+function initOrderActionDelegation() {
+    const orderList = document.getElementById('order-list');
+    if (!orderList) return;
+
+    orderList.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+
+        const action = btn.dataset.action;
+        const orderId = btn.dataset.orderId;
+        const token = getState('token');
+        if (!token || !orderId) return;
+
+        btn.disabled = true;
+        try {
+            if (action === 'cancel') {
+                await api.cancelOrder(orderId, token);
+                Toast.success('撤销成功');
+            } else if (action === 'resend') {
+                await api.resendOrder(orderId, token);
+                Toast.success('重发成功');
+            }
+            fetchOrders();
+        } catch (error) {
+            Toast.error(error.message || '操作失败');
+        } finally {
+            btn.disabled = false;
+        }
+    });
 }
 
 function initSignalLogMonitor() {
@@ -138,37 +172,98 @@ function initSignalLogMonitor() {
     }
 }
 
-// Also check server status periodically for auto-recovery
+// 定期检查服务器/QMT 连接状态，支持断连检测、恢复提示与自动重连展示
 let statusTimer = null;
 
 export function startStatusCheck() {
     stopStatusCheck();
-    statusTimer = setInterval(async () => {
+    let lastState = 'unknown';
+    let failureCount = 0;
+
+    const check = async () => {
         try {
             const result = await api.getServerInfo();
-            if (result.data && result.data.running && !getState('serverRunning')) {
-                const storedToken = getStoredToken();
-                setState('serverRunning', true);
-                UI.updateServerInfo(result.data);
-                UI.disableForm(true);
+            failureCount = 0;
+            const data = result.data || {};
+            const serverRunning = !!data.running;
+            const qmtConnected = !!data.qmt_connected;
+            const connectionState = data.connection_state || 'disconnected';
+            const lastError = data.last_connection_error || null;
 
-                if (storedToken) {
-                    setState('token', storedToken);
-                    UI.showSection('server-info');
-                    UI.showSection('dashboard');
-                    UI.showSection('monitor');
-                    UI.showSection('strategy-overview');
-                    UI.showSection('strategy-management');
-                    refreshDashboard();
-                } else {
-                    UI.showSection('account-empty');
-                    UI.showConnectPrompt();
+            setState('serverRunning', serverRunning);
+            setState('qmtConnected', qmtConnected);
+            setState('connectionState', connectionState);
+            setState('lastConnectionError', lastError);
+            UI.updateServerInfo(data);
+
+            if (!serverRunning) {
+                if (lastState !== 'stopped' && lastState !== 'unknown') {
+                    Toast.warning('服务器已停止');
+                    setState('token', null);
+                    setState('serverInfo', null);
+                    UI.hideReconnectingBanner();
+                    UI.resetServerInfo();
+                    UI.disableForm(false);
+                    UI.switchTab('account');
                 }
+                lastState = 'stopped';
+                return;
+            }
+
+            UI.disableForm(true);
+
+            if (qmtConnected) {
+                if (lastState === 'reconnecting' || lastState === 'server-down') {
+                    Toast.success('QMT 连接已恢复');
+                    UI.hideReconnectingBanner();
+                }
+
+                const storedToken = getStoredToken();
+                if (!storedToken) {
+                    if (lastState !== 'waiting-token') {
+                        UI.showSection('account-empty');
+                        UI.showConnectPrompt();
+                    }
+                    lastState = 'waiting-token';
+                } else {
+                    if (lastState !== 'connected') {
+                        setState('token', storedToken);
+                        UI.switchTab('account');
+                        refreshDashboard();
+                        loadStrategies().then(populateStrategyDropdown);
+                    }
+                    lastState = 'connected';
+                }
+            } else {
+                const msg = lastError
+                    ? `QMT 连接断开：${lastError}`
+                    : 'QMT 连接断开，正在重连...';
+                if (lastState !== 'reconnecting') {
+                    Toast.warning(msg);
+                }
+                UI.showReconnectingBanner(msg);
+                lastState = 'reconnecting';
             }
         } catch (error) {
-            // ignore
+            failureCount += 1;
+            if (failureCount >= 2 && lastState !== 'server-down') {
+                lastState = 'server-down';
+                setState('serverRunning', false);
+                setState('qmtConnected', false);
+                setState('connectionState', 'disconnected');
+                setState('lastConnectionError', error.message || '网络请求失败');
+                setState('token', null);
+                UI.hideReconnectingBanner();
+                UI.resetServerInfo();
+                UI.disableForm(false);
+                UI.switchTab('account');
+                Toast.error('与服务器的连接已断开');
+            }
         }
-    }, 5000);
+    };
+
+    check();
+    statusTimer = setInterval(check, 5000);
 }
 
 export function stopStatusCheck() {

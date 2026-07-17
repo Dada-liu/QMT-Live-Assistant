@@ -162,6 +162,109 @@ class TestOrderTracker:
         assert orders[0].order_id == "100001"
 
 
+class TestOrderTrackerCancel:
+    @pytest.fixture
+    def tracker(self):
+        return OrderTracker()
+
+    def _track_sample(self, tracker, order_id="100001", status=OrderState.PENDING):
+        order = tracker.track_order(
+            order_id=order_id,
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc123",
+            strategy_name="测试策略",
+            price=10.0,
+            optimistic_position_applied=True,
+        )
+        if status == OrderState.PARTIAL:
+            tracker.update_from_trade(order_id, 30, 10.0)
+        elif status == OrderState.FILLED:
+            tracker.update_from_callback(order_id, ORDER_SUCCEEDED, 100, 10.0)
+        elif status == OrderState.FAILED:
+            tracker.update_from_error(order_id, "初始失败")
+        return order
+
+    def test_cancel_pending_order(self, tracker):
+        self._track_sample(tracker)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        order = tracker.cancel_order(MockTrader(), None, "100001")
+        assert order.status == OrderState.FAILED
+        assert order.error_msg == "手动撤销"
+
+    def test_cancel_partial_order(self, tracker):
+        self._track_sample(tracker, status=OrderState.PARTIAL)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        order = tracker.cancel_order(MockTrader(), None, "100001")
+        assert order.status == OrderState.FAILED
+        assert order.filled_quantity == 30
+
+    def test_cancel_filled_order_raises(self, tracker):
+        self._track_sample(tracker, status=OrderState.FILLED)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        with pytest.raises(ValueError, match="不可撤销"):
+            tracker.cancel_order(MockTrader(), None, "100001")
+
+    def test_cancel_failed_order_raises(self, tracker):
+        self._track_sample(tracker, status=OrderState.FAILED)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        with pytest.raises(ValueError, match="不可撤销"):
+            tracker.cancel_order(MockTrader(), None, "100001")
+
+    def test_cancel_missing_order_raises(self, tracker):
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        with pytest.raises(ValueError, match="不存在"):
+            tracker.cancel_order(MockTrader(), None, "999999")
+
+    def test_cancel_trader_failure_raises(self, tracker):
+        self._track_sample(tracker)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                raise RuntimeError("QMT 拒绝")
+
+        with pytest.raises(ValueError, match="QMT 撤单失败"):
+            tracker.cancel_order(MockTrader(), None, "100001")
+
+    def test_cancel_triggers_state_change_callback(self, tracker):
+        self._track_sample(tracker)
+        called = []
+
+        def on_change(order):
+            called.append(order.order_id)
+
+        tracker.on_state_change(on_change)
+
+        class MockTrader:
+            def cancel_order(self, account, order_id):
+                pass
+
+        tracker.cancel_order(MockTrader(), None, "100001")
+        assert "100001" in called
+
+
 class TestOrderTrackerLogging:
     @pytest.fixture
     def tracker(self):

@@ -10,12 +10,14 @@ import secrets
 import asyncio
 from typing import Any, Optional
 from datetime import datetime, timezone
+from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open
 from backend.jukuan_orders import JukuanOrderHandler
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
+from backend.models.order import TrackedOrder
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
@@ -59,6 +61,18 @@ async def _verify_any_token(x_token: str = Header(...)):
     raise HTTPException(status_code=401, detail="无效的Token")
 
 
+async def _require_qmt_connected(x_token: str = Header(...)):
+    await _verify_token(x_token)
+    if _current_server is None or not _current_server.running:
+        raise HTTPException(status_code=503, detail="服务未启动")
+    if not _current_server.qmt_connected:
+        detail = "QMT 连接断开，正在重连"
+        if _current_server.last_connection_error:
+            detail += f": {_current_server.last_connection_error}"
+        raise HTTPException(status_code=503, detail=detail)
+    return x_token
+
+
 class QMTServer:
     def __init__(self, account_id: str, mini_qmt_path: str,
                  host: str = "0.0.0.0", port: int = 8000, token: str = None,
@@ -74,16 +88,15 @@ class QMTServer:
         self.host = host
         self.port = port
         self.app = FastAPI(title="QMT Live Assistant")
-        self.trader = None
-        self.account = None
-        self.callback = None
+        self._watchdog = None
+        self._jukuan_handler = None
         self.token = token if token else self.generate_token()
         self._db_session = db_session
         self._account_repository = account_repository
         self._signal_log_repository = signal_log_repository
         self.order_tracker = OrderTracker(repository=order_repository)
         self._poll_task: Optional[asyncio.Task] = None
-        self._jukuan_handler = None
+        self._market_open_poll_task: Optional[asyncio.Task] = None
         self.running = False
         self.strategy_manager = StrategyManager(repository=strategy_repository)
         self._register_order_state_callback()
@@ -99,11 +112,54 @@ class QMTServer:
     async def verify_any_token(self, x_token: str = Header(...)):
         return await _verify_any_token(x_token)
 
-    def init_trader(self):
-        self.trader, self.account, self.callback = create_trader(
-            self.account_id, self.mini_qmt_path,
-            order_tracker=self.order_tracker
+    @property
+    def trader(self):
+        return self._watchdog.trader if self._watchdog is not None else None
+
+    @property
+    def account(self):
+        return self._watchdog.account if self._watchdog is not None else None
+
+    @property
+    def callback(self):
+        return self._watchdog.callback if self._watchdog is not None else None
+
+    @property
+    def qmt_connected(self) -> bool:
+        return self._watchdog.connected if self._watchdog is not None else False
+
+    @property
+    def connection_state(self) -> str:
+        return self._watchdog.state if self._watchdog is not None else ConnectionState.DISCONNECTED.value
+
+    @property
+    def last_connection_error(self) -> Optional[str]:
+        return self._watchdog.last_error if self._watchdog is not None else None
+
+    @property
+    def reconnect_attempts(self) -> int:
+        return self._watchdog.reconnect_attempts if self._watchdog is not None else 0
+
+    async def init_trader_async(self):
+        """异步初始化 trader，启动连接看门狗。"""
+        self._watchdog = QMTConnectionWatchdog(
+            account_id=self.account_id,
+            qmt_path=self.mini_qmt_path,
+            order_tracker=self.order_tracker,
         )
+        await self._watchdog.start()
+
+    def init_trader(self):
+        """同步兼容入口，实际委托给 init_trader_async。
+
+        注意：在已有运行事件循环的协程中应直接调用 init_trader_async。
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.init_trader_async())
+        else:
+            raise RuntimeError("init_trader 为同步兼容方法，请在异步上下文中使用 init_trader_async")
 
     def _register_order_state_callback(self):
         """注册订单状态变更回调，用于在终态时修正策略持仓。"""
@@ -129,11 +185,11 @@ class QMTServer:
         self.order_tracker.on_state_change(on_state_change)
 
     def _track_and_apply_order(self, order_result: dict, strategy_id: Optional[str],
-                               strategy_name: str, stock_name: str = "") -> None:
+                               strategy_name: str, stock_name: str = "") -> Optional[TrackedOrder]:
         """将订单注册到跟踪器；乐观冻结已在下单前完成，这里仅传递快照。"""
         order_id = order_result.get('order_id')
         if not order_id:
-            return
+            return None
         print(f"跟踪订单 {order_id}，策略: {strategy_name}, 策略ID: {strategy_id}")
         jq_code = order_result.get('jq_code', '')
         direction = order_result.get('direction', '')
@@ -159,13 +215,19 @@ class QMTServer:
             optimistic_position_applied=optimistic_applied,
             optimistic_snapshot=snapshot,
         )
+        return self.order_tracker.get_order(str(order_id))
 
     async def _poll_orders_loop(self):
-        """后台轮询 pending 订单状态，补偿漏掉的回调。"""
+        """后台轮询 pending 订单状态，补偿漏掉的回调。仅在 QMT 连接正常时执行。"""
         try:
             while self.running:
                 try:
-                    if self.trader is not None and self.account is not None:
+                    if (
+                        self._watchdog is not None
+                        and self._watchdog.connected
+                        and self.trader is not None
+                        and self.account is not None
+                    ):
                         await self.order_tracker.poll_and_reconcile(
                             self.trader, self.account
                         )
@@ -173,6 +235,29 @@ class QMTServer:
                     # 轮询失败不应影响主服务
                     pass
                 await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+
+    async def _market_open_poll_loop(self):
+        """每天早上开盘时主动发起一次订单状态刷新。"""
+        try:
+            while self.running:
+                delay = seconds_until_market_open()
+                await asyncio.sleep(delay)
+                if not self.running:
+                    break
+                if not (
+                    self._watchdog is not None
+                    and self._watchdog.connected
+                    and self.trader is not None
+                    and self.account is not None
+                ):
+                    continue
+                try:
+                    await self.order_tracker.poll_and_reconcile(self.trader, self.account)
+                except Exception as e:
+                    # 开盘轮询失败不应影响主服务
+                    pass
         except asyncio.CancelledError:
             pass
 
@@ -251,7 +336,7 @@ class QMTServer:
 
         RequestModel = type(f'{method_name}Request', (BaseModel,), class_fields)
 
-        async def endpoint(request: RequestModel, token: str = Depends(_verify_token)):
+        async def endpoint(request: RequestModel, token: str = Depends(_require_qmt_connected)):
             try:
                 params = request.dict(exclude_unset=True)
                 if 'account' in param_names:
@@ -284,22 +369,39 @@ class QMTServer:
 
         @app.get('/api/server-status')
         async def server_status():
+            if _current_server is None:
+                return {
+                    'success': True,
+                    'data': {
+                        'running': False,
+                        'qmt_connected': False,
+                        'connection_state': ConnectionState.DISCONNECTED.value,
+                        'last_connection_error': None,
+                        'reconnect_attempts': 0,
+                        'account_id': None,
+                        'qmt_path': None,
+                        'host': None,
+                        'port': None,
+                    }
+                }
             return {
                 'success': True,
                 'data': {
-                    'running': _current_server.running if _current_server else False,
-                    'account_id': _current_server.account_id if _current_server else None,
-                    'qmt_path': _current_server.mini_qmt_path if _current_server else None,
-                    'host': _current_server.host if _current_server else None,
-                    'port': _current_server.port if _current_server else None,
+                    'running': _current_server.running,
+                    'qmt_connected': _current_server.qmt_connected,
+                    'connection_state': _current_server.connection_state,
+                    'last_connection_error': _current_server.last_connection_error,
+                    'reconnect_attempts': _current_server.reconnect_attempts,
+                    'account_id': _current_server.account_id,
+                    'qmt_path': _current_server.mini_qmt_path,
+                    'host': _current_server.host,
+                    'port': _current_server.port,
                 }
             }
 
         @app.get('/api/test-connection')
-        async def test_connection(token: str = Depends(_verify_token)):
+        async def test_connection(token: str = Depends(_require_qmt_connected)):
             try:
-                if _current_server.trader is None:
-                    _current_server.init_trader()
                 result = _current_server.trader.query_stock_asset(_current_server.account)
                 converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
@@ -334,6 +436,7 @@ class QMTServer:
                     "placed_at": o.placed_at.isoformat() if o.placed_at else None,
                     "resolved_at": o.resolved_at.isoformat() if o.resolved_at else None,
                     "error_msg": o.error_msg,
+                    "retried_as_order_id": o.retried_as_order_id,
                 })
 
             if status:
@@ -347,6 +450,76 @@ class QMTServer:
 
             result.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
             return {'success': True, 'data': result}
+
+        @app.post('/api/orders/{order_id}/cancel')
+        async def cancel_order(
+            order_id: str = Path(...),
+            token: str = Depends(_require_qmt_connected),
+        ):
+            try:
+                order = _current_server.order_tracker.cancel_order(
+                    _current_server.trader, _current_server.account, order_id
+                )
+                return {'success': True, 'data': {
+                    "order_id": order.order_id,
+                    "status": order.status,
+                    "error_msg": order.error_msg,
+                }}
+            except ValueError as e:
+                status_code = 404 if "不存在" in str(e) else 400
+                raise HTTPException(status_code=status_code, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"撤销失败: {e}")
+
+        @app.post('/api/orders/{order_id}/resend')
+        async def resend_order(
+            order_id: str = Path(...),
+            token: str = Depends(_require_qmt_connected),
+        ):
+            order = _current_server.order_tracker.get_order(order_id)
+            if order is None:
+                raise HTTPException(status_code=404, detail="订单不存在")
+            if order.status != OrderState.FAILED:
+                raise HTTPException(status_code=400, detail="仅失败订单可重发")
+            if order.retried_as_order_id is not None:
+                raise HTTPException(status_code=400, detail="订单已重发过")
+
+            handler = _get_jukuan_handler()
+            result = handler._submit_order(
+                order.stock_code,
+                order.order_type,
+                order.quantity,
+                price=order.price,
+                strategy_name=order.strategy_name,
+                strategy_id=order.strategy_id,
+            )
+
+            order_result = {
+                'order_id': result['order_id'],
+                'jq_code': order.jq_code,
+                'direction': order.direction,
+                'quantity': order.quantity,
+                'price': order.price,
+                'order_type': order.order_type,
+                'optimistic_snapshot': result['optimistic_snapshot'],
+            }
+            new_order = _current_server._track_and_apply_order(
+                order_result, order.strategy_id, order.strategy_name, stock_name=order.stock_name
+            )
+            if new_order is None:
+                raise HTTPException(status_code=500, detail="重发后跟踪订单失败")
+
+            order.retried_as_order_id = new_order.order_id
+            _current_server.order_tracker._persist(order, None, "resend")
+
+            return {'success': True, 'data': {
+                "order_id": new_order.order_id,
+                "stock_code": new_order.stock_code,
+                "direction": new_order.direction,
+                "quantity": new_order.quantity,
+                "status": new_order.status,
+                "retried_from_order_id": order.order_id,
+            }}
 
         @app.get('/api/signal-logs')
         async def get_signal_logs(
@@ -405,7 +578,7 @@ class QMTServer:
             return {'success': True, 'data': result}
 
         @app.get('/api/account-asset')
-        async def account_asset(token: str = Depends(_verify_token)):
+        async def account_asset(token: str = Depends(_require_qmt_connected)):
             try:
                 result = _current_server.trader.query_stock_asset(_current_server.account)
                 converted_result = _current_server.convert_to_dict(result)
@@ -420,7 +593,7 @@ class QMTServer:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.get('/api/account-positions')
-        async def account_positions(token: str = Depends(_verify_token)):
+        async def account_positions(token: str = Depends(_require_qmt_connected)):
             try:
                 positions = _current_server._query_account_positions()
                 return {'success': True, 'data': positions}
@@ -450,17 +623,35 @@ class QMTServer:
                 raise HTTPException(status_code=401, detail="无效的Token")
             return strategy.name, strategy.id
 
+        def _check_qmt_connected():
+            """在内部端点中检查 QMT 连接状态，未连接时抛出 503。"""
+            if _current_server is None or not _current_server.running:
+                raise HTTPException(status_code=503, detail="服务未启动")
+            if not _current_server.qmt_connected:
+                detail = "QMT 连接断开，正在重连"
+                if _current_server.last_connection_error:
+                    detail += f": {_current_server.last_connection_error}"
+                raise HTTPException(status_code=503, detail=detail)
+
         def _get_jukuan_handler():
-            if _current_server._jukuan_handler is None:
+            current_trader = _current_server.trader
+            current_account = _current_server.account
+            handler = _current_server._jukuan_handler
+            if (
+                handler is None
+                or handler.trader is not current_trader
+                or handler.account is not current_account
+            ):
                 _current_server._jukuan_handler = JukuanOrderHandler(
-                    trader=_current_server.trader,
-                    account=_current_server.account,
+                    trader=current_trader,
+                    account=current_account,
                     strategy_manager=_current_server.strategy_manager,
                 )
             return _current_server._jukuan_handler
 
         async def _jukuan_endpoint(request: dict, x_token: str, method_name: str,
                                    raw_request: Optional[Request] = None):
+            _check_qmt_connected()
             strategy_name, strategy_id = _resolve_strategy(request, x_token)
             if strategy_id is None:
                 raise HTTPException(status_code=403, detail="聚宽下单接口仅支持策略Token")
@@ -660,23 +851,43 @@ class QMTServer:
             return {'success': True, 'data': strategy.model_dump()}
 
         @app.post('/api/strategies/refresh')
-        async def refresh_strategies(token: str = Depends(_verify_token)):
+        async def refresh_strategies(token: str = Depends(_require_qmt_connected)):
             strategies = _current_server.strategy_manager.list_all_enriched(
                 _current_server.trader, _current_server.account
             )
             return {'success': True, 'data': _enrich_order_count(strategies)}
 
     def init_and_setup(self, target_app=None):
+        """同步兼容入口，实际委托给 init_and_setup_async。"""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.init_and_setup_async(target_app=target_app))
+        else:
+            raise RuntimeError(
+                "init_and_setup 为同步兼容方法，请在异步上下文中使用 init_and_setup_async"
+            )
+
+    async def init_and_setup_async(self, target_app=None):
+        """异步初始化：建立 QMT 连接、加载订单、注册路由、启动后台轮询。"""
         try:
             self._ensure_account_record()
-            self.init_trader()
+            await self.init_trader_async()
         except Exception:
             self.setup_routes(target_app=target_app)
             raise
+
+        # 等待首次连接建立，最多 10 秒
+        for _ in range(200):
+            if self.qmt_connected:
+                break
+            await asyncio.sleep(0.05)
+
         self.order_tracker._load_orders()
         self.setup_routes(target_app=target_app)
         self.running = True
         self._poll_task = asyncio.create_task(self._poll_orders_loop())
+        self._market_open_poll_task = asyncio.create_task(self._market_open_poll_loop())
 
     def _ensure_account_record(self):
         """如启用数据库，同步当前账户信息到 accounts 表。"""
@@ -695,11 +906,33 @@ class QMTServer:
             self._account_repository.add(account)
 
     def stop(self):
+        """同步停止入口，会自动选择合适方式执行异步清理。"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.run(self.stop_async())
+            return
+        if loop.is_running():
+            loop.create_task(self.stop_async())
+        else:
+            loop.run_until_complete(self.stop_async())
+
+    async def stop_async(self):
+        """异步停止：取消轮询任务、停止看门狗、关闭数据库会话。"""
         global _current_server
         self.running = False
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            self._poll_task = None
+        for task_attr in ('_poll_task', '_market_open_poll_task'):
+            task = getattr(self, task_attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                setattr(self, task_attr, None)
+        if self._watchdog is not None:
+            await self._watchdog.stop()
+            self._watchdog = None
         if self._db_session is not None:
             self._db_session.close()
             self._db_session = None

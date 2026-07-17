@@ -6,6 +6,7 @@
 import argparse
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Depends
@@ -23,7 +24,20 @@ from backend.db.repositories import (
 )
 from config.settings import settings
 
-app = FastAPI(title="QMT Live Assistant")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：CLI 传入的 server 在此启动，关闭时清理。"""
+    global server
+    if server is not None and not server.running:
+        await server.init_and_setup_async(target_app=app)
+    yield
+    if server is not None:
+        await server.stop_async()
+        server = None
+
+
+app = FastAPI(title="QMT Live Assistant", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -98,7 +112,19 @@ async def index():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "1.0.0"}
+    qmt_connected = False
+    connection_state = "disconnected"
+    server_running = server is not None and server.running
+    if server_running:
+        qmt_connected = server.qmt_connected
+        connection_state = server.connection_state
+    return {
+        "status": "healthy",
+        "server_running": server_running,
+        "qmt_connected": qmt_connected,
+        "connection_state": connection_state,
+        "version": "1.0.0",
+    }
 
 
 @app.get("/api/server-info")
@@ -108,6 +134,10 @@ async def server_info():
             "success": True,
             "data": {
                 "running": False,
+                "qmt_connected": False,
+                "connection_state": "disconnected",
+                "last_connection_error": None,
+                "reconnect_attempts": 0,
                 "account_id": None,
                 "qmt_path": None,
                 "host": None,
@@ -118,6 +148,10 @@ async def server_info():
         "success": True,
         "data": {
             "running": server.running,
+            "qmt_connected": server.qmt_connected,
+            "connection_state": server.connection_state,
+            "last_connection_error": server.last_connection_error,
+            "reconnect_attempts": server.reconnect_attempts,
             "account_id": server.account_id,
             "qmt_path": server.mini_qmt_path,
             "host": server.host,
@@ -165,7 +199,7 @@ async def start_server(data: dict):
     )
 
     try:
-        server.init_and_setup(target_app=app)
+        await server.init_and_setup_async(target_app=app)
     except ConnectionError as e:
         return {
             "success": False,
@@ -176,6 +210,8 @@ async def start_server(data: dict):
         "success": True,
         "data": {
             "running": server.running,
+            "qmt_connected": server.qmt_connected,
+            "connection_state": server.connection_state,
             "account_id": account_id,
             "qmt_path": qmt_path,
             "host": host,
@@ -229,7 +265,7 @@ async def stop_server(_token: str = Depends(verify_server_token)):
     if server is None:
         raise HTTPException(status_code=400, detail="服务器未在运行")
 
-    server.stop()
+    await server.stop_async()
     server = None
 
     return {"success": True, "data": {"message": "服务器已停止"}}
@@ -306,11 +342,6 @@ if __name__ == "__main__":
             signal_log_repository=signal_log_repository,
             db_session=db_session,
         )
-        try:
-            server.init_and_setup(target_app=app)
-        except ConnectionError as e:
-            print(f"QMT连接失败: {e}")
-            sys.exit(1)
 
         if args.window:
             _start_window_mode(args.host, args.port, server.token)

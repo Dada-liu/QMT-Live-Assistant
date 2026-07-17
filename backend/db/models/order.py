@@ -40,6 +40,7 @@ class OrderModel(Base):
     response_payload: Mapped[Optional[dict]] = mapped_column(JSON)
     optimistic_position_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     optimistic_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    retried_as_order_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow

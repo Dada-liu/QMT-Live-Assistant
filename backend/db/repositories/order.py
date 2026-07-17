@@ -206,6 +206,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             error_msg=row.error_msg,
             optimistic_position_applied=row.optimistic_position_applied or False,
             optimistic_snapshot=row.optimistic_snapshot,
+            retried_as_order_id=row.retried_as_order_id,
         )
         return order
 
@@ -232,6 +233,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             strategy_name=order.strategy_name,
             optimistic_position_applied=order.optimistic_position_applied,
             optimistic_snapshot=order.optimistic_snapshot,
+            retried_as_order_id=order.retried_as_order_id,
         )
 
     def _update_model(self, model: OrderModel, order: TrackedOrder) -> None:
@@ -250,6 +252,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
         model.error_msg = order.error_msg
         model.optimistic_position_applied = order.optimistic_position_applied
         model.optimistic_snapshot = order.optimistic_snapshot
+        model.retried_as_order_id = order.retried_as_order_id
         model.updated_at = datetime.now(timezone.utc)
 
     def _resolve_internal_id(self, order_id: str) -> str:

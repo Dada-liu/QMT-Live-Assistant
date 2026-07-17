@@ -8,7 +8,7 @@ import random
 
 from backend.order_tracker import OrderTracker
 from backend.utils import timestamp_to_datetime_string, parse_order_type, convert_to_current_date
-from backend.constants import RED, GREEN, BLUE, RESET
+from backend.constants import RED, GREEN, BLUE, RESET, YELLOW
 from backend.logger import logger
 
 error_orders = []
@@ -60,7 +60,7 @@ class MyXtQuantTraderCallback:
         logger.error(f"{RED}【撤单失败】{RESET}错误信息:{data.error_msg.strip()}")
 
 
-def create_trader(account_id, mini_qmt_path, order_tracker=None):
+def create_trader(account_id, mini_qmt_path, order_tracker=None, callback=None):
     is_real_xtquant = False
 
     if sys.platform == 'win32':
@@ -98,7 +98,8 @@ def create_trader(account_id, mini_qmt_path, order_tracker=None):
             pass
     logger.debug(f"{GREEN}【账号订阅成功】{RESET} 账号ID:{account_id}")
 
-    callback = MyXtQuantTraderCallback(order_tracker=order_tracker)
+    if callback is None:
+        callback = MyXtQuantTraderCallback(order_tracker=order_tracker)
 
     if sys.platform == 'win32':
         try:

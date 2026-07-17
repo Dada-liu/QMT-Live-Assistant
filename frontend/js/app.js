@@ -56,50 +56,89 @@ async function initApp() {
         });
     }
 
-    document.getElementById('btn-connect-token')?.addEventListener('click', async () => {
-        const tokenInput = document.getElementById('connect-token-input');
-        if (!tokenInput) return;
-        const token = tokenInput.value.trim();
-        if (!token) {
-            Toast.warning('请输入 Token');
-            return;
-        }
-        try {
-            await api.testConnection(token);
-            setState('token', token);
-            setState('serverRunning', true);
-            UI.updateServerInfo({ running: true });
-            UI.disableForm(true);
-            UI.showSection('server-info');
-            UI.showSection('dashboard');
-            refreshDashboard();
-            await loadStrategies();
-            populateStrategyDropdown();
-            Toast.success('连接成功！');
-        } catch (error) {
-            Toast.error(`连接失败: ${error.message}`);
+    document.getElementById('btn-connect-token')?.addEventListener('click', handleTokenConnect);
+    document.getElementById('connect-token-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleTokenConnect();
         }
     });
+}
+
+async function handleTokenConnect() {
+    const tokenInput = document.getElementById('connect-token-input');
+    if (!tokenInput) return;
+
+    const token = tokenInput.value.trim();
+    if (!token) {
+        Toast.warning('请输入 Token');
+        return;
+    }
+
+    const btnConnect = document.getElementById('btn-connect-token');
+    if (btnConnect) btnConnect.disabled = true;
+
+    try {
+        await api.testConnection(token);
+
+        setState('token', token);
+        setState('serverRunning', true);
+
+        const serverInfoResult = await api.getServerInfo();
+        const serverData = serverInfoResult?.data || { running: true };
+        setState('serverInfo', { ...(getState('serverInfo') || {}), ...serverData });
+        UI.updateServerInfo(serverData);
+        UI.disableForm(true);
+
+        UI.switchTab('account');
+
+        await refreshDashboard();
+        await loadStrategies();
+        populateStrategyDropdown();
+
+        tokenInput.value = '';
+        Toast.success('连接成功！');
+    } catch (error) {
+        tokenInput.value = '';
+        Toast.error(`连接失败: ${error.message}`);
+    } finally {
+        if (btnConnect) btnConnect.disabled = false;
+    }
 }
 
 async function checkServerStatus() {
     const storedToken = getStoredToken();
     try {
         const result = await api.getServerInfo();
-        if (result.data && result.data.running) {
-            setState('serverRunning', true);
-            UI.updateServerInfo(result.data);
-            UI.disableForm(true);
+        const data = result.data || {};
+        const serverRunning = !!data.running;
+        const qmtConnected = !!data.qmt_connected;
 
-            if (storedToken) {
-                setState('token', storedToken);
-                await refreshDashboard();
-                await loadStrategies();
-                populateStrategyDropdown();
-                UI.switchTab('account');
+        setState('serverRunning', serverRunning);
+        setState('qmtConnected', qmtConnected);
+        setState('connectionState', data.connection_state || 'disconnected');
+        setState('lastConnectionError', data.last_connection_error || null);
+        UI.updateServerInfo(data);
+
+        if (serverRunning) {
+            UI.disableForm(true);
+            if (qmtConnected) {
+                UI.hideReconnectingBanner();
+                if (storedToken) {
+                    setState('token', storedToken);
+                    await refreshDashboard();
+                    await loadStrategies();
+                    populateStrategyDropdown();
+                    UI.switchTab('account');
+                } else {
+                    UI.switchTab('account');
+                    UI.showConnectPrompt();
+                }
             } else {
-                UI.switchTab('account');
-                UI.showConnectPrompt();
+                const msg = data.last_connection_error
+                    ? `QMT 连接断开：${data.last_connection_error}`
+                    : 'QMT 连接断开，正在重连...';
+                UI.showReconnectingBanner(msg);
             }
         }
     } catch (error) {

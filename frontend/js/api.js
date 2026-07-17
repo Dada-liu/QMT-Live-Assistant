@@ -160,6 +160,20 @@ class APIClient {
             headers: { 'X-Token': token },
         });
     }
+
+    async cancelOrder(orderId, token) {
+        return this.request(`api/orders/${encodeURIComponent(orderId)}/cancel`, {
+            method: 'POST',
+            headers: { 'X-Token': token },
+        });
+    }
+
+    async resendOrder(orderId, token) {
+        return this.request(`api/orders/${encodeURIComponent(orderId)}/resend`, {
+            method: 'POST',
+            headers: { 'X-Token': token },
+        });
+    }
 }
 
 export const api = new APIClient();

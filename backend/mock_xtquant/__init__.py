@@ -78,11 +78,15 @@ class MockTrader:
         self.session_id = session_id
         self._callbacks = []
         self._orders = {}
+        self._disconnected = False
 
     def start(self):
         return True
 
     def connect(self):
+        return True
+
+    def stop(self):
         return True
 
     def subscribe(self, account):
@@ -91,10 +95,27 @@ class MockTrader:
     def register_callback(self, callback):
         self._callbacks.append(callback)
 
+    def simulate_disconnect(self):
+        self._disconnected = True
+        for callback in self._callbacks:
+            try:
+                callback.on_disconnected()
+            except Exception:
+                pass
+
+    def simulate_reconnect(self):
+        self._disconnected = False
+
+    def _check_connection(self):
+        if self._disconnected:
+            raise ConnectionError("Mock QMT connection is disconnected")
+
     def query_stock_asset(self, account):
+        self._check_connection()
         return MockAsset()
 
     def order_stock(self, account, stock_code, order_type, order_volume, price_type, price, strategy_name="", order_remark=""):
+        self._check_connection()
         MockTrader._order_counter += 1
         order_id = MockTrader._order_counter
 
@@ -141,6 +162,7 @@ class MockTrader:
                     pass
 
     def query_stock_order(self, account, order_id):
+        self._check_connection()
         order = self._orders.get(str(order_id))
         if not order:
             return None
@@ -149,14 +171,17 @@ class MockTrader:
         return order
 
     def query_stock_orders(self, account, cancelable_only=False):
+        self._check_connection()
         for order in self._orders.values():
             self._advance_order_if_needed(order)
         return list(self._orders.values())
 
     def query_stock_trades(self, account):
+        self._check_connection()
         return [MockTrade()]
 
     def query_stock_positions(self, account):
+        self._check_connection()
         # 当前市值 = K线 close × volume，与 preClose 有差异以产生有意义当日盈亏
         return [
             MockPosition("000001.SZ", volume=500, market_value=6275.0, open_price=12.0, can_use_volume=500),

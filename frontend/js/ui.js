@@ -51,13 +51,31 @@ export const UI = {
         const grid = document.getElementById('server-info-grid');
         if (!grid) return;
 
-        const statusText = data.running ? '运行中' : '已停止';
-        const statusClass = data.running ? 'running' : 'stopped';
+        const running = !!data.running;
+        const connectionState = data.connection_state || 'disconnected';
+
+        let statusText = running ? '运行中' : '已停止';
+        let statusClass = running ? 'connected' : 'disconnected';
+        let connectionSuffix = '';
+        if (running) {
+            if (connectionState === 'connected') {
+                connectionSuffix = ' · QMT 已连接';
+            } else if (connectionState === 'reconnecting') {
+                connectionSuffix = ' · QMT 重连中';
+                statusClass = 'reconnecting';
+            } else if (connectionState === 'failed') {
+                connectionSuffix = ' · QMT 连接失败';
+                statusClass = 'failed';
+            } else {
+                connectionSuffix = ' · QMT 已断开';
+                statusClass = 'disconnected';
+            }
+        }
 
         grid.innerHTML = `
           <div class="server-info-item">
             <div class="server-info-label">状态</div>
-            <div class="server-info-value"><span class="status-dot ${statusClass}"></span>${statusText}</div>
+            <div class="server-info-value"><span class="status-dot ${statusClass}"></span>${statusText}${connectionSuffix}</div>
           </div>
           <div class="server-info-item">
             <div class="server-info-label">账户ID</div>
@@ -78,6 +96,15 @@ export const UI = {
             document.getElementById('token-display').textContent = storedToken;
             if (data.token) setState('token', data.token);
         }
+
+        this._updateLogoStatus(statusClass);
+    },
+
+    _updateLogoStatus(statusClass) {
+        const dot = document.getElementById('logo-status-dot');
+        if (!dot) return;
+        dot.classList.remove('connected', 'reconnecting', 'disconnected', 'failed');
+        dot.classList.add(statusClass || 'disconnected');
     },
 
     resetServerInfo() {
@@ -89,6 +116,26 @@ export const UI = {
         setState('serverInfo', null);
         setState('orders', []);
         this.renderOrders();
+        this.hideReconnectingBanner();
+        this._updateLogoStatus('disconnected');
+    },
+
+    showReconnectingBanner(message) {
+        let banner = document.getElementById('reconnecting-banner');
+        if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'reconnecting-banner';
+            banner.className = 'reconnecting-banner';
+            const header = document.querySelector('.top-nav');
+            if (header) header.insertAdjacentElement('afterend', banner);
+        }
+        banner.textContent = message || 'QMT 连接断开，正在重连...';
+        banner.classList.remove('hidden');
+    },
+
+    hideReconnectingBanner() {
+        const banner = document.getElementById('reconnecting-banner');
+        if (banner) banner.classList.add('hidden');
     },
 
     renderOrders() {
@@ -112,6 +159,7 @@ export const UI = {
             <span>股票</span>
             <span>成交/委托</span>
             <span>状态</span>
+            <span>操作</span>
           </div>
         `;
 
@@ -143,6 +191,13 @@ export const UI = {
             else if (status === 'failed') statusBadge = '<span class="badge badge-error">失败</span>';
             else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
+            let actionCell = '<span></span>';
+            if (status === 'pending' || status === 'partial') {
+                actionCell = `<button class="btn btn-sm" data-action="cancel" data-order-id="${escapeHtml(orderId)}">撤销</button>`;
+            } else if (status === 'failed' && !o.retried_as_order_id) {
+                actionCell = `<button class="btn btn-sm" data-action="resend" data-order-id="${escapeHtml(orderId)}">重发</button>`;
+            }
+
             return `
               <div class="signal-item">
                 <span class="signal-time">${time}</span>
@@ -151,6 +206,7 @@ export const UI = {
                 <span class="signal-msg">${stockDisplay}</span>
                 <span>${volume}</span>
                 <span>${statusBadge}</span>
+                <span>${actionCell}</span>
               </div>
             `;
         }).join('');

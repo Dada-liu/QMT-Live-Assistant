@@ -193,6 +193,11 @@ a:hover { text-decoration: underline; }
   background-color: var(--color-primary);
 }
 
+.top-nav-logo .logo-dot.connected { background-color: var(--color-semantic-up); }
+.top-nav-logo .logo-dot.reconnecting { background-color: var(--color-accent-yellow); }
+.top-nav-logo .logo-dot.disconnected { background-color: var(--color-muted-soft); }
+.top-nav-logo .logo-dot.failed { background-color: var(--color-semantic-down); }
+
 .top-nav-links {
   display: flex;
   align-items: center;
@@ -503,6 +508,24 @@ a:hover { text-decoration: underline; }
 
 .status-dot.running { background-color: var(--color-semantic-up); }
 .status-dot.stopped { background-color: var(--color-muted-soft); }
+.status-dot.connected { background-color: var(--color-semantic-up); }
+.status-dot.reconnecting { background-color: var(--color-accent-yellow); }
+.status-dot.disconnected { background-color: var(--color-muted-soft); }
+.status-dot.failed { background-color: var(--color-semantic-down); }
+
+.reconnecting-banner {
+  background-color: rgba(244, 176, 0, 0.12);
+  color: var(--color-accent-yellow);
+  text-align: center;
+  padding: var(--spacing-sm);
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  border-bottom: 1px solid rgba(244, 176, 0, 0.2);
+}
+
+.reconnecting-banner.hidden {
+  display: none;
+}
 
 /* --- Token Display --- */
 .token-display {
@@ -537,10 +560,10 @@ a:hover { text-decoration: underline; }
 
 .signal-item {
   display: grid;
-  grid-template-columns: 160px 200px 60px 1fr 80px 100px;
+  grid-template-columns: 160px 200px 60px 1fr 80px 100px 80px;
   align-items: center;
   gap: var(--spacing-sm);
-  min-width: 680px;
+  min-width: 760px;
   padding: var(--spacing-sm) var(--spacing-base);
   border-bottom: 1px solid var(--color-hairline-soft);
   font-size: var(--text-body-sm);

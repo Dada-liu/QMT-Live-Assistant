@@ -337,6 +337,8 @@ graph LR
         STATUS["GET /api/server-status"]
         CONN["GET /api/test-connection"]
         ORDERS["GET /api/orders<br/>(支持筛选参数)"]
+        ORDER_CANCEL["POST /api/orders/{order_id}/cancel"]
+        ORDER_RESEND["POST /api/orders/{order_id}/resend"]
         SIG_LOGS["GET /api/signal-logs<br/>(支持筛选参数)"]
         ASSET["GET /api/account-asset"]
         POS["GET /api/account-positions"]
@@ -415,6 +417,7 @@ graph LR
 - `fetch_open_prices_from_xtdata(stock_codes)` — 从 xtdata 获取日线 open
 - `fetch_stock_names_from_xtdata(stock_codes)` — 从 xtdata 获取合约名称
 - `fetch_latest_prices_from_xtdata(stock_codes)` — 通过 `xtdata.get_full_tick` 获取最新价（lastPrice），无 xtquant 时 fallback 到 mock 数据
+- `seconds_until_market_open(target_hour, target_minute)` — 计算到下一个市场开盘时刻（默认 09:30）的秒数，用于启动每日开盘主动轮询任务
 - 以上行情函数与代码转换函数统一集中管理，供 `order_tracker.py`、`strategy_manager.py`、`server.py`、`jukuan_orders.py` 复用
 
 ### 5. `backend/qmt_xtconstant.py` — xtconstant 常量映射
@@ -425,7 +428,7 @@ graph LR
 - `MyXtQuantTraderCallback(XtQuantTraderCallback)` — 回调处理器
   - `on_disconnected()`, `on_stock_order()`, `on_stock_trade()`, `on_order_error()`, `on_cancel_error()`
   - 将订单/成交事件同步到 `OrderTracker`
-- `create_trader(account_id, mini_qmt_path, order_tracker)` → `(trader, account, callback)`
+- `create_trader(account_id, mini_qmt_path, callback)` → `(trader, account, callback)`
   - `session_id = random.randint(100000, 999999)`
   - `xt_trader = XtQuantTrader(path, session_id)`
   - `xt_trader.start()` → `xt_trader.connect()`
@@ -433,6 +436,18 @@ graph LR
   - `xt_trader.subscribe(account)`
   - `xt_trader.register_callback(callback)`
   - 非 Windows 平台自动降级到 mock_xtquant
+
+### 6.5 `backend/connection_watchdog.py` — QMT 连接看门狗
+- `ConnectionState` 枚举：DISCONNECTED / CONNECTING / CONNECTED / RECONNECTING / FAILED
+- `_ReconnectAwareCallback` — 扩展 `MyXtQuantTraderCallback`，QMT 回调 `on_disconnected` 时通过 `loop.call_soon_threadsafe()` 通知看门狗
+- `QMTConnectionWatchdog` 类：
+  - `start()` / `stop()` 生命周期管理
+  - `_watchdog_loop()` — 连接、等待断线信号或健康检查、自动重连
+  - `_attempt_connect()` — 在 `asyncio.Lock` 保护下创建 trader，连接成功后执行健康检查
+  - `_health_check()` — 通过 `query_stock_asset` 验证连接可用性
+  - `_backoff_sleep()` — 指数退避（上限可配置）+ 20% 抖动
+  - `request_reconnect()` — 线程安全地请求重连
+- 由 `QMTServer` 持有并管理，断线期间 `qmt_connected` 为 false，交易/账户接口返回 503
 
 ### 7. `backend/strategy_manager.py` — 策略管理器
 
@@ -484,19 +499,23 @@ graph LR
 ### 8. `backend/server.py` — 核心服务器
 
 `QMTServer` 类：
-- `__init__` — 接收 `strategy_repository` / `order_repository` / `account_repository` / `signal_log_repository` / `db_session`，创建 `StrategyManager` 与 `OrderTracker` 实例；未传入 Repository 时自动使用 InMemory 实现
+- `__init__` — 接收 `strategy_repository` / `order_repository` / `account_repository` / `signal_log_repository` / `db_session`，创建 `StrategyManager` 与 `OrderTracker` 实例；未传入 Repository 时自动使用 InMemory 实现；初始化 `QMTConnectionWatchdog` 通过 `init_trader_async()` 管理
 - `generate_token()` — `secrets.token_hex(32)` 随机生成 64 字符安全 Token
 - `verify_token(x_token)` — FastAPI 依赖，校验主 Token
 - `verify_any_token(x_token)` — 同时校验主 Token 和所有已启用策略的 Token
-- `init_trader()` — 调用 create_trader
+- `init_trader_async()` — 初始化并启动 QMT 连接看门狗
 - `_ensure_account_record()` — 启用数据库时，启动前同步当前账户信息到 `accounts` 表
 - `convert_to_dict(obj)` — 递归转换 XtQuant 对象为 dict
-- `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker；乐观冻结已在 `JukuanOrderHandler._submit_order` 中完成，本方法仅将 `optimistic_snapshot` 随订单一起持久化，用于后续 reconcile / rollback
+- `_track_and_apply_order(...)` — 将聚宽下单结果注册到 OrderTracker，返回跟踪订单对象；乐观冻结已在 `JukuanOrderHandler._submit_order` 中完成，本方法仅将 `optimistic_snapshot` 随订单一起持久化，用于后续 reconcile / rollback
+- `_poll_orders_loop()` — 每 5 秒轮询 pending/partial 订单状态
+- `_market_open_poll_loop()` — 每日 09:30 自动执行一次 `poll_and_reconcile`，刷新隔夜 pending 订单状态
 - `setup_routes()` — 注册所有端点：
   - 动态端点（trader 方法自动映射）
   - 策略 CRUD：GET/POST `/api/strategies`、PUT/DELETE `/api/strategies/{id}`、POST toggle、POST refresh
   - 聚宽下单：`/api/jukuan_order`、`/api/jukuan_order_target`、`/api/jukuan_order_value`、`/api/jukuan_order_target_value`（仅接受策略 Token，主 Token 返回 403）
-  - `GET /api/orders` — 支持 `status`、`strategy_name`、`start_date`、`end_date` 筛选
+  - `GET /api/orders` — 支持 `status`、`strategy_name`、`start_date`、`end_date` 筛选，返回新增 `retried_as_order_id` 字段
+  - `POST /api/orders/{order_id}/cancel` — 撤销 pending/partial 订单
+  - `POST /api/orders/{order_id}/resend` — 重发 failed 订单
   - `GET /api/account-asset` — 返回账户资产 + 持仓明细（含 stock_name、open_price、total_pnl 等字段）+ daily_profit
   - `GET /api/account-positions` — 返回账户持仓明细
   - `POST /api/convert/jq-to-qmt`、`POST /api/convert/qmt-to-jq` — 代码转换
@@ -504,7 +523,8 @@ graph LR
 - 在 `/api/strategies` 和 `/api/strategies/refresh` 返回前，从 OrderTracker 统计每个策略的订单数量并注入 `order_count`；同时计算 pending/partial 买入订单的 `frozen_cash` 并注入，且把 `frozen_cash` 加回到 `total_asset`，使接口返回的策略总资产不受未成交订单影响
 - 创建/更新策略时通过 `normalize_to_qmt()` 将持仓 stock_code 统一为 QMT 格式
 - 聚宽下单端点写入 `signal_logs`，记录来源平台、请求 payload、处理后订单 ID 及异常信息
-- `init_and_setup()` → `run()` → `stop()`，`stop()` 关闭数据库 Session
+- `_require_qmt_connected` 依赖在 QMT 未连接时返回 503，保护交易与账户接口
+- `init_and_setup()` / `init_and_setup_async()` / `stop()` / `stop_async()` 生命周期管理，停止时取消轮询任务并关闭看门狗与数据库 Session
 
 ### 9. `backend/order_tracker.py` — 订单状态跟踪
 
@@ -523,6 +543,7 @@ graph LR
 - `update_order(order_id, **kwargs)` — 更新订单字段
 - `on_state_change(callback)` — 注册订单状态变更回调
 - `poll_and_reconcile(trader, account)` — 后台轮询 pending 订单，根据 QMT 实际成交修正策略持仓
+- `cancel_order(trader, account, order_id)` — 手动撤销 pending/partial 订单，调用 QMT `cancel_order` 后将本地订单置为 failed 并触发持仓回滚
 - 订单达到终态（filled / failed）时触发回调，调用 StrategyManager 的 `reconcile_position` 或 `rollback_position`
 - 每次状态变更通过 `_persist()` 保存订单并写入 `order_events` 审计事件
 
@@ -629,6 +650,7 @@ graph LR
 **`state.js`** — 全局状态 + Token 持久化
 ```
 serverRunning, token, serverInfo, orders[], theme, pollingInterval
+qmtConnected, connectionState, lastConnectionError
 getStoredToken() — 从 sessionStorage 读取 Token
 setState('token', v) — 自动同步到 sessionStorage
 clearToken() — 清除 sessionStorage 中的 Token
@@ -641,7 +663,8 @@ getOrders(token, filters), getAccountAsset(token), getAccountPositions(token),
 getStrategies(token), createStrategy(data, token), updateStrategy(id, data, token),
 deleteStrategy(id, token), toggleStrategy(id, token), refreshStrategies(token),
 convertJqToQmt(code), convertQmtToJq(code), healthCheck(),
-getDocList(), getDoc(docId)
+getDocList(), getDoc(docId),
+cancelOrder(orderId, token), resendOrder(orderId, token)
 ```
 
 **`ui.js`** — UI 工具
@@ -652,7 +675,8 @@ toggleTheme(), initTheme(), showConnectPrompt(), hideConnectPrompt(),
 showSection(), hideSection(), switchTab(tabName), resetDashboard(),
 renderStrategyOverview(strategies), setOrderFilterHandler(handler),
 _renderPositionList(), _renderStrategyPositionList(strategy), _buildPositionRows(positions, opts),
-_isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButtons()
+_isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButtons(),
+_updateLogoStatus(statusClass), showReconnectingBanner(message), hideReconnectingBanner()
 ```
 - `setOrderFilterHandler(handler)` — 注册策略订单数量被点击时的回调，回调接收 strategy_name，由 `app.js` 转发到 `applyOrderFilters` 实现跳转
 - `updateDashboard()` — 渲染仪表板，包含当日盈亏的格式化（正数红色 + 前缀，负数绿色 - 前缀，A 股习惯）；存储持仓数据并通过 `_renderPositionList()` 展示持仓明细表（6列：持仓名+代码、数量/可用、成本/现价、市值、盈亏、当日盈亏）
@@ -661,6 +685,9 @@ _isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButt
 - `_renderStrategyPositionList(strategy)` — 将策略持仓数据归一化后调用 `_buildPositionRows()` 渲染；现价使用 API 返回的实时 `current_price`，盈亏数据由后端计算
 - `_showStrategyPositionLoading()` / `_renderStrategyPositionLoadError()` — 策略卡片点击后展示/取消 loading 与错误提示
 - `_showAccountPositionLoading()` / `_renderAccountPositionLoadError()` — 账户持仓市值/当日盈亏卡片点击后展示/取消 loading 与错误提示
+- `_updateLogoStatus(statusClass)` — 根据连接状态更新页面顶部 Logo 前圆点颜色（connected / reconnecting / disconnected / failed）
+- `showReconnectingBanner(message)` / `hideReconnectingBanner()` — 在顶部导航下方展示/隐藏 QMT 重连提示横幅
+- `renderOrders()` — 渲染订单列表，表头增加「操作」列；`pending`/`partial` 行显示「撤销」按钮，`failed` 且未重发过的行显示「重发」按钮；点击按钮由 `monitor.js` 事件委托处理
 
 **`config-panel.js`** — 配置面板
 - 表单提交处理（启动/停止服务器）
@@ -688,6 +715,8 @@ _isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButt
 - 每 5 秒轮询 `/api/orders`，支持状态、日期、策略筛选参数
 - 筛选栏事件处理：日期选择器 + 策略下拉 + 状态筛选 + 筛选/重置
 - `applyOrderFilters(filters)` — 设置筛选栏各控件值、切换至「买卖监控」Tab 并拉取订单，用于策略订单数量点击跳转
+- 订单列表事件委托：点击「撤销」调用 `api.cancelOrder` 后刷新列表；点击「重发」调用 `api.resendOrder` 后刷新列表；操作期间按钮置灰并显示 Toast 结果
+- `startStatusCheck()` — 每 5 秒查询 `/api/server-info`，根据 `qmt_connected` / `connection_state` 更新全局状态、服务器信息卡片与 Logo 圆点；QMT 断线时展示重连横幅与提示，恢复后隐藏并提示成功；服务器停止或网络断开时自动重置到账号空状态
 - 最多保留 200 条
 - 方向颜色：买入绿色、卖出红色
 
@@ -801,6 +830,34 @@ _isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButt
 60. 补充 `tests/test_strategy_manager.py`：新增买入新建持仓获取名称、名称缺失/为 `None` 时回退、`reconcile_position` 路径获取名称的测试
 61. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
 
+### Phase 15: QMT 连接看门狗、Token 连接与订单主动管理 ✅
+62. 新增 `backend/connection_watchdog.py`：`QMTConnectionWatchdog` 管理 QMT 连接生命周期，断线后通过指数退避自动重连；`_ReconnectAwareCallback` 在 QMT 回调 `on_disconnected` 时通知看门狗；`asyncio.Lock` 在 `start()` 时创建避免事件循环问题
+63. 修改 `backend/qmt_client.py`：`create_trader()` 支持传入自定义 callback；修复 `YELLOW` 导入缺失
+64. 修改 `backend/mock_xtquant/__init__.py`：新增 `stop()`、`simulate_disconnect()`、`simulate_reconnect()` 与连接检查，支持看门狗测试
+65. 修改 `backend/server.py`：QMTServer 通过看门狗访问 trader/account/callback；新增 `qmt_connected`、`connection_state`、`last_connection_error`、`reconnect_attempts` 属性；`_require_qmt_connected` 依赖在 QMT 断开时返回 503；注册 `/api/orders/{order_id}/cancel` 与 `/api/orders/{order_id}/resend` 端点；启动 `_market_open_poll_loop` 每日 09:30 自动刷新 pending/partial 订单；`_track_and_apply_order` 返回跟踪订单对象
+66. 修改 `backend/order_tracker.py`：新增 `cancel_order()` 方法，校验订单状态后调用 QMT 撤单，并将订单置为 failed 触发持仓回滚
+67. 修改 `backend/models/order.py`、`backend/db/models/order.py`、`backend/db/repositories/order.py`：新增 `retried_as_order_id` 字段/列/映射，记录重发链路
+68. 新增 `backend/utils.py` 工具函数 `seconds_until_market_open(target_hour=9, target_minute=30)`，计算到下一个开盘时刻的秒数
+69. 生成并应用 Alembic 迁移 `9697b14dbafa_add_order_retried_as_order_id.py`
+70. 修改 `backend/main.py`：使用 FastAPI `lifespan` 替代已弃用的 `@app.on_event`；`/health` 与 `/api/server-info` 返回 QMT 连接状态；`/api/start-server` 与 `/api/stop-server` 使用异步生命周期方法
+71. 修改前端：
+    - `frontend/index.html`：在 Logo 前增加状态圆点 `id="logo-status-dot"`
+    - `frontend/styles.css`：新增 `.logo-dot.*` 与 `.reconnecting-banner` 样式
+    - `frontend/js/state.js`：新增 `qmtConnected`、`connectionState`、`lastConnectionError` 状态字段
+    - `frontend/js/ui.js`：`updateServerInfo()` 同步 Logo 圆点颜色；新增 `showReconnectingBanner()` / `hideReconnectingBanner()`；`renderOrders()` 增加操作列，按状态渲染「撤销」/「重发」按钮
+    - `frontend/js/api.js`：新增 `cancelOrder(orderId, token)` / `resendOrder(orderId, token)`
+    - `frontend/js/monitor.js`：`startStatusCheck()` 根据 QMT 连接状态展示重连横幅与提示；为 `#order-list` 添加事件委托处理撤销/重发按钮
+    - `frontend/js/app.js`：提取 `handleTokenConnect()`，支持 Enter 键触发连接；连接成功后加载仪表板与策略概览
+    - `frontend/js/config-panel.js`：监听表单输入事件并调用 `UI.updateConfigButtons()` 实现启动/停止按钮禁用逻辑
+72. 新增/补充测试：
+    - `tests/test_connection_watchdog.py`：覆盖连接、断线重连、健康检查失败、指数退避、停止、并发断线信号等场景
+    - `tests/test_main.py`：覆盖 lifespan、health、server-info、start/stop 接口的 QMT 连接状态返回
+    - `tests/test_order_tracker.py`：`TestOrderTrackerCancel` 覆盖 pending/partial 撤销、filled/failed/缺失订单异常、QMT 撤单失败、状态变更回调
+    - `tests/test_server.py`：`TestOrderCancelResendApi` 覆盖 cancel/resend 成功与各类错误码；`TestMarketOpenPoll` 覆盖市场开盘轮询任务创建；`TestServerLifecycle` 覆盖同步生命周期与停止
+    - `tests/test_utils.py`：覆盖 `seconds_until_market_open()` 开盘前/后/正好/自定义时间场景
+    - `tests/conftest.py`：统一注入项目根目录到 `sys.path`，修复 `pytest tests/` 直接运行时的模块导入问题
+73. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 
 ## 验证方案
 
@@ -827,3 +884,9 @@ _isConfigFormComplete(), _setConfigButtonStates(serverRunning), updateConfigButt
 21. **信号日志时间时区**：触发一笔聚宽下单后调用 `/api/signal-logs` → 验证返回的 `received_at` 带 `+00:00` 时区后缀，前端展示的时间与本地时间一致，不再出现订单列表与日志列表时间偏差
 22. **原子冻结与并发安全**：连续或并发对同一策略发起多笔买入，总金额超过 `available_cash` → 验证后续订单被拒绝，策略可用资金不会被扣成负数
 23. **策略持仓股票名称自动补全**：通过策略 Token 对一只策略原本没有的股票调用 `/api/jukuan_order` 买入并成交 → 验证策略持仓列表中该股票的 `stock_name` 已被自动填充；行情接口缺失名称时回退为空字符串
+24. **QMT 断线重连**：模拟 QMT 断线 → 验证页面顶部 Logo 圆点变黄/灰并展示重连横幅；恢复后圆点变绿并提示连接恢复；断线期间 `/api/account-asset`、`/api/jukuan_order*` 等接口返回 503
+25. **跨终端 Token 连接**：在无 Token 的新浏览器标签打开服务地址 → 输入主 Token 后点击连接/按 Enter → 验证页面刷新并进入仪表板与策略概览
+26. **开盘主动轮询**：服务启动后等待到下一个 09:30 → 验证日志中 `poll_and_reconcile` 被调用一次，pending/partial 订单状态被刷新
+27. **手动撤销订单**：产生一笔 pending 订单 → 在订单列表点击「撤销」→ 验证订单状态变为 failed，策略冻结资金释放
+28. **手动重发订单**：制造一笔 failed 订单 → 点击「重发」→ 验证生成新订单，原订单 `retried_as_order_id` 指向新订单 ID；重复点击重发返回 400
+29. **配置表单完整性校验**：清空配置表单任一必填项 → 验证「启动服务器」与「停止服务器」按钮同时禁用；填写完整后按钮恢复可用

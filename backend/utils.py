@@ -3,7 +3,7 @@
 提供时间格式化、订单类型解析、股票后缀补全等通用工具，
 以及基于 xtquant 的前收盘价、开盘价、最新价和合约名称获取函数。
 """
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
 
 
@@ -75,6 +75,19 @@ def normalize_to_qmt(code: str) -> str:
     if code.endswith(('.XSHE', '.XSHG', '.XBJ')):
         return jq_to_qmt(code)
     return code
+
+
+def seconds_until_market_open(target_hour: int = 9, target_minute: int = 30) -> float:
+    """计算到下一个市场开盘时刻的秒数。
+
+    默认目标为当天 09:30；若当前时间已过，则计算到次日 09:30。
+    返回秒数，可为小数（含微秒精度）。
+    """
+    now = datetime.now()
+    target = datetime.combine(now.date(), time(target_hour, target_minute))
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 def fetch_preclose_from_xtdata(stock_codes):

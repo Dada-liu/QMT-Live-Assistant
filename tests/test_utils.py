@@ -3,6 +3,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import re
+from unittest.mock import patch
 import pytest
 from backend.utils import (
     timestamp_to_datetime_string,
@@ -10,6 +11,7 @@ from backend.utils import (
     convert_to_current_date,
     fetch_latest_prices_from_xtdata,
     normalize_to_qmt,
+    seconds_until_market_open,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 
@@ -80,3 +82,47 @@ class TestNormalizeToQmt:
 
     def test_empty_code(self):
         assert normalize_to_qmt("") == ""
+
+
+class TestSecondsUntilMarketOpen:
+    def test_before_open_today(self):
+        from datetime import datetime, time, timedelta
+        # 固定到开盘前 1 小时
+        target = datetime.combine(datetime.now().date(), time(9, 30))
+        before = target - timedelta(hours=1)
+        with patch('backend.utils.datetime') as mock_dt:
+            mock_dt.now.return_value = before
+            mock_dt.combine = datetime.combine
+            result = seconds_until_market_open()
+            assert abs(result - 3600.0) < 0.001
+
+    def test_after_open_rolls_to_next_day(self):
+        from datetime import datetime, time, timedelta
+        target = datetime.combine(datetime.now().date(), time(9, 30))
+        after = target + timedelta(hours=1)
+        with patch('backend.utils.datetime') as mock_dt:
+            mock_dt.now.return_value = after
+            mock_dt.combine = datetime.combine
+            result = seconds_until_market_open()
+            expected = (target + timedelta(days=1) - after).total_seconds()
+            assert abs(result - expected) < 0.001
+
+    def test_exactly_at_open(self):
+        from datetime import datetime, time
+        target = datetime.combine(datetime.now().date(), time(9, 30))
+        with patch('backend.utils.datetime') as mock_dt:
+            mock_dt.now.return_value = target
+            mock_dt.combine = datetime.combine
+            result = seconds_until_market_open()
+            expected = 24 * 60 * 60
+            assert abs(result - expected) < 0.001
+
+    def test_custom_target_time(self):
+        from datetime import datetime, time, timedelta
+        target = datetime.combine(datetime.now().date(), time(10, 0))
+        before = target - timedelta(minutes=30)
+        with patch('backend.utils.datetime') as mock_dt:
+            mock_dt.now.return_value = before
+            mock_dt.combine = datetime.combine
+            result = seconds_until_market_open(10, 0)
+            assert abs(result - 1800.0) < 0.001

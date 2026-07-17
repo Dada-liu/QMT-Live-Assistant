@@ -27,6 +27,9 @@
 - 聚宽风格下单：支持按数量/金额/目标仓位下单，无持仓时自动通过 QMT 全推行情获取最新价
 - 亮/暗双主题切换
 - 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
+- QMT 连接看门狗：断线自动检测、指数退避重连，服务状态实时同步到页面顶部 Logo 圆点与服务器信息卡片
+- 跨终端 Token 连接：从其他浏览器/终端访问服务地址时，可手动输入主 Token 完成连接，获得完整管理视图
+- 订单主动管理：每天早上 09:30 开盘后自动向 QMT 查询并刷新 pending/partial 订单状态；订单列表中「待成交/部分成交」订单支持手动撤销，「失败」订单支持一键重发（原订单记录 `retried_as_order_id` 链路）
 
 ## 技术栈
 
@@ -216,7 +219,9 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 | GET | `/api/test-connection` | X-Token（主 Token） | 测试连接，返回资产数据 |
 | GET | `/api/account-asset` | X-Token（主 Token） | 账户资产 |
 | GET | `/api/account-positions` | X-Token（主 Token） | 账户持仓明细 |
-| GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`）；返回字段含 `stock_code`、`stock_name`、`jq_code` 等，`stock_name` 在下单时从 xtdata 获取并持久化 |
+| GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`）；返回字段含 `stock_code`、`stock_name`、`jq_code` 等，`stock_name` 在下单时从 xtdata 获取并持久化；新增 `retried_as_order_id` 字段标识重发链路 |
+| POST | `/api/orders/{order_id}/cancel` | X-Token（主 Token） | 撤销待成交/部分成交订单，将其标记为 failed 并回滚策略持仓 |
+| POST | `/api/orders/{order_id}/resend` | X-Token（主 Token） | 重发失败订单（仅当订单状态为 failed 且未重发过），生成新订单并记录链路 |
 | GET | `/api/signal-logs` | X-Token（主 Token） | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | X-Token（主 Token） | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | X-Token（主 Token） | QMT→聚宽 转换 |
@@ -264,7 +269,9 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 - 前端通过 Session Storage 存储 Token（页面刷新不丢失，关闭标签页即清除）
 - `/api/server-info` 不再返回 Token，仅在 `/api/start-server` 响应中返回一次
 - `/api/stop-server` 需要 X-Token 鉴权
-- 页面加载时若服务器在运行但无可用的 Token，需手动输入 Token 连接
+- 页面加载时若服务器在运行但无可用的 Token，需手动输入 Token 连接；连接成功后刷新页面并进入完整管理视图
+- QMT 连接状态通过页面顶部 Logo 圆点与服务器信息卡片实时展示：绿色（已连接）、黄色（重连中）、灰色（已断开）、红色（连接失败）
+- 后端内置 QMT 连接看门狗，断线后自动按指数退避重连，重连期间交易/账户类接口返回 503，前端展示重连横幅提示
 
 ## 运行测试
 

@@ -2,6 +2,9 @@ const TOKEN_KEY = 'qmt_token';
 
 export const AppState = {
     serverRunning: false,
+    qmtConnected: false,
+    connectionState: 'disconnected',
+    lastConnectionError: null,
     token: null,
     serverInfo: null,
     orders: [],

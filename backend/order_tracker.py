@@ -249,6 +249,27 @@ class OrderTracker:
     def get_order(self, order_id: Any) -> Optional[TrackedOrder]:
         return self._orders.get(str(order_id))
 
+    def cancel_order(self, trader, account, order_id: Any) -> TrackedOrder:
+        """撤销一笔待成交或部分成交的订单，并将其标记为失败。
+
+        调用底层 trader.cancel_order 后，触发状态变更回调以回滚策略持仓。
+        """
+        order = self.get_order(order_id)
+        if order is None:
+            raise ValueError("订单不存在")
+        if order.status not in (OrderState.PENDING, OrderState.PARTIAL):
+            raise ValueError("订单状态不可撤销")
+
+        try:
+            trader.cancel_order(account, order.order_id)
+        except Exception as e:
+            raise ValueError(f"调用 QMT 撤单失败: {e}")
+
+        old_status = order.status
+        order.error_msg = "手动撤销"
+        self._resolve(order, OrderState.FAILED, old_status, "cancel")
+        return order
+
     def get_pending_orders(self) -> List[TrackedOrder]:
         return [
             o for o in self._orders.values()

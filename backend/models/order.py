@@ -32,3 +32,4 @@ class TrackedOrder:
     error_msg: Optional[str] = None
     optimistic_position_applied: bool = False
     optimistic_snapshot: Optional[dict] = None
+    retried_as_order_id: Optional[str] = None

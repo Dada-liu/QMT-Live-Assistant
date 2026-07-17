@@ -10,12 +10,16 @@ export async function refreshDashboard() {
     const token = getState('token');
     if (!token) return;
 
+    UI.showDashboardLoading();
+
     try {
         const result = await api.getAccountAsset(token);
         if (result.success && result.data) {
             UI.updateDashboard(result.data);
+        } else {
+            UI.hideDashboardLoading();
         }
     } catch (error) {
-        // silently ignore
+        UI.hideDashboardLoading();
     }
 }

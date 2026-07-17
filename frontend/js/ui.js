@@ -8,6 +8,7 @@ export const UI = {
     _positionData: [],
     _selectedStrategyId: null,
     _orderFilterHandler: null,
+    _dashboardCardIds: ['dash-cash', 'dash-market-value', 'dash-total-asset', 'dash-daily-profit'],
 
     setOrderFilterHandler(handler) {
         this._orderFilterHandler = handler;
@@ -287,7 +288,33 @@ export const UI = {
         this.renderOrders();
     },
 
+    showDashboardLoading() {
+        this._dashboardCardIds.forEach(id => {
+            const valueEl = document.getElementById(id);
+            const loadingEl = document.getElementById(`${id}-loading`);
+            if (valueEl) {
+                valueEl.textContent = '';
+                valueEl.title = '';
+            }
+            if (loadingEl) loadingEl.classList.add('active');
+        });
+    },
+
+    hideDashboardLoading() {
+        this._dashboardCardIds.forEach(id => {
+            const valueEl = document.getElementById(id);
+            const loadingEl = document.getElementById(`${id}-loading`);
+            if (valueEl) {
+                valueEl.textContent = '--';
+                valueEl.title = '--';
+            }
+            if (loadingEl) loadingEl.classList.remove('active');
+        });
+    },
+
     updateDashboard(data) {
+        this.hideDashboardLoading();
+
         const formatCurrency = (value) => {
             if (value === undefined || value === null) return '--';
             const num = parseFloat(value);
@@ -603,6 +630,7 @@ export const UI = {
     },
 
     resetDashboard() {
+        this.hideDashboardLoading();
         ['dash-cash', 'dash-market-value', 'dash-total-asset', 'dash-daily-profit'].forEach(id => {
             const el = document.getElementById(id);
             if (el) {

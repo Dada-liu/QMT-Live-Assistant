@@ -743,6 +743,18 @@ a:hover { text-decoration: underline; }
 .dashboard-card-change.up { color: var(--color-pnl-up); }
 .dashboard-card-change.down { color: var(--color-pnl-down); }
 
+.dashboard-card-loading {
+  display: none;
+  margin-top: var(--spacing-xxs);
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.dashboard-card-loading.active {
+  display: block;
+}
+
 /* --- JQ Converter --- */
 .converter-layout {
   display: grid;

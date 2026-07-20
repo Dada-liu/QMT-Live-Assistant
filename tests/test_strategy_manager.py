@@ -353,6 +353,15 @@ class TestStrategyManagerOptimisticUpdates:
         assert snapshot["delta_cash"] == -1000
         assert snapshot["delta_frozen_quantity"] == 0
 
+    def test_apply_optimistic_position_buy_insufficient_cash(self, mgr):
+        """买入成本超出可用资金时返回 None，且资金不变。"""
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 2000.0)
+        assert snapshot is None
+        s = mgr.get(sid)
+        assert len(s.positions) == 0
+        assert s.available_cash == 100000
+
     def test_apply_optimistic_position_sell(self, mgr):
         sid = self._first_id(mgr)
         mgr.update_position(sid, "000001.SZ", "buy", 300, 10.0)

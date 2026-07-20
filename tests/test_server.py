@@ -876,6 +876,23 @@ class TestOrderTrackingIntegration:
         assert response.status_code == 500
         assert "策略可用持仓不足" in response.json()["detail"]
 
+    def test_strategy_jukuan_order_buy_rejected_when_cash_insufficient(self, client, server):
+        """买入成本超出策略可用资金时应被拒绝，且不产生订单。"""
+        strategy = self._create_strategy(client, server)
+        # 10000 股 × 12.55 = 125,500，超出策略 100,000 可用资金
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 10000},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 500
+        assert "策略可用资金不足" in response.json()["detail"]
+
+        orders_resp = client.get("/api/orders", headers={"X-Token": server.token})
+        assert orders_resp.json()["data"] == []
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.available_cash == 100000
+
 
 class TestOrderCancelResendApi:
     """订单撤销与重发 API 测试"""
@@ -1196,6 +1213,57 @@ class TestOrderCancelResendApi:
         )
         assert resend_resp.status_code == 400
         assert "策略可用持仓不足" in resend_resp.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_market_price_freezes_by_latest_price(self, mock_fetch_names, client, server):
+        """市价重发应按最新价估算冻结资金，而不是冻结 0。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["price"] == 0.0
+
+        new_order = server.order_tracker.get_order(data["order_id"])
+        assert new_order.price == 0.0
+        # mock 最新价 12.55，100 股应冻结 1255
+        assert new_order.optimistic_snapshot["delta_cash"] == -1255.0
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_market_insufficient_funds_returns_400(self, mock_fetch_names, client, server):
+        """市价重发按最新价估算后超出策略资金，应返回 400。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        # 10000 股 × 12.55（最新价估算）= 125,500，超出策略 100,000 可用资金
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"quantity": 10000, "price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 400
+        assert "策略可用资金不足" in resend_resp.json()["detail"]
 
     def test_cancel_returns_503_when_disconnected(self, client, server):
         server._watchdog._state = ConnectionState.RECONNECTING

@@ -178,16 +178,22 @@ class JukuanOrderHandler:
         """
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
+        # 市价买入单（price=0）没有委托价可冻结，用最新价估算成本做校验与冻结；
+        # 行情取价失败时 freeze_price=0，成本为 0 视为跳过校验，由 QMT 实盘兜底
+        freeze_price = price
+        if direction == 'buy' and price <= 0 and strategy_id and self.strategy_manager is not None:
+            freeze_price = fetch_latest_prices_from_xtdata([stock_code]).get(stock_code, 0.0)
+
         # 先原子性地冻结资金/持仓；返回 None 说明资金或持仓不足
         optimistic_snapshot = None
         if strategy_id and self.strategy_manager is not None:
             optimistic_snapshot = self.strategy_manager.apply_optimistic_position(
-                strategy_id, stock_code, direction, quantity, price
+                strategy_id, stock_code, direction, quantity, freeze_price
             )
             if optimistic_snapshot is None:
                 if direction == 'buy':
                     available_cash = self._get_strategy_available_cash(strategy_id)
-                    cost = quantity * price
+                    cost = quantity * freeze_price
                     raise ValueError(
                         f"策略可用资金不足: {stock_code} 需要 {cost:.2f}, 可用 {available_cash:.2f}"
                     )

@@ -451,13 +451,15 @@ class StrategyManager:
     ) -> Optional[tuple]:
         """下单时乐观冻结：买入只冻结资金；卖出冻结持仓可用数量。
 
-        返回 (new_positions, new_cash)；若卖出可用数量不足则返回 None。
+        返回 (new_positions, new_cash)；买入资金不足或卖出可用数量不足时返回 None。
         """
         cost = quantity * price
         positions = [dict(p) for p in positions]
         new_cash = available_cash
 
         if direction == "buy":
+            if cost > available_cash:
+                return None
             new_cash -= cost
             # 买入未成交前不创建/修改 position 行，仅冻结资金
         elif direction == "sell":

@@ -29,7 +29,7 @@
 - 随机 Token 认证（secrets.token_hex），保护所有交易 API 端点
 - QMT 连接看门狗：断线自动检测、指数退避重连，服务状态实时同步到页面顶部 Logo 圆点与服务器信息卡片
 - 跨终端 Token 连接：从其他浏览器/终端访问服务地址时，可手动输入主 Token 完成连接，获得完整管理视图
-- 订单主动管理：每天早上 09:30 开盘后自动向 QMT 查询并刷新 pending/partial 订单状态；订单列表中「待成交/部分成交」订单支持手动撤销，「失败」订单支持一键重发（原订单记录 `retried_as_order_id` 链路）
+- 订单主动管理：每天早上 09:30 开盘后自动向 QMT 查询并刷新 pending/partial 订单状态；订单列表中「待成交/部分成交」订单支持手动撤销，「失败」订单支持重发——点击重发弹出参数确认弹窗（默认填入原下单参数，可修改价格与数量，支持市价/限价切换），确认后生成新订单（原订单记录 `retried_as_order_id` 链路）
 
 ## 技术栈
 
@@ -184,10 +184,10 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
    - 持仓盈亏 `total_pnl` = 策略自身分摊市值 − 成本价 × 数量，按策略持仓占账户总持仓比例分摊市值
    - 当日盈亏 `daily_pnl` 拆分为两部分计算：昨日已有持仓按「现价 − 昨日收盘价」计算，今日买入持仓按「现价 − 买入成本」计算
    - 每日首次刷新行情时自动跨日合并：前一天的「今日买入」部分合并为「昨日持仓」，并使用昨日收盘价作为新的成本基准
-6. **冻结资金与总资产**：买入下单时，系统会立即从策略可用资金中冻结订单金额（`available_cash` 减少）；订单成交后冻结转为真实持仓，订单失败或撤单后通过 `rollback_position()` 自动解冻。接口返回的策略总资产 `total_asset` 会把冻结资金加回，因此未成交买入订单不会导致展示的总资产偏低；`frozen_cash` 字段单独展示当前策略被冻结的资金金额
+6. **冻结资金与总资产**：买入下单时，系统会立即从策略可用资金中冻结订单金额（`available_cash` 减少）；市价买入单（无委托价）按最新价估算冻结金额，成交后按真实成交价多退少补；订单成交后冻结转为真实持仓，订单失败或撤单后通过 `rollback_position()` 自动解冻。接口返回的策略总资产 `total_asset` 会把冻结资金加回，因此未成交买入订单不会导致展示的总资产偏低；`frozen_cash` 字段单独展示当前策略被冻结的资金金额
 7. **行情刷新**：点击「刷新行情」从 QMT 拉取实时数据，计算策略持仓市值、现价、持仓盈亏和当日盈亏
 8. **策略概览**：在「QMT账号」tab 查看各策略的资产概览卡片，卡片展示持仓数量与订单数量；点击卡片查看该策略的持仓明细表（请求接口前展示 loading，失败时显示错误提示），持仓表列与账户持仓一致；点击订单数量可跳转至「买卖监控」并自动筛选该策略的订单
-9. **持仓/资金校验**：策略 Token 下单时，系统按策略级别的持仓和可用资金进行校验，而非账户整体；卖出数量不可超过策略对应股票的可用持仓，按金额买入不可超过策略可用资金
+9. **持仓/资金校验**：策略 Token 下单时，系统按策略级别的持仓和可用资金进行校验，而非账户整体；卖出数量不可超过策略对应股票的可用持仓；所有买入路径（按数量/目标仓位/按金额/目标市值/失败重发）均校验策略可用资金，成本超出可用资金时拒绝下单并返回"策略可用资金不足"（市价买入按最新价估算成本校验）
 
 
 ## API 参考
@@ -221,7 +221,7 @@ python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\us
 | GET | `/api/account-positions` | X-Token（主 Token） | 账户持仓明细 |
 | GET | `/api/orders` | X-Token（主 Token） | 订单历史（支持 `?status=&strategy_name=&start_date=&end_date=`）；返回字段含 `stock_code`、`stock_name`、`jq_code` 等，`stock_name` 在下单时从 xtdata 获取并持久化；新增 `retried_as_order_id` 字段标识重发链路 |
 | POST | `/api/orders/{order_id}/cancel` | X-Token（主 Token） | 撤销待成交/部分成交订单，将其标记为 failed 并回滚策略持仓 |
-| POST | `/api/orders/{order_id}/resend` | X-Token（主 Token） | 重发失败订单（仅当订单状态为 failed 且未重发过），生成新订单并记录链路 |
+| POST | `/api/orders/{order_id}/resend` | X-Token（主 Token） | 重发失败订单（仅当订单状态为 failed 且未重发过），生成新订单并记录链路；可选请求体 `{"quantity": int, "price": float}` 覆盖原下单参数（price=0 表示市价），买入数量须为 100 的整数倍 |
 | GET | `/api/signal-logs` | X-Token（主 Token） | 信号日志（支持 `?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | X-Token（主 Token） | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | X-Token（主 Token） | QMT→聚宽 转换 |

@@ -858,6 +858,20 @@ _updateLogoStatus(statusClass), showReconnectingBanner(message), hideReconnectin
     - `tests/conftest.py`：统一注入项目根目录到 `sys.path`，修复 `pytest tests/` 直接运行时的模块导入问题
 73. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
 
+### Phase 16: 失败订单重发改参与买入资金校验 ✅
+74. 修改 `backend/models/order.py`：新增 `OrderResendRequest` Pydantic 模型（`quantity` 可选 gt=0、`price` 可选 ge=0），与 `TrackedOrder` 同文件，镜像 `strategy.py` 的请求模型风格
+75. 修改 `backend/server.py`：`/api/orders/{order_id}/resend` 端点支持可选请求体覆盖数量/价格（`is not None` 判断，price=0 为合法市值价，无 body 的旧调用完全兼容）；买入非整手（期货除外）返回 400；为 `_submit_order` 调用补充 try/except（ValueError→400，修复资金/持仓不足时返回裸 500 的缺口）；响应补充 `price` 字段
+76. 修改 `backend/strategy_manager.py`：`_freeze_position` 买入分支新增 `cost > available_cash` 时返回 None——此前买入冻结不校验余额、`available_cash` 可透支为负数，`_submit_order` 的"策略可用资金不足"分支对买入实为死代码；一处改动覆盖全部 5 条买入路径（order/order_target/order_value/order_target_value/resend）
+77. 修改 `backend/jukuan_orders.py`：`_submit_order` 对市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 最新价估算成本做校验与冻结（QMT 仍按市价单提交；行情取价失败则跳过校验优雅降级）；成交对账 `reconcile_position` 先回滚估算冻结再按真实成交价记账，估算价不影响最终账务
+78. 修改前端：
+    - `frontend/index.html`：新增 `#resend-modal` 重发弹窗，完全复用 strategy-modal 样式类（零新 CSS）；股票/方向只读，数量可改，价格类型下拉（市价/限价）控制价格行显隐
+    - `frontend/js/api.js`：`resendOrder(orderId, overrides, token)` 支持请求体
+    - `frontend/js/monitor.js`：重发按钮改为打开弹窗（`openResendModal` 按原订单预填，price>0 默认限价、=0 默认市价）；提交前校验（正整数、买入整手、限价>0 且最多两位小数 epsilon 比较）；成功后 Toast + 关闭弹窗 + 刷新列表
+79. 新增/补充测试：
+    - `tests/test_server.py`：`TestOrderCancelResendApi` 新增改参重发、市价覆盖、买入非整手 400、卖出零股放行、非法参数 422×2、卖出持仓不足 400、市价重发按最新价冻结、市价重发超资 400 等用例；`TestOrderTrackingIntegration` 新增买入超资拒绝且无订单生成用例
+    - `tests/test_strategy_manager.py`：新增买入冻结超资返回 None 且资金不变的单元用例
+80. 更新 `README.md` 与 `IMPLEMENTATION_PLAN.md`
+
 
 ## 验证方案
 
@@ -890,3 +904,5 @@ _updateLogoStatus(statusClass), showReconnectingBanner(message), hideReconnectin
 27. **手动撤销订单**：产生一笔 pending 订单 → 在订单列表点击「撤销」→ 验证订单状态变为 failed，策略冻结资金释放
 28. **手动重发订单**：制造一笔 failed 订单 → 点击「重发」→ 验证生成新订单，原订单 `retried_as_order_id` 指向新订单 ID；重复点击重发返回 400
 29. **配置表单完整性校验**：清空配置表单任一必填项 → 验证「启动服务器」与「停止服务器」按钮同时禁用；填写完整后按钮恢复可用
+30. **重发弹窗改参**：制造一笔 failed 订单 → 点击「重发」→ 验证弹窗预填原下单参数（限价单显示价格行并填价，市价单隐藏）；修改数量/价格后确认 → 验证新订单按新参数生成，原订单参数不变且 `retried_as_order_id` 指向新订单；买入填非整手数量 → 验证前端 Toast 拦截且不发请求；切换市价为限价 → 验证价格行显隐联动；取消/关闭弹窗不发请求
+31. **买入资金校验**：策略可用资金 100000 时通过 `/api/jukuan_order` 买入 10000 股（成本 125500）→ 验证返回"策略可用资金不足"、无订单生成、策略资金不变；失败订单重发弹窗选市价 → 验证按最新价估算冻结资金（冻结金额非 0）；市价+超量重发 → 验证 Toast 提示资金不足

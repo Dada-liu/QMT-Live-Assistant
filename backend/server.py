@@ -14,10 +14,10 @@ from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
 from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open
-from backend.jukuan_orders import JukuanOrderHandler
+from backend.jukuan_orders import JukuanOrderHandler, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
-from backend.models.order import TrackedOrder
+from backend.models.order import TrackedOrder, OrderResendRequest
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
@@ -474,6 +474,7 @@ class QMTServer:
         @app.post('/api/orders/{order_id}/resend')
         async def resend_order(
             order_id: str = Path(...),
+            data: Optional[OrderResendRequest] = None,
             token: str = Depends(_require_qmt_connected),
         ):
             order = _current_server.order_tracker.get_order(order_id)
@@ -484,22 +485,37 @@ class QMTServer:
             if order.retried_as_order_id is not None:
                 raise HTTPException(status_code=400, detail="订单已重发过")
 
+            # 合并可选的覆盖参数；price=0 是合法的市价显式值，必须用 is not None 判断
+            new_quantity = data.quantity if data and data.quantity is not None else order.quantity
+            new_price = data.price if data and data.price is not None else order.price
+
+            # 人工重发时买入须为整手（期货除外）；卖出允许零股，故不校验
+            if (order.direction == 'buy'
+                    and not _is_future(order.stock_code)
+                    and new_quantity % 100 != 0):
+                raise HTTPException(status_code=400, detail="买入数量须为100的整数倍")
+
             handler = _get_jukuan_handler()
-            result = handler._submit_order(
-                order.stock_code,
-                order.order_type,
-                order.quantity,
-                price=order.price,
-                strategy_name=order.strategy_name,
-                strategy_id=order.strategy_id,
-            )
+            try:
+                result = handler._submit_order(
+                    order.stock_code,
+                    order.order_type,
+                    new_quantity,
+                    price=new_price,
+                    strategy_name=order.strategy_name,
+                    strategy_id=order.strategy_id,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"重发失败: {e}")
 
             order_result = {
                 'order_id': result['order_id'],
                 'jq_code': order.jq_code,
                 'direction': order.direction,
-                'quantity': order.quantity,
-                'price': order.price,
+                'quantity': new_quantity,
+                'price': new_price,
                 'order_type': order.order_type,
                 'optimistic_snapshot': result['optimistic_snapshot'],
             }
@@ -517,6 +533,7 @@ class QMTServer:
                 "stock_code": new_order.stock_code,
                 "direction": new_order.direction,
                 "quantity": new_order.quantity,
+                "price": new_order.price,
                 "status": new_order.status,
                 "retried_from_order_id": order.order_id,
             }}

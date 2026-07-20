@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from pydantic import BaseModel, Field
+
 
 class OrderState:
     PENDING = "pending"
@@ -33,3 +35,9 @@ class TrackedOrder:
     optimistic_position_applied: bool = False
     optimistic_snapshot: Optional[dict] = None
     retried_as_order_id: Optional[str] = None
+
+
+class OrderResendRequest(BaseModel):
+    """重发订单请求体，可选覆盖原下单参数。"""
+    quantity: Optional[int] = Field(default=None, gt=0)
+    price: Optional[float] = Field(default=None, ge=0)

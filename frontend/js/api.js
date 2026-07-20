@@ -168,10 +168,11 @@ class APIClient {
         });
     }
 
-    async resendOrder(orderId, token) {
+    async resendOrder(orderId, overrides = {}, token) {
         return this.request(`api/orders/${encodeURIComponent(orderId)}/resend`, {
             method: 'POST',
             headers: { 'X-Token': token },
+            body: JSON.stringify(overrides),
         });
     }
 }

@@ -1003,6 +1003,200 @@ class TestOrderCancelResendApi:
         assert second.status_code == 400
         assert "已重发过" in second.json()["detail"]
 
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_with_overridden_quantity_and_price(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"quantity": 200, "price": 11.5},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["quantity"] == 200
+        assert data["price"] == 11.5
+
+        new_order = server.order_tracker.get_order(data["order_id"])
+        assert new_order.quantity == 200
+        assert new_order.price == 11.5
+
+        # 原订单参数保持不变，仅记录重发链接
+        original = server.order_tracker.get_order(order_id)
+        assert original.quantity == 100
+        assert original.retried_as_order_id == str(data["order_id"])
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_with_market_price_override(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["price"] == 0.0
+
+        new_order = server.order_tracker.get_order(data["order_id"])
+        assert new_order.price == 0.0
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_buy_quantity_not_lot_multiple_returns_400(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"quantity": 150},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 400
+        assert "整数倍" in resend_resp.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_sell_odd_lot_allowed(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        # 先买入并成交，建立 100 股持仓
+        buy_resp = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert buy_resp.status_code == 200
+
+        import asyncio
+        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+
+        # 卖出 100 股并置为失败
+        sell_resp = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": -100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert sell_resp.status_code == 200
+        sell_order_id = sell_resp.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(sell_order_id, ORDER_CANCELED, 0, 0.0)
+
+        # 卖出允许零股，50 股应重发成功
+        resend_resp = client.post(
+            f"/api/orders/{sell_order_id}/resend",
+            json={"quantity": 50},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["quantity"] == 50
+
+        new_order = server.order_tracker.get_order(data["order_id"])
+        assert new_order.quantity == 50
+        assert new_order.direction == "sell"
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_invalid_quantity_returns_422(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        for bad_quantity in (0, -100):
+            resend_resp = client.post(
+                f"/api/orders/{order_id}/resend",
+                json={"quantity": bad_quantity},
+                headers={"X-Token": server.token},
+            )
+            assert resend_resp.status_code == 422
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_invalid_price_returns_422(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"price": -1},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 422
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_insufficient_position_returns_400(self, mock_fetch_names, client, server):
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        # 先买入并成交，建立 100 股持仓
+        buy_resp = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert buy_resp.status_code == 200
+
+        import asyncio
+        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+
+        # 卖出 100 股并置为失败
+        sell_resp = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": -100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert sell_resp.status_code == 200
+        sell_order_id = sell_resp.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(sell_order_id, ORDER_CANCELED, 0, 0.0)
+
+        # 重发 200 股超出策略 100 股可用持仓，应返回 400
+        resend_resp = client.post(
+            f"/api/orders/{sell_order_id}/resend",
+            json={"quantity": 200},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 400
+        assert "策略可用持仓不足" in resend_resp.json()["detail"]
+
     def test_cancel_returns_503_when_disconnected(self, client, server):
         server._watchdog._state = ConnectionState.RECONNECTING
         response = client.post(

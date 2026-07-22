@@ -13,17 +13,18 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq
 from backend.jukuan_orders import JukuanOrderHandler, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
-from backend.models.order import TrackedOrder, OrderResendRequest
+from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
 from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
 from backend.db.models.account import AccountModel
+from backend.constants import STOCK_BUY, STOCK_SELL
 from config.settings import settings
 
 _current_server = None
@@ -866,6 +867,87 @@ class QMTServer:
             if not strategy:
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': strategy.model_dump()}
+
+        @app.post('/api/strategies/{strategy_id}/order')
+        async def place_strategy_order(
+            strategy_id: str = Path(...),
+            data: ManualOrderRequest = ...,
+            token: str = Depends(_require_qmt_connected),
+        ):
+            """Web UI 手动下单（主 Token），复用聚宽下单的冻结/校验/跟踪链路。"""
+            strategy = _current_server.strategy_manager.get(strategy_id)
+            if strategy is None:
+                raise HTTPException(status_code=404, detail="策略不存在")
+            if not strategy.enabled:
+                raise HTTPException(status_code=400, detail="策略已禁用，无法下单")
+            if data.direction not in ('buy', 'sell'):
+                raise HTTPException(status_code=400, detail="direction 必须为 buy 或 sell")
+
+            qmt_code = normalize_to_qmt(data.stock_code.strip())
+            if not qmt_code:
+                raise HTTPException(status_code=400, detail="请提供股票代码")
+
+            # 买入须为整手（期货除外），与重发端点规则一致；卖出允许零股
+            if (data.direction == 'buy'
+                    and not _is_future(qmt_code)
+                    and data.quantity % 100 != 0):
+                raise HTTPException(status_code=400, detail="买入数量须为100的整数倍")
+
+            stock_name = fetch_stock_names_from_xtdata({qmt_code}).get(qmt_code) or ""
+            order_type = STOCK_BUY if data.direction == 'buy' else STOCK_SELL
+
+            handler = _get_jukuan_handler()
+            try:
+                result = handler._submit_order(
+                    qmt_code,
+                    order_type,
+                    data.quantity,
+                    price=data.price,
+                    strategy_name=strategy.name,
+                    strategy_id=strategy.id,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"下单失败: {e}")
+
+            order_result = {
+                'order_id': result['order_id'],
+                'jq_code': qmt_to_jq(qmt_code),
+                'direction': data.direction,
+                'quantity': data.quantity,
+                'price': data.price,
+                'order_type': order_type,
+                'optimistic_snapshot': result['optimistic_snapshot'],
+            }
+            new_order = _current_server._track_and_apply_order(
+                order_result, strategy.id, strategy.name, stock_name=stock_name
+            )
+            if new_order is None:
+                raise HTTPException(status_code=500, detail="下单后跟踪订单失败")
+
+            _current_server.strategy_manager.add_trading_record(strategy.id, {
+                'timestamp': datetime.now().isoformat(),
+                'stock_code': qmt_code,
+                'direction': data.direction,
+                'quantity': data.quantity,
+                'price': data.price,
+                'order_id': str(result['order_id']),
+                'method': 'manual_order',
+            })
+
+            return {'success': True, 'data': {
+                "order_id": new_order.order_id,
+                "stock_code": new_order.stock_code,
+                "stock_name": new_order.stock_name,
+                "jq_code": new_order.jq_code,
+                "direction": new_order.direction,
+                "quantity": new_order.quantity,
+                "price": new_order.price,
+                "status": new_order.status,
+                "strategy_id": strategy.id,
+                "strategy_name": strategy.name,
+            }}
 
         @app.post('/api/strategies/refresh')
         async def refresh_strategies(token: str = Depends(_require_qmt_connected)):

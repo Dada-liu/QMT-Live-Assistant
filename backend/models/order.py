@@ -41,3 +41,11 @@ class OrderResendRequest(BaseModel):
     """重发订单请求体，可选覆盖原下单参数。"""
     quantity: Optional[int] = Field(default=None, gt=0)
     price: Optional[float] = Field(default=None, ge=0)
+
+
+class ManualOrderRequest(BaseModel):
+    """Web UI 手动下单请求体（主 Token）。"""
+    stock_code: str = Field(min_length=1)
+    direction: str = Field(min_length=1)      # 'buy' | 'sell'，端点内手动校验 → 400
+    quantity: int = Field(gt=0)
+    price: float = Field(default=0.0, ge=0)   # 0 表示市价

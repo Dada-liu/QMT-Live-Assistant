@@ -175,6 +175,14 @@ class APIClient {
             body: JSON.stringify(overrides),
         });
     }
+
+    async placeStrategyOrder(strategyId, data, token) {
+        return this.request(`api/strategies/${encodeURIComponent(strategyId)}/order`, {
+            method: 'POST',
+            headers: { 'X-Token': token },
+            body: JSON.stringify(data),
+        });
+    }
 }
 
 export const api = new APIClient();

@@ -1395,3 +1395,250 @@ class TestServerLifecycle:
 
         asyncio.run(run())
         assert srv.running is False
+
+
+class TestStrategyManualOrderApi:
+    """Web UI 手动下单 API 测试（主 Token）"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "手动下单测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def _assign_position(self, client, server, strategy, quantity=300, price=12.0):
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": price}):
+            response = client.put(
+                f"/api/strategies/{strategy['id']}",
+                json={
+                    "positions": [
+                        {
+                            "stock_code": "000001.XSHE",
+                            "stock_name": "平安银行",
+                            "quantity": quantity,
+                            "current_price": price,
+                        }
+                    ]
+                },
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 200
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_buy_limit_success(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["direction"] == "buy"
+        assert data["quantity"] == 100
+        assert data["price"] == 12.55
+        assert data["stock_name"] == "平安银行"
+        assert data["jq_code"] == "000001.XSHE"
+        assert data["strategy_name"] == "手动下单测试策略"
+
+        orders_resp = client.get("/api/orders", headers={"X-Token": server.token})
+        assert len(orders_resp.json()["data"]) == 1
+
+        # 限价买入冻结 100 × 12.55 = 1255
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.available_cash == 100000 - 1255
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_buy_market_success(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 200, "price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["price"] == 0.0
+
+        # 市价买入按 mock 最新价 12.55 估算冻结 200 × 12.55 = 2510
+        new_order = server.order_tracker.get_order(data["order_id"])
+        assert new_order.optimistic_snapshot["delta_cash"] == -2510.0
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_buy_jq_code_normalized(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.XSHE", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["stock_code"] == "000001.SZ"
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_buy_non_lot_returns_400(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 150, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "整数倍" in response.json()["detail"]
+
+        orders_resp = client.get("/api/orders", headers={"X-Token": server.token})
+        assert orders_resp.json()["data"] == []
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.available_cash == 100000
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_buy_insufficient_cash_returns_400(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        # 市价买入 10000 股，按最新价 12.55 估算成本 125,500 > 100,000
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 10000, "price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "策略可用资金不足" in response.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_sell_success(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        self._assign_position(client, server, strategy, quantity=300, price=12.0)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "sell", "quantity": 100, "price": 12.0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["direction"] == "sell"
+
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.positions[0]["quantity"] == 300
+        assert s.positions[0]["available_quantity"] == 200
+        assert s.positions[0]["frozen_quantity"] == 100
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_sell_exceeds_available_returns_400(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        self._assign_position(client, server, strategy, quantity=300, price=12.0)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "sell", "quantity": 400, "price": 12.0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "策略可用持仓不足" in response.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_sell_no_position_returns_400(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "sell", "quantity": 100, "price": 12.0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "策略可用持仓不足" in response.json()["detail"]
+
+    def test_manual_order_strategy_not_found_returns_404(self, client, server):
+        response = client.post(
+            "/api/strategies/nonexistent/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 404
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_disabled_strategy_returns_400(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+        client.post(
+            f"/api/strategies/{strategy['id']}/toggle",
+            headers={"X-Token": server.token},
+        )
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "已禁用" in response.json()["detail"]
+
+    def test_manual_order_invalid_direction_returns_400(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "hold", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "buy 或 sell" in response.json()["detail"]
+
+    def test_manual_order_requires_auth(self, client, server):
+        strategy = self._create_strategy(client, server)
+        body = {"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55}
+
+        no_header = client.post(f"/api/strategies/{strategy['id']}/order", json=body)
+        assert no_header.status_code == 422
+
+        bad_token = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json=body,
+            headers={"X-Token": "invalid-token"},
+        )
+        assert bad_token.status_code == 401
+
+    def test_manual_order_returns_503_when_disconnected(self, client, server):
+        strategy = self._create_strategy(client, server)
+        server._watchdog._state = ConnectionState.RECONNECTING
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 503
+        server._watchdog._state = ConnectionState.CONNECTED
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_writes_trading_record(self, mock_fetch_names, client, server):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+
+        s = server.strategy_manager.get(strategy["id"])
+        assert len(s.trading_records) == 1
+        record = s.trading_records[0]
+        assert record["method"] == "manual_order"
+        assert record["direction"] == "buy"
+        assert record["quantity"] == 100
+

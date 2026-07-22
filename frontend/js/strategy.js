@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { getState } from './state.js';
 import { UI } from './ui.js';
 import { Toast } from './toast.js';
-import { applyOrderFilters } from './monitor.js';
+import { applyOrderFilters, fetchOrders } from './monitor.js';
 
 let _strategies = [];
 
@@ -24,6 +24,7 @@ export async function loadStrategies() {
             _strategies = result.data || [];
             renderStrategyList();
             UI.renderStrategyOverview(_strategies);
+            _updateStrategyOrderButtons();
             populateStrategyDropdown();
         }
     } catch (error) {
@@ -41,6 +42,7 @@ export async function refreshStrategies() {
             _strategies = result.data || [];
             renderStrategyList();
             UI.renderStrategyOverview(_strategies);
+            _updateStrategyOrderButtons();
             populateStrategyDropdown();
         }
     } catch (error) {
@@ -408,6 +410,8 @@ export function initStrategyPanel() {
             Toast.error(`保存失败: ${error.message}`);
         }
     });
+
+    initStrategyOrderModal();
 }
 
 export function populateStrategyDropdown() {
@@ -461,4 +465,197 @@ function copyToClipboard(text) {
         Toast.error('复制失败');
     }
     document.body.removeChild(textarea);
+}
+
+// ---- 手动下单弹窗（买入/卖出共用） ----
+
+// 卖出下拉选中持仓的映射（stock_code → position），打开弹窗时建立
+let _orderModalPositions = {};
+
+function _getSelectedStrategy() {
+    const sid = UI._selectedStrategyId;
+    return sid ? getStrategyById(sid) : null;
+}
+
+function _updateStrategyOrderButtons() {
+    const sellBtn = document.getElementById('btn-strategy-sell');
+    if (!sellBtn) return;
+    const strategy = _getSelectedStrategy();
+    const hasPositions = !!(strategy && strategy.positions && strategy.positions.length > 0);
+    sellBtn.disabled = !hasPositions;
+    sellBtn.title = hasPositions ? '' : '当前策略暂无持仓';
+}
+
+function openStrategyOrderModal(direction) {
+    const modal = document.getElementById('order-modal');
+    const form = document.getElementById('order-form');
+    if (!modal || !form) return;
+
+    const strategy = _getSelectedStrategy();
+    if (!strategy) {
+        Toast.error('未找到策略数据，请刷新后重试');
+        return;
+    }
+    if (!strategy.enabled) {
+        Toast.warning('策略已禁用，无法下单');
+        return;
+    }
+
+    form.dataset.direction = direction;
+    form.dataset.strategyId = strategy.id;
+    _orderModalPositions = {};
+    (strategy.positions || []).forEach(p => { _orderModalPositions[p.stock_code] = p; });
+
+    const isBuy = direction === 'buy';
+    document.getElementById('order-modal-title').textContent = isBuy ? '买入' : '卖出';
+    document.getElementById('btn-order-submit').textContent = isBuy ? '确认买入' : '确认卖出';
+
+    // 买入自由输入代码；卖出从策略持仓下拉选择
+    document.getElementById('order-stock-input-group').style.display = isBuy ? '' : 'none';
+    document.getElementById('order-stock-select-group').style.display = isBuy ? 'none' : '';
+
+    const codeInput = document.getElementById('order-stock-code');
+    codeInput.value = '';
+    const stockSelect = document.getElementById('order-stock-select');
+    if (!isBuy) {
+        stockSelect.innerHTML = (strategy.positions || []).map(p => {
+            const label = p.stock_name ? `${p.stock_name}(${p.stock_code})` : p.stock_code;
+            return `<option value="${escapeHtml(p.stock_code)}">${escapeHtml(label)}</option>`;
+        }).join('');
+    }
+
+    // 数量按 100 整数倍步进；买入最低 100，卖出允许零股（可手动输入）
+    const quantityInput = document.getElementById('order-quantity');
+    quantityInput.min = isBuy ? 100 : 0;
+    quantityInput.value = '';
+    document.getElementById('order-price-type').value = 'market';
+    document.getElementById('order-price-group').style.display = 'none';
+    document.getElementById('order-price').value = '';
+    // 重置字段后再预填选中持仓的限价与可用提示
+    if (!isBuy) {
+        _onOrderStockChange();
+    }
+    modal.style.display = 'flex';
+}
+
+function hideStrategyOrderModal() {
+    const modal = document.getElementById('order-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+// 卖出切换股票时：预填限价（现价）并更新可用数量提示
+function _onOrderStockChange() {
+    const stockSelect = document.getElementById('order-stock-select');
+    const hint = document.getElementById('order-quantity-hint');
+    const priceInput = document.getElementById('order-price');
+    const pos = _orderModalPositions[stockSelect.value];
+    if (!pos) {
+        hint.style.display = 'none';
+        return;
+    }
+    const available = pos.available_quantity ?? pos.quantity ?? 0;
+    hint.textContent = `可用 ${available} 股`;
+    hint.style.display = '';
+    if (pos.current_price > 0) {
+        priceInput.value = pos.current_price;
+    }
+}
+
+function initStrategyOrderModal() {
+    const modal = document.getElementById('order-modal');
+    const form = document.getElementById('order-form');
+    if (!modal || !form) return;
+
+    const priceType = document.getElementById('order-price-type');
+    const priceGroup = document.getElementById('order-price-group');
+    const priceInput = document.getElementById('order-price');
+    const quantityInput = document.getElementById('order-quantity');
+    const submitBtn = document.getElementById('btn-order-submit');
+    const stockSelect = document.getElementById('order-stock-select');
+
+    document.getElementById('btn-strategy-buy').addEventListener('click', () => openStrategyOrderModal('buy'));
+    document.getElementById('btn-strategy-sell').addEventListener('click', () => openStrategyOrderModal('sell'));
+    document.getElementById('btn-order-modal-close').addEventListener('click', hideStrategyOrderModal);
+    document.getElementById('btn-order-cancel').addEventListener('click', hideStrategyOrderModal);
+    priceType.addEventListener('change', () => {
+        priceGroup.style.display = priceType.value === 'limit' ? '' : 'none';
+    });
+    stockSelect.addEventListener('change', _onOrderStockChange);
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const direction = form.dataset.direction;
+        const strategyId = form.dataset.strategyId;
+        const token = getState('token');
+        if (!token || !strategyId) return;
+
+        const isBuy = direction === 'buy';
+        let stockCode = '';
+        if (isBuy) {
+            stockCode = document.getElementById('order-stock-code').value.trim().toUpperCase();
+            if (!/^\d{6}\.(SH|SZ|BJ|XSHG|XSHE|XBJ)$/.test(stockCode)) {
+                Toast.warning('请输入有效的股票代码（如 000001.SZ 或 000001.XSHE）');
+                return;
+            }
+        } else {
+            stockCode = stockSelect.value;
+            if (!stockCode) {
+                Toast.warning('请选择要卖出的股票');
+                return;
+            }
+        }
+
+        const qtyStr = quantityInput.value.trim();
+        const quantity = Number(qtyStr);
+        if (!qtyStr || !Number.isInteger(quantity) || quantity <= 0) {
+            Toast.warning('请输入有效的委托数量（正整数）');
+            return;
+        }
+        // 买入股票须为100整数倍（期货后缀不校验，与后端规则一致）；卖出允许零股
+        const isStock = /\.(SH|SZ|BJ|XSHG|XSHE|XBJ)$/.test(stockCode);
+        if (isBuy && isStock && quantity % 100 !== 0) {
+            Toast.warning('买入数量须为100的整数倍');
+            return;
+        }
+        if (!isBuy) {
+            const pos = _orderModalPositions[stockCode];
+            const available = pos ? (pos.available_quantity ?? pos.quantity ?? 0) : 0;
+            if (quantity > available) {
+                Toast.warning(`卖出数量不可超过可用数量（${available} 股）`);
+                return;
+            }
+        }
+
+        let price = 0;
+        if (priceType.value === 'limit') {
+            const priceStr = priceInput.value.trim();
+            price = parseFloat(priceStr);
+            if (!priceStr || !(price > 0)) {
+                Toast.warning('请输入有效的限价价格（大于0）');
+                return;
+            }
+            // 最多两位小数；用 epsilon 比较避免浮点误差误判（如 12.55）
+            if (Math.abs(price * 100 - Math.round(price * 100)) > 1e-6) {
+                Toast.warning('价格最多保留两位小数');
+                return;
+            }
+        }
+
+        submitBtn.disabled = true;
+        try {
+            await api.placeStrategyOrder(
+                strategyId,
+                { stock_code: stockCode, direction, quantity, price },
+                token
+            );
+            Toast.success('下单成功');
+            hideStrategyOrderModal();
+            await loadStrategies();
+            fetchOrders();
+        } catch (error) {
+            Toast.error(error.message || '下单失败');
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
 }

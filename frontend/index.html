@@ -183,6 +183,10 @@
       <div class="position-list-container hidden" id="strategy-position-list-container">
         <div class="position-list-header">
           <h3 id="strategy-position-title">持仓明细</h3>
+          <div class="btn-group">
+            <button class="btn-sm btn-sm-buy" id="btn-strategy-buy" type="button">买入</button>
+            <button class="btn-sm btn-sm-sell" id="btn-strategy-sell" type="button">卖出</button>
+          </div>
         </div>
         <div class="position-table">
           <div class="position-table-header">
@@ -408,7 +412,7 @@
         </div>
         <div class="form-group">
           <label class="form-label required-label" for="resend-quantity">数量</label>
-          <input class="form-input" type="number" id="resend-quantity" min="1" step="1" required>
+          <input class="form-input" type="number" id="resend-quantity" min="1" step="100" required>
         </div>
         <div class="form-group">
           <label class="form-label required-label" for="resend-price-type">价格类型</label>
@@ -424,6 +428,46 @@
         <div class="btn-group">
           <button class="btn btn-primary" type="submit" id="btn-resend-submit">确认重发</button>
           <button class="btn btn-secondary" type="button" id="btn-resend-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 手动下单模态框（买入/卖出共用） -->
+  <div id="order-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="order-modal-title">买入</h3>
+        <button class="modal-close" type="button" id="btn-order-modal-close" title="关闭">&times;</button>
+      </div>
+      <form id="order-form" novalidate>
+        <div class="form-group" id="order-stock-input-group">
+          <label class="form-label required-label" for="order-stock-code">股票代码</label>
+          <input class="form-input" type="text" id="order-stock-code" placeholder="000001.SZ 或 000001.XSHE">
+        </div>
+        <div class="form-group" id="order-stock-select-group" style="display:none;">
+          <label class="form-label required-label" for="order-stock-select">股票</label>
+          <select class="form-input" id="order-stock-select"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="order-quantity">数量</label>
+          <input class="form-input" type="number" id="order-quantity" min="100" step="100">
+          <div class="order-form-hint" id="order-quantity-hint" style="display:none;"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="order-price-type">价格类型</label>
+          <select class="form-input" id="order-price-type">
+            <option value="market">市价</option>
+            <option value="limit">限价</option>
+          </select>
+        </div>
+        <div class="form-group" id="order-price-group" style="display:none;">
+          <label class="form-label required-label" for="order-price">价格</label>
+          <input class="form-input" type="number" id="order-price" min="0" step="0.01">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" type="submit" id="btn-order-submit">确认</button>
+          <button class="btn btn-secondary" type="button" id="btn-order-cancel">取消</button>
         </div>
       </form>
     </div>

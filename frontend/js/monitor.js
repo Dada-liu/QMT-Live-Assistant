@@ -169,7 +169,10 @@ function openResendModal(order) {
         ? `${order.stock_name}(${order.stock_code})`
         : (order.stock_code || '');
     document.getElementById('resend-direction').value = order.direction === 'buy' ? '买入' : '卖出';
-    document.getElementById('resend-quantity').value = order.quantity || '';
+    // 数量按 100 整数倍步进；买入最低 100，卖出允许零股（可手动输入）
+    const resendQuantityInput = document.getElementById('resend-quantity');
+    resendQuantityInput.min = order.direction === 'buy' ? 100 : 0;
+    resendQuantityInput.value = order.quantity || '';
 
     const priceType = document.getElementById('resend-price-type');
     const priceGroup = document.getElementById('resend-price-group');

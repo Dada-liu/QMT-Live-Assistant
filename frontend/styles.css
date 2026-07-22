@@ -1294,6 +1294,35 @@ a:hover { text-decoration: underline; }
   background: rgba(5, 177, 105, 0.05);
 }
 
+.btn-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-sm:disabled:hover {
+  border-color: var(--color-hairline);
+  color: var(--color-body-strong);
+  box-shadow: var(--btn-shadow-sm);
+}
+
+.btn-sm-buy {
+  border-color: var(--color-semantic-up);
+  color: var(--color-semantic-up);
+  background: rgba(5, 177, 105, 0.05);
+}
+
+.btn-sm-sell {
+  border-color: var(--color-semantic-down);
+  color: var(--color-semantic-down);
+  background: rgba(207, 32, 47, 0.05);
+}
+
+.order-form-hint {
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+  margin-top: var(--spacing-xs);
+}
+
 .btn-sm-copy {
   display: inline-flex;
   align-items: center;

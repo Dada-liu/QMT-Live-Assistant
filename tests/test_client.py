@@ -69,3 +69,17 @@ class TestCreateTrader:
         assert hasattr(callback, 'on_stock_trade')
         assert hasattr(callback, 'on_order_error')
         assert hasattr(callback, 'on_cancel_error')
+
+    def test_bump_order_counter(self):
+        """bump_order_counter 只抬升不回退，避免与历史持久化订单号冲突。"""
+        from backend.mock_xtquant import MockTrader
+        old_counter = MockTrader._order_counter
+        try:
+            MockTrader._order_counter = 100000
+            trader, _, _ = create_trader("test_account", "/tmp/mock_qmt")
+            trader.bump_order_counter(100005)
+            assert MockTrader._order_counter == 100005
+            trader.bump_order_counter(100003)
+            assert MockTrader._order_counter == 100005
+        finally:
+            MockTrader._order_counter = old_counter

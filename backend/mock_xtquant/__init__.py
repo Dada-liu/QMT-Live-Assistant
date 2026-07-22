@@ -134,6 +134,16 @@ class MockTrader:
         self._orders[str(order_id)] = order
         return order_id
 
+    def bump_order_counter(self, min_counter: int) -> None:
+        """将订单号计数器抬升到不小于 min_counter。
+
+        计数器是类属性，每次进程启动都从 100000 重新计数；服务器重启后若数据库中
+        已存在历史 mock 订单号，新订单号会与之冲突并覆盖内存/数据库中的旧订单。
+        启动时由 QMTServer 调用本方法避免冲突。
+        """
+        if min_counter > MockTrader._order_counter:
+            MockTrader._order_counter = min_counter
+
     def cancel_order(self, account, order_id):
         order = self._orders.get(str(order_id))
         if order:

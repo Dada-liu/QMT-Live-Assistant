@@ -1642,3 +1642,81 @@ class TestStrategyManualOrderApi:
         assert record["direction"] == "buy"
         assert record["quantity"] == 100
 
+
+class TestMockOrderIdCollision:
+    """MockTrader 订单号与历史持久化订单冲突的回归测试。
+
+    MockTrader._order_counter 是类属性，进程重启后从 100000 重新计数；
+    数据库中已存在的 mock 订单号会被新订单覆盖（内存与 DB 行都会被改写），
+    导致 order_count 不增长、历史订单数据丢失。
+    """
+
+    def _make_seeded_server(self, port):
+        from backend.db.repositories.order import InMemoryOrderRepository
+        from backend.models.order import TrackedOrder
+        from backend.mock_xtquant import MockTrader
+
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100005",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="seeded-strategy",
+            strategy_name="历史策略",
+            price=12.0,
+        ))
+        self._old_counter = MockTrader._order_counter
+        MockTrader._order_counter = 100000  # 模拟进程重启后计数器归零
+        srv = QMTServer(
+            account_id="test_account",
+            mini_qmt_path="/tmp/mock_qmt",
+            host="0.0.0.0",
+            port=port,
+            order_repository=repo,
+        )
+        return srv
+
+    def _restore_counter(self):
+        from backend.mock_xtquant import MockTrader
+        MockTrader._order_counter = self._old_counter
+
+    def test_counter_bumped_above_persisted_on_startup(self):
+        srv = self._make_seeded_server(8011)
+        loop, thread = _start_server(srv)
+        try:
+            from backend.mock_xtquant import MockTrader
+            assert MockTrader._order_counter >= 100005
+        finally:
+            _stop_server(srv, loop, thread)
+            self._restore_counter()
+
+    def test_new_order_does_not_overwrite_persisted(self):
+        srv = self._make_seeded_server(8012)
+        loop, thread = _start_server(srv)
+        try:
+            client = TestClient(srv.app)
+            strategy = client.post(
+                "/api/strategies",
+                json={"name": "冲突验证策略", "allocated_funds": 100000},
+                headers={"X-Token": srv.token},
+            ).json()["data"]
+
+            response = client.post(
+                f"/api/strategies/{strategy['id']}/order",
+                json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 12.55},
+                headers={"X-Token": srv.token},
+            )
+            assert response.status_code == 200
+            new_id = str(response.json()["data"]["order_id"])
+            assert new_id != "100005"
+            assert int(new_id) > 100005
+
+            # 历史订单与新订单都在，数量增长为 2
+            assert len(srv.order_tracker.list_all()) == 2
+            assert srv.order_tracker.get_order("100005") is not None
+        finally:
+            _stop_server(srv, loop, thread)
+            self._restore_counter()

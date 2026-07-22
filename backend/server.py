@@ -983,10 +983,28 @@ class QMTServer:
             await asyncio.sleep(0.05)
 
         self.order_tracker._load_orders()
+        self._bump_mock_order_counter()
         self.setup_routes(target_app=target_app)
         self.running = True
         self._poll_task = asyncio.create_task(self._poll_orders_loop())
         self._market_open_poll_task = asyncio.create_task(self._market_open_poll_loop())
+
+    def _bump_mock_order_counter(self):
+        """将 MockTrader 的订单号计数器抬升到历史最大订单号之上。
+
+        MockTrader 的计数器是类属性，每次进程启动都从 100000 重新计数；
+        若数据库中已存在历史 mock 订单号，新订单号冲突会覆盖内存与数据库中的
+        旧订单。真实 XtQuantTrader 没有该方法，getattr 返回 None 自动跳过。
+        """
+        bump = getattr(self.trader, 'bump_order_counter', None)
+        if not callable(bump):
+            return
+        numeric_ids = [
+            int(o.order_id) for o in self.order_tracker.list_all()
+            if str(o.order_id).isdigit()
+        ]
+        if numeric_ids:
+            bump(max(numeric_ids))
 
     def _ensure_account_record(self):
         """如启用数据库，同步当前账户信息到 accounts 表。"""

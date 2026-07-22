@@ -341,6 +341,7 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - **策略 CRUD**：`/api/strategies*`；返回前注入 `order_count` 与 pending 买入单的 `frozen_cash`，并将 `frozen_cash` 加回 `total_asset`
 - **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg）
 - **订单**：`GET /api/orders`（状态/策略/日期筛选）；`POST /api/orders/{id}/cancel`（撤 pending/partial）；`POST /api/orders/{id}/resend`（重发 failed 且未重发过的订单，可选请求体 `OrderResendRequest{quantity, price}` 覆盖原参数，买入非整手 400，资金/持仓不足 400）
+- **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
 - **账户/工具**：account-asset、account-positions、代码转换、文档 API、动态端点（trader 方法自动映射）
 - 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
 
@@ -361,7 +362,7 @@ pywebview 原生窗口（Windows WebView2），关闭最小化到托盘；pystra
 FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 Token / stop-server / server-info）；按 `PERSISTENCE_MODE` 创建 SQLAlchemy（sqlite）或 InMemory（memory）Repository；CLI argparse 支持 `--account/--qmt-path/--host/--port/--token/--tray/--window` 三种运行模式。
 
 ### `backend/mock_xtquant/` — Mock 层
-非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。
+非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。MockTrader 订单号计数器为类属性（每进程从 100000 重计），提供 `bump_order_counter()` 供服务器启动时抬升，避免与已持久化的历史订单号冲突。
 
 ### `backend/db/` — 数据库层
 7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
@@ -407,7 +408,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 | `ui.js` | 渲染层：订单列表（含撤销/重发按钮列）、仪表板、策略概览卡片、持仓明细表、Logo 圆点、重连横幅、Tab 切换、配置按钮禁用态 |
 | `config-panel.js` | 配置表单提交（启动/停止）、测试连接、表单完整性实时校验 |
 | `monitor.js` | 订单/信号日志轮询与筛选；订单操作事件委托（撤销直接调 API，重发打开 `#resend-modal` 弹窗：预填原参数、市价/限价切换、数量与价格校验后提交）；`startStatusCheck` 连接状态轮询 |
-| `strategy.js` | 策略列表渲染与 CRUD 模态框（名称/金额必填、持仓分配、数量为 100 整数倍校验）；策略下拉填充 |
+| `strategy.js` | 策略列表渲染与 CRUD 模态框（名称/金额必填、持仓分配、数量为 100 整数倍校验）；策略下拉填充；持仓明细买入/卖出按钮与手动下单弹窗（买入自由输入代码、卖出持仓下拉预填现价、数量 100 步进、可用上限校验） |
 | `dashboard.js` | 账户资产四卡片刷新；持仓明细展开（loading/错误态） |
 | `docs.js` | 文档列表与 Markdown 渲染（marked CDN） |
 | `toast.js` | Toast.success/error/warning/info，自动消失 |
@@ -430,6 +431,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 14：持仓股票名称补全** ✅ — 买入成交新建持仓时自动从 xtdata 获取名称
 - **Phase 15：连接看门狗与订单主动管理** ✅ — 断线检测与指数退避重连；跨终端 Token 连接；每日 09:30 开盘轮询；订单手动撤销/一键重发（`retried_as_order_id` 链路）
 - **Phase 16：重发改参与买入资金校验** ✅ — 重发弹窗可修改价格/数量（resend 端点支持可选请求体）；`_freeze_position` 补买入透支检查，全部 5 条买入路径统一校验策略可用资金；市价买入单按最新价估算冻结
+- **Phase 17：策略手动下单与 Mock 订单号冲突修复** ✅ — 持仓明细新增买入/卖出按钮与下单弹窗（买入自由输入代码、卖出持仓下拉、数量 100 整数倍步进）；新增 `POST /api/strategies/{id}/order` 主 Token 手动下单端点，复用冻结/校验/跟踪链路并写 `manual_order` 交易记录；修复 MockTrader 订单号计数器每进程重置、与历史持久化订单冲突导致新单覆盖旧单（order_count 不增长、DB 行被改写）的问题——启动时将计数器抬升到历史最大订单号之上
 
 ---
 
@@ -449,19 +451,20 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 7. 制造 pending 订单点「撤销」→ 状态变 failed、冻结资金释放
 8. 制造 failed 订单点「重发」→ 弹窗预填原参数（限价填价、市价隐藏价格行）；改数量/价格提交 → 新订单按新参数生成，原单记录 `retried_as_order_id`；买入非整手前端拦截；已重发的订单不再显示重发按钮
 9. 订单筛选（状态/日期/策略）与底部条数统计正确；策略卡片「订单 N 笔」点击跳转并自动筛选
+10. 展开策略持仓明细 → 买入/卖出按钮跟随显隐；买入自由输入代码（聚宽格式自动归一化）、卖出从持仓下拉选择（预填现价与可用提示）；数量按 100 步进、买入非整手拦截、卖出超可用拦截；禁用策略下单被拒；下单成功后策略订单计数 +1
 
 **策略与持仓**
-10. 创建策略（可选分配账户持仓）→ 编辑/删除/启停；持仓总成本不超分配金额
-11. 刷新行情 → preClose 正确、当日盈亏按今昨拆分计算；跨日自动合并
-12. 买入成交新股票 → 策略持仓自动补全股票名称
+11. 创建策略（可选分配账户持仓）→ 编辑/删除/启停；持仓总成本不超分配金额
+12. 刷新行情 → preClose 正确、当日盈亏按今昨拆分计算；跨日自动合并
+13. 买入成交新股票 → 策略持仓自动补全股票名称
 
 **连接与安全**
-13. 模拟 QMT 断线 → Logo 圆点变黄/灰、重连横幅展示，交易/账户接口 503；恢复后变绿并提示
-14. 无 Token 的新标签页输入主 Token 连接 → 进入完整管理视图
+14. 模拟 QMT 断线 → Logo 圆点变黄/灰、重连横幅展示，交易/账户接口 503；恢复后变绿并提示
+15. 无 Token 的新标签页输入主 Token 连接 → 进入完整管理视图
 
 **UI 与其他**
-15. 仪表板当日盈亏颜色正确（正红负绿）；持仓/策略卡片展开先 loading 后渲染，失败显示错误提示
-16. 信号日志默认展示异常；`received_at` 带 UTC 时区，前端按本地时区展示无偏差
-17. 代码转换（jq ↔ qmt、normalize_to_qmt）行为正确
-18. `--window` / `--tray` 模式与 PyInstaller 打包 exe 验证
-19. 配置表单必填项不完整时启动/停止按钮禁用
+16. 仪表板当日盈亏颜色正确（正红负绿）；持仓/策略卡片展开先 loading 后渲染，失败显示错误提示
+17. 信号日志默认展示异常；`received_at` 带 UTC 时区，前端按本地时区展示无偏差
+18. 代码转换（jq ↔ qmt、normalize_to_qmt）行为正确
+19. `--window` / `--tray` 模式与 PyInstaller 打包 exe 验证
+20. 配置表单必填项不完整时启动/停止按钮禁用

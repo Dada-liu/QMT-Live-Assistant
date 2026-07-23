@@ -212,6 +212,11 @@ class MockData:
         "000001.SZ": {"open": 12.45, "high": 12.58, "low": 12.40, "close": 12.55, "preClose": 12.50},
         "600519.SH": {"open": 1795.0, "high": 1810.0, "low": 1790.0, "close": 1805.0, "preClose": 1800.0},
         "300750.SZ": {"open": 84.50, "high": 85.20, "low": 84.00, "close": 85.10, "preClose": 85.00},
+        "002830.SZ": {"open": 11.80, "high": 12.10, "low": 11.75, "close": 12.00, "preClose": 11.90},
+        "002888.SZ": {"open": 17.50, "high": 18.20, "low": 17.40, "close": 18.00, "preClose": 17.60},
+        "002188.SZ": {"open": 6.30, "high": 6.60, "low": 6.25, "close": 6.50, "preClose": 6.35},
+        "003003.SZ": {"open": 8.80, "high": 9.10, "low": 8.75, "close": 9.00, "preClose": 8.85},
+        "002200.SZ": {"open": 4.30, "high": 4.55, "low": 4.25, "close": 4.50, "preClose": 4.35},
     }
     _MOCK_TIME = "20260609"
 
@@ -291,6 +296,11 @@ class MockData:
             "000001.SZ": "平安银行",
             "600519.SH": "贵州茅台",
             "300750.SZ": "宁德时代",
+            "002830.SZ": "名雕股份",
+            "002888.SZ": "惠威科技",
+            "002188.SZ": "中天服务",
+            "003003.SZ": "天元股份",
+            "002200.SZ": "交投控股",
         }
         return {
             "InstrumentName": names.get(stock_code, ""),

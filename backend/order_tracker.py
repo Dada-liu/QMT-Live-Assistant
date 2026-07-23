@@ -66,6 +66,9 @@ class OrderTracker:
         stock_name: str = "",
         optimistic_position_applied: bool = False,
         optimistic_snapshot: Optional[dict] = None,
+        notify_source: bool = False,
+        source_platform_webhook: Optional[str] = None,
+        source_platform: Optional[str] = None,
     ) -> TrackedOrder:
         """注册一笔新订单。"""
         order = TrackedOrder(
@@ -81,6 +84,9 @@ class OrderTracker:
             price=price,
             optimistic_position_applied=optimistic_position_applied,
             optimistic_snapshot=optimistic_snapshot,
+            notify_source=notify_source,
+            source_platform_webhook=source_platform_webhook,
+            source_platform=source_platform,
         )
         self._orders[order.order_id] = order
         self._repo.save(order)

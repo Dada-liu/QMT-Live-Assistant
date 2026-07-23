@@ -36,6 +36,8 @@ class OrderModel(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     strategy_name: Mapped[Optional[str]] = mapped_column(String(128))
     order_remark: Mapped[Optional[str]] = mapped_column(String(64))
+    notify_source_platform: Mapped[Optional[bool]] = mapped_column(Boolean, default=False, nullable=True)
+    source_platform_webhook: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     request_payload: Mapped[Optional[dict]] = mapped_column(JSON)
     response_payload: Mapped[Optional[dict]] = mapped_column(JSON)
     optimistic_position_applied: Mapped[bool] = mapped_column(Boolean, default=False)

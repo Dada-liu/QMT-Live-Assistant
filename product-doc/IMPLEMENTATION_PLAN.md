@@ -30,6 +30,7 @@ graph TB
             CLIENT[qmt_client.py<br/>QMT 连接]
             STRAT[strategy_manager.py<br/>StrategyManager<br/>策略CRUD + 持仓跟踪]
             JK[jukuan_orders.py<br/>JukuanOrderHandler<br/>聚宽风格下单]
+            SP[source_platform_notifier.py<br/>源平台状态通知]
         end
         subgraph 桌面层["桌面壳层"]
             WINDOW[window.py<br/>WindowManager<br/>pywebview 窗口]
@@ -93,6 +94,8 @@ graph TB
 
     ORD <-->|"订单状态同步 + 持仓修正"| STRAT
     SVR <-->|"订单日志"| ORD
+    SVR <-->|"源平台通知"| SP
+    ORD -->|"订单终态"| SP
     STRAT <-->|"持仓/资金数据"| SVR
     STRAT <-->|"QMT行情刷新"| CLIENT
     MAIN <-->|"HTTP API"| API
@@ -187,7 +190,38 @@ sequenceDiagram
     Svr->>Svr: total_asset += frozen_cash（冻结资金加回，展示总资产不受影响）
     Svr-->>Frontend: 策略概览数据（含 daily_pnl, order_count, frozen_cash, total_asset）
 
-    Note over 用户,QMT: === 信号日志写入流程 ===
+    Note over 用户,QMT: === 通用下单流程（仅策略Token，参数最全） ===
+    Remote->>Main: POST /api/order<br/>{security, direction, quantity, price, price_type, order_type, notify_source, source_platform_webhook, source_platform}<br/>X-Token: <策略Token>
+    Main->>Svr: verify_any_token() → 识别策略
+    alt Token 为主 Token
+        Main-->>Remote: 403 拒绝
+    else Token 为策略 Token
+        Svr->>Svr: normalize_to_qmt(security) + 校验 direction/order_type/price_type
+        Svr->>JK: generic_order(stock_code, quantity, direction, price, price_type, order_type, strategy_id)
+        JK->>Strat: apply_optimistic_position() 原子冻结
+        alt 冻结成功
+            JK->>Client: trader.order_stock()
+            Client->>QMT: 下单
+        end
+        JK-->>Svr: 返回委托结果
+        Svr->>Ord: track_order() 注册订单（携带 notify_source / source_platform_webhook / source_platform）
+        Svr->>Strat: add_trading_record()
+        Main-->>Remote: {success: true, data: {...}}
+    end
+
+    Note over 用户,QMT: === 源平台状态通知流程 ===
+    QMT-->>Client: on_stock_order() / on_stock_trade() / on_order_error()
+    Client->>Ord: 更新订单状态为 filled / failed
+    Ord->>Svr: 触发 on_state_change 回调
+    alt order.notify_source == true 且存在 webhook URL
+        Svr->>SP: resolve_webhook_url(order, SOURCE_PLATFORM_WEBHOOKS)
+        SP->>SP: build_payload(order)
+        Svr->>Svr: 启动 daemon 线程
+        Svr->>SP: notify_source_platform(order, webhook_url)
+        SP->>Remote: POST JSON payload
+        Note right of SP: 通知失败仅记录日志<br/>不影响状态机与持仓修正
+    end
+    Svr->>Strat: reconcile_position() / rollback_position()
     Remote->>Main: POST /api/jukuan_order* {security, amount}
     Main->>Svr: 校验策略 Token 并执行下单
     alt Token 为主 Token
@@ -286,6 +320,10 @@ graph LR
         JK4["POST /api/jukuan_order_target_value"]
     end
 
+    subgraph "通用下单路由 (server.py)"
+        GO["POST /api/order<br/>(策略Token，参数最全)"]
+    end
+
     subgraph "转换 API"
         JQ["POST /api/convert/jq-to-qmt"]
         QJ["POST /api/convert/qmt-to-jq"]
@@ -300,8 +338,10 @@ graph LR
     管理_API -->|"后台线程控制"| 静态路由
     管理_API -->|"后台线程控制"| 动态路由
     管理_API -->|"后台线程控制"| 聚宽下单路由
+    管理_API -->|"后台线程控制"| 通用下单路由
     管理_API -->|"后台线程控制"| 文档_API
     策略管理路由 -->|"持仓跟踪 + 行情刷新"| 聚宽下单路由
+    策略管理路由 -->|"持仓跟踪 + 行情刷新"| 通用下单路由
 ```
 
 ---
@@ -309,7 +349,7 @@ graph LR
 ## 后端架构
 
 ### `config/settings.py` — 配置层
-环境变量驱动（SERVER_HOST/PORT、MINI_QMT_PATH、ACCOUNT_ID、PERSISTENCE_MODE、DATABASE_URL、LOG_LEVEL 等），带默认值，导出单例 `settings`。
+环境变量驱动（SERVER_HOST/PORT、MINI_QMT_PATH、ACCOUNT_ID、PERSISTENCE_MODE、DATABASE_URL、LOG_LEVEL 等），新增 `SOURCE_PLATFORM_WEBHOOKS`（JSON 字符串映射 `source_platform -> webhook URL`），带默认值，导出单例 `settings`。
 
 ### `backend/constants.py` / `qmt_xtconstant.py` — 常量
 ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托类型、价格类型（FIX_PRICE / LATEST_PRICE）、订单状态（ORDER_CANCELED / ORDER_SUCCEEDED 等）映射。
@@ -339,20 +379,28 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 ### `backend/server.py` — 核心服务器
 `QMTServer` 集中注册全部路由：
 - **策略 CRUD**：`/api/strategies*`；返回前注入 `order_count` 与 pending 买入单的 `frozen_cash`，并将 `frozen_cash` 加回 `total_asset`
-- **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg）
+- **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg）；支持 `notify_source` / `source_platform_webhook` / `source_platform` 透传到订单跟踪器
+- **通用下单**：`POST /api/order`（策略 Token）使用 `GenericOrderRequest` Pydantic 模型，支持 `direction` / `order_type` / `price_type` / `source_platform` / `notify_source` / `source_platform_webhook` 等全参数，复用 `_submit_order` 冻结链路
 - **订单**：`GET /api/orders`（状态/策略/日期筛选）；`POST /api/orders/{id}/cancel`（撤 pending/partial）；`POST /api/orders/{id}/resend`（重发 failed 且未重发过的订单，可选请求体 `OrderResendRequest{quantity, price}` 覆盖原参数，买入非整手 400，资金/持仓不足 400）
-- **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
+- **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录，支持 `notify_source` / `source_platform_webhook` / `source_platform`）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
 - **账户/工具**：account-asset、account-positions、代码转换、文档 API、动态端点（trader 方法自动映射）
-- 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
+- **源平台状态通知**：`_register_order_state_callback` 在订单 filled/failed 终态时，若 `notify_source=true` 则解析 webhook URL 并启动 daemon 线程 POST 结构化 payload；通知失败仅记录日志，不影响状态机
+- 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照与通知参数；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
 
 ### `backend/order_tracker.py` — 订单状态跟踪
-状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 轮询 QMT 修正状态；`cancel_order` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；每次状态变更持久化并写 `order_events` 审计。
+状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 轮询 QMT 修正状态；`cancel_order` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计。
+
+### `backend/source_platform_notifier.py` — 源平台状态通知
+- `resolve_webhook_url(order, mapping)`：优先订单显式 webhook，其次按 `source_platform` 查全局映射
+- `build_payload(order)`：构造包含 event / order_id / status / 成交信息 / 时间戳的结构化 JSON
+- `notify_source_platform(order, webhook_url)`：同步 `requests.post`，调用方在 daemon 线程执行，失败仅记录日志
 
 ### `backend/jukuan_orders.py` — 聚宽风格下单
-`JukuanOrderHandler` 实现 4 个聚宽 API 风格方法：
+`JukuanOrderHandler` 实现 4 个聚宽 API 风格方法 + 1 个通用下单方法：
 - 策略级取数：`_get_price`（优先策略持仓 avg_cost → 账户持仓 → 行情最新价）、`_get_volume`（优先策略持仓）
 - `jukuan_order`（按数量）/ `jukuan_order_target`（目标仓位差额）/ `jukuan_order_value`（按金额，**按策略可用资金封顶数量**）/ `jukuan_order_target_value`（目标市值，委托给 order_value）
-- **`_submit_order` 原子校验与冻结**：先 `apply_optimistic_position` 冻结（资金/持仓不足抛 ValueError，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级
+- `generic_order`（通用下单）：按 `direction` 或显式 `order_type` 确定委托类型，支持显式 `price_type` 与 `order_remark`，股票买入整手校验，返回含 `price_type` / `order_type` 的统一结果
+- **`_submit_order` 原子校验与冻结**：先 `apply_optimistic_position` 冻结（资金/持仓不足抛 ValueError，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级；支持显式 `price_type` 与 `order_remark`
 - 数量按手数向下取整（股票 100、期货 1）；期货支持 `side='short'`；返回 QMT/聚宽双格式代码与 `optimistic_snapshot`
 
 ### `backend/window.py` / `backend/tray.py` — 桌面壳
@@ -365,11 +413,11 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。MockTrader 订单号计数器为类属性（每进程从 100000 重计），提供 `bump_order_counter()` 供服务器启动时抬升，避免与已持久化的历史订单号冲突。
 
 ### `backend/db/` — 数据库层
-7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
+7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
 
 ### `backend/models/` — 领域模型
 - `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`
-- `order.py`：`TrackedOrder`（dataclass）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）
+- `order.py`：`TrackedOrder`（dataclass，新增 `notify_source` / `source_platform_webhook` / `source_platform`）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）、`GenericOrderRequest` / `ManualOrderRequest`（新增通知相关字段）
 - 解耦业务层与数据库层，消除 Repository 与业务层循环依赖
 
 ---

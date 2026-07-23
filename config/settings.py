@@ -1,3 +1,4 @@
+import json
 import os
 
 
@@ -9,6 +10,9 @@ class Settings:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "default-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
     WECHAT_WEBHOOK_URL: str = os.getenv("WECHAT_WEBHOOK_URL", "")
+    SOURCE_PLATFORM_WEBHOOKS: dict = json.loads(
+        os.getenv("SOURCE_PLATFORM_WEBHOOKS", "{}")
+    )
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "")
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")

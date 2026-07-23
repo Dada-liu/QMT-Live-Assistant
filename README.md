@@ -12,8 +12,10 @@
 
 **交易与下单**
 - 聚宽风格下单：`/api/jukuan_order*` 四个接口（按数量/目标仓位/按金额/目标市值），仅接受策略 Token，自动关联策略并更新持仓；无持仓时自动从行情获取最新价
+- 通用下单：`/api/order`（策略 Token），支持 `direction`、`quantity`、`price`、`price_type`、`order_type`、`source_platform`、`notify_source`、`source_platform_webhook` 等完整业务参数，适用于聚宽、果仁等任意外部信号源
 - 手动下单：展开策略持仓明细即可点击买入/卖出，弹窗中选股票（买入自由输入、卖出从持仓选择）、数量（100 整数倍步进）、价格（市价/限价），复用策略级校验与冻结链路
 - 策略级校验：卖出不超可用持仓；**所有买入路径均校验可用资金**，超资即拒绝（市价单按最新价估算成本）
+- 源平台状态通知：下单时传入 `notify_source=true` 与 `source_platform_webhook`，订单成交/失败/撤销后服务端主动向该 webhook POST 结构化状态信息
 - 订单主动管理：每日 09:30 开盘自动轮询刷新订单状态；待成交/部分成交订单可手动撤销；失败订单可在弹窗中修改价格与数量（支持市价/限价切换）后重发
 
 **策略管理**
@@ -94,7 +96,7 @@ python -m backend.main --port 8000
 | DELETE | `/api/strategies/{id}` | 删除策略 |
 | POST | `/api/strategies/{id}/toggle` | 切换启用/禁用 |
 | POST | `/api/strategies/refresh` | 从 QMT 刷新策略持仓行情 |
-| POST | `/api/strategies/{id}/order` | 手动下单：body `{"stock_code","direction":"buy\|sell","quantity","price"}`，price=0 为市价；买入须整手、卖出不超可用持仓、禁用策略返回 400 |
+| POST | `/api/strategies/{id}/order` | 手动下单：body `{"stock_code","direction":"buy\|sell","quantity","price","notify_source?","source_platform_webhook?","source_platform?"}`，price=0 为市价；买入须整手、卖出不超可用持仓、禁用策略返回 400 |
 
 ### 交易 API
 
@@ -113,10 +115,49 @@ python -m backend.main --port 8000
 | POST | `/api/jukuan_order_target` | 策略 Token | 聚宽风格目标持仓下单 |
 | POST | `/api/jukuan_order_value` | 策略 Token | 聚宽风格按金额下单 |
 | POST | `/api/jukuan_order_target_value` | 策略 Token | 聚宽风格目标市值下单 |
+| POST | `/api/order` | 策略 Token | 通用下单接口，参数最全，支持 `notify_source` / `source_platform_webhook` / `source_platform` |
+
+### 源平台状态通知
+
+外部系统下单时可在请求体中传入：
+
+```json
+{
+  "security": "000001.XSHE",
+  "direction": "buy",
+  "quantity": 100,
+  "price": 12.5,
+  "notify_source": true,
+  "source_platform_webhook": "https://your-server.com/callback",
+  "source_platform": "joinquant"
+}
+```
+
+当订单进入 **filled / failed** 终态时，服务端会以非阻塞方式向 `source_platform_webhook` POST：
+
+```json
+{
+  "event": "order_state_changed",
+  "order_id": "100001",
+  "status": "filled",
+  "source_platform": "joinquant",
+  "stock_code": "000001.SZ",
+  "jq_code": "000001.XSHE",
+  "direction": "buy",
+  "quantity": 100,
+  "filled_quantity": 100,
+  "filled_price": 12.5,
+  "filled_amount": 1250.0,
+  "error_msg": null,
+  "timestamp": "2026-07-23T12:00:00+00:00"
+}
+```
+
+- `notify_source` 默认为 `false`，不传则不触发通知
+- `source_platform_webhook` 为空时，会尝试从环境变量 `SOURCE_PLATFORM_WEBHOOKS` 按 `source_platform` 查找对应 URL
+- 通知失败仅记录日志，不影响订单状态机和策略持仓修正
 
 ### 动态端点（自动生成）
-
-以下端点根据 XtQuantTrader 方法自动生成，均需 X-Token：
 
 - `POST /api/order_stock` — 下单
 - `POST /api/cancel_order` — 撤单
@@ -133,7 +174,10 @@ python -m backend.main --port 8000
 {
   "security": "000001.XSHE",
   "amount": 100,
-  "side": "long"
+  "side": "long",
+  "notify_source": true,
+  "source_platform_webhook": "https://your-server.com/callback",
+  "source_platform": "joinquant"
 }
 ```
 
@@ -142,6 +186,7 @@ python -m backend.main --port 8000
 - `security`：证券代码，聚宽格式（`.XSHE`/`.XSHG`/`.XBJ`）或 QMT 格式均可，后端自动归一化为 QMT 格式
 - `amount`：目标数量，正数买入、负数卖出
 - `side`：股票默认 `long`；期货可指定 `short`
+- `notify_source` / `source_platform_webhook` / `source_platform`：可选，开启源平台状态通知
 
 ## Token 安全机制
 
@@ -160,6 +205,7 @@ python -m backend.main --port 8000
 | `ACCOUNT_ID` | `` | 券商账户ID |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `WECHAT_WEBHOOK_URL` | `` | 企业微信通知 |
+| `SOURCE_PLATFORM_WEBHOOKS` | `{}` | 源平台 webhook 映射，JSON 字符串，如 `{"joinquant":"https://...","guoren":"https://..."}` |
 | `PERSISTENCE_MODE` | `sqlite` | 数据持久化模式：sqlite / memory |
 | `DATABASE_URL` | `sqlite:///./data/qmt_live_assistant.db` | SQLAlchemy 数据库 URL |
 
@@ -175,6 +221,7 @@ QMT-live-assistant/
 │   ├── order_tracker.py     # 订单状态跟踪与撤销
 │   ├── strategy_manager.py  # 策略管理器（CRUD、冻结/回滚/对账）
 │   ├── jukuan_orders.py     # 聚宽风格下单
+│   ├── source_platform_notifier.py # 源平台订单状态通知
 │   ├── models/              # 领域模型（strategy.py / order.py）
 │   ├── db/                  # 数据库层（models / repositories / migrations）
 │   ├── utils.py             # 工具函数（代码转换、行情获取、时间工具）

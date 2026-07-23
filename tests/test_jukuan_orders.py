@@ -8,7 +8,7 @@ from backend.jukuan_orders import (
     JukuanOrderHandler, _is_future, _lot_size, _round_down_to_lot,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
-from backend.qmt_xtconstant import FIX_PRICE
+from backend.qmt_xtconstant import FIX_PRICE, LATEST_PRICE
 
 
 class TestHelpers:
@@ -354,3 +354,107 @@ class TestJukuanOrderStrategyScoped:
         call = handler.trader.order_stock.call_args
         assert call.kwargs["price_type"] == FIX_PRICE
         assert call.kwargs["price"] == 12.0
+
+
+class TestGenericOrder:
+    """JukuanOrderHandler.generic_order 单元测试。"""
+
+    @pytest.fixture
+    def handler(self):
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+        account = MagicMock()
+        return JukuanOrderHandler(trader=trader, account=account)
+
+    def test_buy_with_direction(self, handler):
+        result = handler.generic_order("000001.SZ", 100, direction="buy", price=12.55)
+        assert result["direction"] == "buy"
+        assert result["quantity"] == 100
+        assert result["order_id"] == 200001
+        assert result["order_type"] == STOCK_BUY
+        assert result["price_type"] == FIX_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["order_remark"] == "000001.XSHE"
+
+    def test_sell_with_direction(self, handler):
+        result = handler.generic_order("000001.SZ", 100, direction="sell")
+        assert result["direction"] == "sell"
+        assert result["order_type"] == STOCK_SELL
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_type"] == STOCK_SELL
+
+    def test_buy_with_explicit_order_type(self, handler):
+        result = handler.generic_order(
+            "000001.SZ", 100, direction="buy", order_type=STOCK_BUY
+        )
+        assert result["order_type"] == STOCK_BUY
+
+    def test_market_order_price_type(self, handler):
+        result = handler.generic_order("000001.SZ", 100, direction="buy", price=0)
+        assert result["price_type"] == LATEST_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0
+
+    def test_explicit_price_type(self, handler):
+        result = handler.generic_order(
+            "000001.SZ", 100, direction="buy", price=0, price_type=FIX_PRICE
+        )
+        assert result["price_type"] == FIX_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 0
+
+    def test_custom_order_remark(self, handler):
+        result = handler.generic_order(
+            "000001.SZ", 100, direction="buy", order_remark="custom remark"
+        )
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_remark"] == "custom remark"
+
+    def test_invalid_direction(self, handler):
+        with pytest.raises(ValueError, match="direction 必须为 buy 或 sell"):
+            handler.generic_order("000001.SZ", 100, direction="long")
+
+    def test_invalid_order_type(self, handler):
+        with pytest.raises(ValueError, match="不支持的 order_type"):
+            handler.generic_order("000001.SZ", 100, order_type=999)
+
+    def test_invalid_price_type(self, handler):
+        with pytest.raises(ValueError, match="不支持的 price_type"):
+            handler.generic_order("000001.SZ", 100, price_type=999)
+
+    def test_stock_buy_quantity_not_lot(self, handler):
+        with pytest.raises(ValueError, match="股票买入数量须为100的整数倍"):
+            handler.generic_order("000001.SZ", 50, direction="buy")
+        handler.trader.order_stock.assert_not_called()
+
+    def test_sell_allows_odd_lot(self, handler):
+        result = handler.generic_order("000001.SZ", 50, direction="sell")
+        assert result["quantity"] == 50
+        assert result["direction"] == "sell"
+
+    def test_future_buy_allows_non_lot(self, handler):
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"RB8888.XSGE": 4500.0}):
+            result = handler.generic_order("RB8888.XSGE", 3, direction="buy", price=4500.0)
+        assert result["quantity"] == 3
+        assert result["price_type"] == FIX_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price"] == 4500.0
+
+    def test_rollback_on_qmt_failure(self, handler):
+        snapshot = {"stock_code": "000001.SZ", "delta_cash": -1255.0}
+        strategy = MagicMock()
+        strategy.available_cash = 50000.0
+        strategy.positions = []
+        strategy_manager = MagicMock()
+        strategy_manager.get.return_value = strategy
+        strategy_manager.apply_optimistic_position.return_value = snapshot
+        handler.strategy_manager = strategy_manager
+
+        handler.trader.order_stock.side_effect = Exception("QMT 连接失败")
+        with pytest.raises(Exception, match="QMT 连接失败"):
+            handler.generic_order("000001.SZ", 100, direction="buy", strategy_id="strat-1")
+        strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)

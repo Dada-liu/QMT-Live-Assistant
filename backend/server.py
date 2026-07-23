@@ -17,7 +17,7 @@ from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtd
 from backend.jukuan_orders import JukuanOrderHandler, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
-from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest
+from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest, GenericOrderRequest
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
@@ -25,7 +25,13 @@ from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
 from backend.db.models.account import AccountModel
 from backend.constants import STOCK_BUY, STOCK_SELL
+from backend.qmt_xtconstant import ORDER_TYPE_SET, PRICE_TYPE_SET
+from backend.source_platform_notifier import (
+    notify_source_platform,
+    resolve_webhook_url,
+)
 from config.settings import settings
+import threading
 
 _current_server = None
 
@@ -163,25 +169,37 @@ class QMTServer:
             raise RuntimeError("init_trader 为同步兼容方法，请在异步上下文中使用 init_trader_async")
 
     def _register_order_state_callback(self):
-        """注册订单状态变更回调，用于在终态时修正策略持仓。"""
-        def on_state_change(order):
-            if not order.strategy_id or not order.optimistic_position_applied:
-                return
+        """注册订单状态变更回调，用于在终态时修正策略持仓并通知源平台。"""
+        webhook_mapping = settings.SOURCE_PLATFORM_WEBHOOKS or {}
 
-            if order.status == OrderState.FILLED:
-                self.strategy_manager.reconcile_position(
-                    order.strategy_id,
-                    order.stock_code,
-                    order.direction,
-                    order.quantity,
-                    order.filled_quantity,
-                    order.filled_price,
-                    order.optimistic_snapshot,
-                )
-            elif order.status == OrderState.FAILED:
-                self.strategy_manager.rollback_position(
-                    order.strategy_id, order.optimistic_snapshot
-                )
+        def on_state_change(order):
+            # 1) 策略持仓修正/回滚
+            if order.strategy_id and order.optimistic_position_applied:
+                if order.status == OrderState.FILLED:
+                    self.strategy_manager.reconcile_position(
+                        order.strategy_id,
+                        order.stock_code,
+                        order.direction,
+                        order.quantity,
+                        order.filled_quantity,
+                        order.filled_price,
+                        order.optimistic_snapshot,
+                    )
+                elif order.status == OrderState.FAILED:
+                    self.strategy_manager.rollback_position(
+                        order.strategy_id, order.optimistic_snapshot
+                    )
+
+            # 2) 源平台状态通知（非阻塞，失败不影响状态机）
+            if getattr(order, "notify_source", False):
+                webhook_url = resolve_webhook_url(order, webhook_mapping)
+                if webhook_url:
+                    thread = threading.Thread(
+                        target=notify_source_platform,
+                        args=(order, webhook_url),
+                        daemon=True,
+                    )
+                    thread.start()
 
         self.order_tracker.on_state_change(on_state_change)
 
@@ -202,6 +220,10 @@ class QMTServer:
         snapshot = order_result.get('optimistic_snapshot')
         optimistic_applied = snapshot is not None
 
+        notify_source = order_result.get('notify_source', False)
+        source_platform_webhook = order_result.get('source_platform_webhook')
+        source_platform = order_result.get('source_platform')
+
         self.order_tracker.track_order(
             order_id=order_id,
             stock_code=qmt_code,
@@ -215,6 +237,9 @@ class QMTServer:
             price=price,
             optimistic_position_applied=optimistic_applied,
             optimistic_snapshot=snapshot,
+            notify_source=notify_source,
+            source_platform_webhook=source_platform_webhook,
+            source_platform=source_platform,
         )
         return self.order_tracker.get_order(str(order_id))
 
@@ -714,6 +739,11 @@ class QMTServer:
                 # 保留原始聚宽代码便于返回和日志
                 result['jq_code'] = security
 
+                # 透传源平台通知开关与回调地址
+                result['notify_source'] = request.get('notify_source', False)
+                result['source_platform_webhook'] = request.get('source_platform_webhook')
+                result['source_platform'] = request.get('source_platform')
+
                 # 注册订单到跟踪器，并对策略持仓进行乐观更新
                 if result.get('order_id'):
                     result['strategy_name'] = strategy_name or method_name
@@ -780,6 +810,98 @@ class QMTServer:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post('/api/order')
+        async def generic_order_endpoint(
+            data: GenericOrderRequest,
+            raw_request: Request,
+            x_token: str = Header(...),
+        ):
+            """通用下单接口（策略 Token），支持业务层全参数下单。"""
+            _check_qmt_connected()
+            strategy_name, strategy_id = _resolve_strategy(data.model_dump(), x_token)
+            if strategy_id is None:
+                raise HTTPException(status_code=403, detail="通用下单接口仅支持策略Token")
+
+            qmt_code = normalize_to_qmt(data.security)
+            if not qmt_code:
+                raise HTTPException(status_code=400, detail="请提供有效的 security 参数")
+
+            client_ip = _get_client_ip(raw_request)
+
+            signal_log = None
+            if _current_server._signal_log_repository is not None:
+                signal_log = _current_server._signal_log_repository.add(
+                    SignalLogModel(
+                        strategy_id=strategy_id,
+                        endpoint="/api/order",
+                        source_platform=data.source_platform,
+                        source_ip=client_ip,
+                        payload=data.model_dump(),
+                        received_at=datetime.now(timezone.utc),
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+
+            try:
+                if data.order_type is not None and data.order_type not in ORDER_TYPE_SET:
+                    raise ValueError(f"不支持的 order_type: {data.order_type}")
+                if data.price_type is not None and data.price_type not in PRICE_TYPE_SET:
+                    raise ValueError(f"不支持的 price_type: {data.price_type}")
+
+                name_map = fetch_stock_names_from_xtdata({qmt_code})
+                stock_name = name_map.get(qmt_code) or ""
+
+                handler = _get_jukuan_handler()
+                result = handler.generic_order(
+                    stock_code=qmt_code,
+                    quantity=data.quantity,
+                    direction=data.direction,
+                    price=data.price,
+                    price_type=data.price_type,
+                    order_type=data.order_type,
+                    strategy_name=strategy_name or data.strategy_name,
+                    strategy_id=strategy_id,
+                    order_remark=data.order_remark,
+                )
+
+                # 注册订单到跟踪器，并对策略持仓进行乐观更新
+                if result.get('order_id'):
+                    result['strategy_name'] = strategy_name or data.strategy_name
+                    result['notify_source'] = data.notify_source
+                    result['source_platform_webhook'] = data.source_platform_webhook
+                    result['source_platform'] = data.source_platform
+                    _current_server._track_and_apply_order(
+                        result, strategy_id, strategy_name or data.strategy_name, stock_name=stock_name
+                    )
+
+                # 策略记账
+                if strategy_id and result.get('order_id'):
+                    _current_server.strategy_manager.add_trading_record(strategy_id, {
+                        'timestamp': datetime.now().isoformat(),
+                        'stock_code': qmt_code,
+                        'direction': result.get('direction', 'none'),
+                        'quantity': result.get('quantity', 0),
+                        'price': result.get('price', 0),
+                        'order_id': str(result.get('order_id', '')),
+                        'method': 'generic_order',
+                    })
+
+                if signal_log is not None and _current_server._signal_log_repository is not None:
+                    order_id = str(result.get('order_id', '')) if result.get('order_id') else None
+                    _current_server._signal_log_repository.update_processed_order(
+                        signal_log.id, order_id
+                    )
+
+                return {'success': True, 'data': result}
+            except ValueError as e:
+                if signal_log is not None and _current_server._signal_log_repository is not None:
+                    _current_server._signal_log_repository.update_error(signal_log.id, str(e))
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                if signal_log is not None and _current_server._signal_log_repository is not None:
+                    _current_server._signal_log_repository.update_error(signal_log.id, str(e))
+                raise HTTPException(status_code=500, detail=f"下单失败: {e}")
 
         # --- 策略管理 API ---
 
@@ -919,6 +1041,9 @@ class QMTServer:
                 'price': data.price,
                 'order_type': order_type,
                 'optimistic_snapshot': result['optimistic_snapshot'],
+                'notify_source': data.notify_source,
+                'source_platform_webhook': data.source_platform_webhook,
+                'source_platform': data.source_platform,
             }
             new_order = _current_server._track_and_apply_order(
                 order_result, strategy.id, strategy.name, stock_name=stock_name

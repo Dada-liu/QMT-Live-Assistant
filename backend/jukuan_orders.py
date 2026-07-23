@@ -8,7 +8,7 @@ from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq
 from backend.qmt_client import create_trader
 from backend.logger import logger
 from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
-from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE
+from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE, ORDER_TYPE_SET, PRICE_TYPE_SET
 
 FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
 
@@ -157,8 +157,10 @@ class JukuanOrderHandler:
 
     def _submit_order(self, stock_code: str, order_type: int, quantity: int,
                       price: float = 0.0,
+                      price_type: Optional[int] = None,
                       strategy_name: str = 'jukuan_order',
-                      strategy_id: Optional[str] = None) -> dict:
+                      strategy_id: Optional[str] = None,
+                      order_remark: Optional[str] = None) -> dict:
         """向QMT提交一笔委托，返回包含订单编号与乐观冻结快照的字典。
 
         在调用 QMT 下单接口之前，先通过 strategy_manager 完成资金/持仓的
@@ -169,8 +171,10 @@ class JukuanOrderHandler:
             order_type: 委托类型（买入或卖出）。
             quantity: 委托数量，已按手数取整。
             price: 参考价格，用于乐观冻结与策略级资金校验。
+            price_type: 显式报价类型；None 时由 price 推导。
             strategy_name: 策略名称，写入QMT订单备注。
             strategy_id: 策略ID，用于校验并冻结策略持仓/资金。
+            order_remark: 自定义订单备注；None 时使用聚宽格式代码。
 
         Returns:
             包含 order_id（QMT返回的订单编号）和 optimistic_snapshot
@@ -203,24 +207,30 @@ class JukuanOrderHandler:
                         f"策略可用持仓不足: {stock_code} 可用 {available} 股, 需要卖出 {quantity} 股"
                     )
 
-        if price > 0:
-            price_type = FIX_PRICE
-            order_price = price
+        if price_type is not None:
+            final_price_type = price_type
+        elif price > 0:
+            final_price_type = FIX_PRICE
         else:
-            price_type = LATEST_PRICE
+            final_price_type = LATEST_PRICE
+
+        if final_price_type == LATEST_PRICE:
             order_price = 0
+        else:
+            order_price = price
 
         jq_code = qmt_to_jq(stock_code)
+        actual_remark = order_remark if order_remark is not None else jq_code
         try:
             order_id = self.trader.order_stock(
                 self.account,
                 stock_code=stock_code,
                 order_type=order_type,
                 order_volume=quantity,
-                price_type=price_type,
+                price_type=final_price_type,
                 price=order_price,
                 strategy_name=strategy_name,
-                order_remark=jq_code,
+                order_remark=actual_remark,
             )
         except Exception as e:
             # QMT 下单失败时回滚已冻结的资金/持仓
@@ -238,7 +248,7 @@ class JukuanOrderHandler:
             f"股票:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
             f"数量:{quantity} "
-            f"价格类型:{'限价' if price > 0 else '市价'} "
+            f"价格类型:{'限价' if final_price_type == FIX_PRICE else '市价'} "
             f"价格:{order_price:.2f} "
             f"订单编号:{order_id}"
         )
@@ -525,3 +535,89 @@ class JukuanOrderHandler:
         return self.jukuan_order_value(
             stock_code, delta_value, side=side, strategy_id=strategy_id
         )
+
+    # ---- (5) generic_order ----
+
+    def generic_order(
+        self,
+        stock_code: str,
+        quantity: int,
+        direction: str = 'buy',
+        price: float = 0.0,
+        price_type: Optional[int] = None,
+        order_type: Optional[int] = None,
+        strategy_name: str = 'generic_order',
+        strategy_id: Optional[str] = None,
+        order_remark: Optional[str] = None,
+    ) -> dict:
+        """通用下单接口，暴露完整业务层委托参数。
+
+        支持通过 direction 或显式 order_type 指定委托类型，支持显式 price_type
+        或根据 price 推导。买入股票时会校验整手（期货除外）。
+
+        Args:
+            stock_code: QMT格式的证券代码。
+            quantity: 委托数量。
+            direction: 下单方向，'buy' 或 'sell'；与 order_type 二选一。
+            price: 委托价格，0 表示市价/最新价。
+            price_type: 显式报价类型；None 时由 price 推导。
+            order_type: 显式 xtquant 委托类型；None 时由 direction 推导。
+            strategy_name: 策略名称，写入QMT订单备注。
+            strategy_id: 策略ID，用于乐观冻结。
+            order_remark: 自定义订单备注；None 时使用聚宽格式代码。
+
+        Returns:
+            包含 order_id、direction、quantity、price、price_type、order_type、
+            optimistic_snapshot、message 的字典。
+        """
+        if direction not in ('buy', 'sell'):
+            raise ValueError("direction 必须为 buy 或 sell")
+
+        if order_type is None:
+            final_order_type = STOCK_BUY if direction == 'buy' else STOCK_SELL
+        else:
+            if order_type not in ORDER_TYPE_SET:
+                raise ValueError(f"不支持的 order_type: {order_type}")
+            final_order_type = order_type
+
+        if price_type is not None and price_type not in PRICE_TYPE_SET:
+            raise ValueError(f"不支持的 price_type: {price_type}")
+
+        # 股票买入须为整手（期货除外）
+        if (final_order_type == STOCK_BUY
+                and not _is_future(stock_code)
+                and quantity % 100 != 0):
+            raise ValueError(
+                f"股票买入数量须为100的整数倍: {stock_code} 请求 {quantity} 股"
+            )
+
+        submit_result = self._submit_order(
+            stock_code=stock_code,
+            order_type=final_order_type,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            strategy_name=strategy_name,
+            strategy_id=strategy_id,
+            order_remark=order_remark,
+        )
+
+        final_price_type = (
+            price_type if price_type is not None
+            else (FIX_PRICE if price > 0 else LATEST_PRICE)
+        )
+
+        msg = f"通用下单: {direction} {stock_code} {quantity}股"
+        return {
+            'order_id': submit_result['order_id'],
+            'stock_code': stock_code,
+            'jq_code': qmt_to_jq(stock_code),
+            'direction': direction,
+            'quantity': quantity,
+            'price': price,
+            'price_type': final_price_type,
+            'order_type': final_order_type,
+            'optimistic_snapshot': submit_result.get('optimistic_snapshot'),
+            'strategy_name': strategy_name,
+            'message': msg,
+        }

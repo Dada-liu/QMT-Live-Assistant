@@ -10,6 +10,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from backend.server import QMTServer, create_server
 from backend.order_tracker import OrderTracker
+from backend.qmt_xtconstant import ORDER_SUCCEEDED
 
 
 def _start_server(server):
@@ -435,6 +436,238 @@ class TestJukuanOrderAPI:
         )
         assert response.status_code == 403
         assert "策略Token" in response.json()["detail"]
+
+
+class TestGenericOrderApi:
+    """通用下单 API 端点测试（仅支持策略 Token）"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "通用下单测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
+
+    def test_generic_order_buy_limit(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100, "price": 12.5},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["direction"] == "buy"
+        assert data["data"]["quantity"] == 100
+        assert data["data"]["price"] == 12.5
+        assert data["data"]["price_type"] == 11  # FIX_PRICE
+        assert "order_id" in data["data"]
+
+    def test_generic_order_buy_market(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100, "price": 0},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["price_type"] == 5  # LATEST_PRICE
+
+    def test_generic_order_sell(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "sell", "quantity": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "策略可用持仓不足" in response.json()["detail"]
+
+    def test_generic_order_requires_auth(self, client):
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100},
+        )
+        assert response.status_code == 422
+
+    def test_generic_order_rejects_master_token(self, client, server):
+        """主 Token 不允许调用通用下单接口。"""
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 403
+        assert "策略Token" in response.json()["detail"]
+
+    def test_generic_order_missing_security(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"direction": "buy", "quantity": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 422
+
+    def test_generic_order_invalid_quantity(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 50},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "100的整数倍" in response.json()["detail"]
+
+    def test_generic_order_invalid_direction(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "long", "quantity": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 422
+
+    def test_generic_order_invalid_order_type(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "order_type": 999, "quantity": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "不支持的 order_type" in response.json()["detail"]
+
+    def test_generic_order_invalid_price_type(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100, "price_type": 999},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "不支持的 price_type" in response.json()["detail"]
+
+
+class TestSourcePlatformNotification:
+    """源平台订单状态通知测试"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "通知测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
+
+    def _wait_for_notify(self, mock_notify, timeout=1.0):
+        """等待后台通知线程执行完毕。"""
+        for _ in range(int(timeout * 100)):
+            if mock_notify.called:
+                return True
+            time.sleep(0.01)
+        return False
+
+    @patch("backend.server.notify_source_platform")
+    def test_jukuan_order_notify_on_fill(self, mock_notify, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={
+                "security": "000001.XSHE",
+                "amount": 100,
+                "notify_source": True,
+                "source_platform_webhook": "http://test.example.com/webhook",
+                "source_platform": "joinquant",
+            },
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_SUCCEEDED, 100, 12.55
+        )
+
+        assert self._wait_for_notify(mock_notify)
+        call_args = mock_notify.call_args
+        order = call_args.args[0]
+        assert order.order_id == str(order_id)
+        assert order.notify_source is True
+        assert order.source_platform == "joinquant"
+        assert call_args.args[1] == "http://test.example.com/webhook"
+
+    @patch("backend.server.notify_source_platform")
+    def test_jukuan_order_no_notify_by_default(self, mock_notify, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_SUCCEEDED, 100, 12.55
+        )
+
+        time.sleep(0.05)
+        mock_notify.assert_not_called()
+
+    @patch("backend.server.notify_source_platform")
+    def test_generic_order_notify_on_failed(self, mock_notify, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={
+                "security": "000001.XSHE",
+                "direction": "buy",
+                "quantity": 100,
+                "price": 12.5,
+                "notify_source": True,
+                "source_platform_webhook": "http://test.example.com/webhook",
+                "source_platform": "guoren",
+            },
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        server.order_tracker.update_from_error(order_id, "资金不足")
+
+        assert self._wait_for_notify(mock_notify)
+        order = mock_notify.call_args.args[0]
+        assert order.status == "failed"
+        assert order.source_platform == "guoren"
+
+    @patch("backend.server.notify_source_platform")
+    def test_manual_order_notify(self, mock_notify, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={
+                "stock_code": "000001.XSHE",
+                "direction": "buy",
+                "quantity": 100,
+                "price": 12.5,
+                "notify_source": True,
+                "source_platform_webhook": "http://test.example.com/webhook",
+            },
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"]["order_id"]
+
+        server.order_tracker.update_from_callback(
+            order_id, ORDER_SUCCEEDED, 100, 12.55
+        )
+
+        assert self._wait_for_notify(mock_notify)
 
 
 class TestOrdersApi:

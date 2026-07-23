@@ -161,6 +161,35 @@ class TestOrderTracker:
         assert len(orders) == 1
         assert orders[0].order_id == "100001"
 
+    def test_track_order_with_notify_source(self, tracker):
+        order = tracker.track_order(
+            order_id="100003",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc123",
+            strategy_name="测试策略",
+            price=10.0,
+            notify_source=True,
+            source_platform_webhook="http://example.com/webhook",
+            source_platform="joinquant",
+        )
+        assert order.notify_source is True
+        assert order.source_platform_webhook == "http://example.com/webhook"
+        assert order.source_platform == "joinquant"
+        loaded = tracker.get_order("100003")
+        assert loaded.notify_source is True
+        assert loaded.source_platform_webhook == "http://example.com/webhook"
+        assert loaded.source_platform == "joinquant"
+
+    def test_track_order_default_notify_source_false(self, tracker):
+        order = self._track_sample(tracker, "100004")
+        assert order.notify_source is False
+        assert order.source_platform_webhook is None
+        assert order.source_platform is None
+
 
 class TestOrderTrackerCancel:
     @pytest.fixture

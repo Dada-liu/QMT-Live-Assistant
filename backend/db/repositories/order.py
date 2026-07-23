@@ -207,6 +207,9 @@ class SQLAlchemyOrderRepository(OrderRepository):
             optimistic_position_applied=row.optimistic_position_applied or False,
             optimistic_snapshot=row.optimistic_snapshot,
             retried_as_order_id=row.retried_as_order_id,
+            notify_source=row.notify_source_platform or False,
+            source_platform_webhook=row.source_platform_webhook,
+            source_platform=row.source_platform,
         )
         return order
 
@@ -218,7 +221,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             stock_code=order.stock_code,
             source_code=order.jq_code,
             stock_name=order.stock_name,
-            source_platform=None,
+            source_platform=order.source_platform,
             direction=order.direction,
             order_type=order.order_type,
             price=order.price,
@@ -231,6 +234,8 @@ class SQLAlchemyOrderRepository(OrderRepository):
             resolved_at=order.resolved_at,
             strategy_id=order.strategy_id,
             strategy_name=order.strategy_name,
+            notify_source_platform=order.notify_source,
+            source_platform_webhook=order.source_platform_webhook,
             optimistic_position_applied=order.optimistic_position_applied,
             optimistic_snapshot=order.optimistic_snapshot,
             retried_as_order_id=order.retried_as_order_id,
@@ -250,6 +255,9 @@ class SQLAlchemyOrderRepository(OrderRepository):
         model.status = order.status
         model.resolved_at = order.resolved_at
         model.error_msg = order.error_msg
+        model.source_platform = order.source_platform
+        model.notify_source_platform = order.notify_source
+        model.source_platform_webhook = order.source_platform_webhook
         model.optimistic_position_applied = order.optimistic_position_applied
         model.optimistic_snapshot = order.optimistic_snapshot
         model.retried_as_order_id = order.retried_as_order_id

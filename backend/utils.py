@@ -5,6 +5,7 @@
 """
 from datetime import datetime, time, timedelta
 from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
+from backend.logger import logger
 
 
 def add_stock_suffix(stock_code: str) -> str:
@@ -135,7 +136,8 @@ def fetch_preclose_from_xtdata(stock_codes):
                 if len(vals) > 0:
                     preclose_map[code] = float(vals.iloc[-1])
         return preclose_map
-    except Exception:
+    except Exception as e:
+        logger.error(f"【行情获取失败】fetch_preclose_from_xtdata 异常: {e} | codes={codes}", exc_info=True)
         return {}
 
 
@@ -165,7 +167,8 @@ def fetch_stock_names_from_xtdata(stock_codes):
             except Exception:
                 pass
         return name_map
-    except Exception:
+    except Exception as e:
+        logger.error(f"【行情获取失败】fetch_stock_names_from_xtdata 异常: {e} | codes={stock_codes}", exc_info=True)
         return {}
 
 
@@ -214,7 +217,8 @@ def fetch_open_prices_from_xtdata(stock_codes):
                 if len(vals) > 0:
                     price_map[code] = float(vals.iloc[-1])
         return price_map
-    except Exception:
+    except Exception as e:
+        logger.error(f"【行情获取失败】fetch_open_prices_from_xtdata 异常: {e} | codes={codes}", exc_info=True)
         return {}
 
 
@@ -244,5 +248,61 @@ def fetch_latest_prices_from_xtdata(stock_codes):
             if tick and tick.get('lastPrice', 0) > 0:
                 price_map[code] = float(tick['lastPrice'])
         return price_map
-    except Exception:
+    except Exception as e:
+        logger.error(f"【行情获取失败】fetch_latest_prices_from_xtdata 异常: {e} | codes={codes}", exc_info=True)
         return {}
+
+
+class QMTInteractionError(Exception):
+    """QMT 同步接口返回失败或抛异常时的统一错误。"""
+
+
+def _is_qmt_failure(method_name: str, result) -> tuple:
+    """根据 xtquant 文档判断返回值是否代表失败，并返回 (is_failure, reason)。"""
+    if method_name in (
+        "order_stock", "order_stock_async",
+        "smt_negotiate_order_async",
+    ):
+        return result == -1, f"{method_name} 返回 -1，委托失败"
+    if method_name in (
+        "cancel_order_stock", "cancel_order_stock_async",
+        "cancel_order_stock_sysid", "cancel_order_stock_sysid_async",
+    ):
+        return result == -1, f"{method_name} 返回 -1，撤单失败"
+    if method_name.startswith("query_"):
+        return result is None, f"{method_name} 返回 None，查询失败"
+    return False, ""
+
+
+def qmt_call(trader, method_name: str, *args, context: dict = None, **kwargs):
+    """统一调用 QMT 同步接口。
+
+    1. 捕获异常并记录结构化日志；
+    2. 按 xtquant 文档检查返回值；
+    3. 失败时抛出 QMTInteractionError，原值作为 cause。
+
+    Args:
+        trader: XtQuantTrader / MockTrader 实例。
+        method_name: 要调用的方法名。
+        context: 用于日志的额外上下文，如 {"stock_code": "...", "order_id": ...}。
+    """
+    method = getattr(trader, method_name)
+    try:
+        result = method(*args, **kwargs)
+    except Exception as exc:
+        ctx = context or {}
+        logger.error(
+            f"【QMT 调用异常】{method_name} 调用失败: {exc} | 上下文: {ctx}",
+            exc_info=True,
+        )
+        raise QMTInteractionError(
+            f"{method_name} 调用失败: {exc}"
+        ) from exc
+
+    failed, reason = _is_qmt_failure(method_name, result)
+    if failed:
+        ctx = context or {}
+        logger.error(f"【QMT 调用失败】{reason} | 上下文: {ctx}")
+        raise QMTInteractionError(reason)
+
+    return result

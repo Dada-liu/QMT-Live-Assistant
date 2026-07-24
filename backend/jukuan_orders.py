@@ -4,10 +4,10 @@
 支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
 """
 from typing import Optional
-from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq
+from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq, qmt_call
 from backend.qmt_client import create_trader
 from backend.logger import logger
-from backend.constants import GREEN, BLUE, YELLOW, RESET, STOCK_BUY, STOCK_SELL
+from backend.constants import GREEN, BLUE, YELLOW, RED, RESET, STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE, ORDER_TYPE_SET, PRICE_TYPE_SET
 
 FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
@@ -38,7 +38,12 @@ def _get_position_info(trader, account, stock_code: str) -> dict:
     返回包含持仓数量、参考价格以及是否找到持仓的字典。
     """
     try:
-        positions = trader.query_stock_positions(account)
+        positions = qmt_call(
+            trader,
+            "query_stock_positions",
+            account,
+            context={"stock_code": stock_code, "account_id": getattr(account, 'account_id', account)},
+        )
     except Exception:
         positions = []
 
@@ -222,7 +227,9 @@ class JukuanOrderHandler:
         jq_code = qmt_to_jq(stock_code)
         actual_remark = order_remark if order_remark is not None else jq_code
         try:
-            order_id = self.trader.order_stock(
+            order_id = qmt_call(
+                self.trader,
+                "order_stock",
                 self.account,
                 stock_code=stock_code,
                 order_type=order_type,
@@ -231,8 +238,17 @@ class JukuanOrderHandler:
                 price=order_price,
                 strategy_name=strategy_name,
                 order_remark=actual_remark,
+                context={
+                    "stock_code": stock_code,
+                    "order_type": order_type,
+                    "quantity": quantity,
+                    "price_type": final_price_type,
+                    "price": order_price,
+                    "strategy_name": strategy_name,
+                },
             )
         except Exception as e:
+            logger.error(f"{RED}【聚宽下单】{RESET} {stock_code} 下单失败: {e}")
             # QMT 下单失败时回滚已冻结的资金/持仓
             if optimistic_snapshot is not None:
                 self.strategy_manager.rollback_position(strategy_id, optimistic_snapshot)

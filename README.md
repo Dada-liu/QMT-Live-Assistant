@@ -159,12 +159,26 @@ python -m backend.main --port 8000
 
 ### 动态端点（自动生成）
 
+以下端点由 `QMTServer` 根据底层 trader 方法自动反射生成，路径中的方法名与 xtquant SDK 保持一致：
+
 - `POST /api/order_stock` — 下单
-- `POST /api/cancel_order` — 撤单
+- `POST /api/cancel_order_stock` — 撤单（对应 xtquant `cancel_order_stock`）
 - `POST /api/query_stock_asset` — 查询资产
 - `POST /api/query_stock_orders` — 查询委托
 - `POST /api/query_stock_trades` — 查询成交
 - `POST /api/query_stock_positions` — 查询持仓
+
+> 业务上更推荐通过业务端点下单/撤单，例如 `POST /api/orders/{order_id}/cancel`。
+
+### 错误处理
+
+所有与 QMT 的同步交互（下单、撤单、查询）统一通过 `backend/utils.py` 的 `qmt_call` 封装：
+
+- `order_stock` 返回 `-1`、
+- `cancel_order_stock` 返回 `-1`、
+- `query_*` 返回 `None`
+
+均会被视为失败，服务端会记录包含方法名、调用上下文的错误日志，并返回 HTTP 500。`on_order_error` / `on_cancel_error` 回调也会结构化记录 `error_id`、`error_msg` 等字段。
 
 ### 聚宽下单格式
 

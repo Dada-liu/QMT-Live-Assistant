@@ -12,6 +12,8 @@ from backend.utils import (
     fetch_latest_prices_from_xtdata,
     normalize_to_qmt,
     seconds_until_market_open,
+    qmt_call,
+    QMTInteractionError,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 
@@ -126,3 +128,73 @@ class TestSecondsUntilMarketOpen:
             mock_dt.combine = datetime.combine
             result = seconds_until_market_open(10, 0)
             assert abs(result - 1800.0) < 0.001
+
+
+class TestQmtCall:
+    def test_order_stock_success(self):
+        class MockTrader:
+            def order_stock(self, account, **kwargs):
+                return 100001
+
+        result = qmt_call(MockTrader(), "order_stock", "acc")
+        assert result == 100001
+
+    def test_order_stock_returns_minus_one_raises(self):
+        class MockTrader:
+            def order_stock(self, account, **kwargs):
+                return -1
+
+        with pytest.raises(QMTInteractionError, match="返回 -1"):
+            qmt_call(MockTrader(), "order_stock", "acc")
+
+    def test_cancel_order_stock_returns_minus_one_raises(self):
+        class MockTrader:
+            def cancel_order_stock(self, account, order_id):
+                return -1
+
+        with pytest.raises(QMTInteractionError, match="返回 -1"):
+            qmt_call(MockTrader(), "cancel_order_stock", "acc", 100001)
+
+    def test_query_returns_none_raises(self):
+        class MockTrader:
+            def query_stock_asset(self, account):
+                return None
+
+        with pytest.raises(QMTInteractionError, match="返回 None"):
+            qmt_call(MockTrader(), "query_stock_asset", "acc")
+
+    def test_query_returns_empty_list_ok(self):
+        class MockTrader:
+            def query_stock_orders(self, account, cancelable_only=False):
+                return []
+
+        result = qmt_call(MockTrader(), "query_stock_orders", "acc", cancelable_only=False)
+        assert result == []
+
+    def test_exception_logs_and_raises(self, caplog):
+        class MockTrader:
+            def order_stock(self, account, **kwargs):
+                raise RuntimeError("QMT 崩溃")
+
+        with caplog.at_level("ERROR"):
+            with pytest.raises(QMTInteractionError, match="QMT 崩溃"):
+                qmt_call(MockTrader(), "order_stock", "acc")
+
+        assert "QMT 调用异常" in caplog.text
+        assert "QMT 崩溃" in caplog.text
+
+    def test_context_included_in_log(self, caplog):
+        class MockTrader:
+            def order_stock(self, account, **kwargs):
+                return -1
+
+        with caplog.at_level("ERROR"):
+            with pytest.raises(QMTInteractionError):
+                qmt_call(
+                    MockTrader(),
+                    "order_stock",
+                    "acc",
+                    context={"stock_code": "000001.SZ"},
+                )
+
+        assert "000001.SZ" in caplog.text

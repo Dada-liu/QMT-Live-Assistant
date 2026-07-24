@@ -12,6 +12,7 @@ from backend.qmt_xtconstant import (
     ORDER_CANCELED,
     ORDER_JUNK,
 )
+from backend.utils import QMTInteractionError
 
 
 class TestOrderTracker:
@@ -221,7 +222,7 @@ class TestOrderTrackerCancel:
         self._track_sample(tracker)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         order = tracker.cancel_order(MockTrader(), None, "100001")
@@ -232,7 +233,7 @@ class TestOrderTrackerCancel:
         self._track_sample(tracker, status=OrderState.PARTIAL)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         order = tracker.cancel_order(MockTrader(), None, "100001")
@@ -243,7 +244,7 @@ class TestOrderTrackerCancel:
         self._track_sample(tracker, status=OrderState.FILLED)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         with pytest.raises(ValueError, match="不可撤销"):
@@ -253,7 +254,7 @@ class TestOrderTrackerCancel:
         self._track_sample(tracker, status=OrderState.FAILED)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         with pytest.raises(ValueError, match="不可撤销"):
@@ -261,7 +262,7 @@ class TestOrderTrackerCancel:
 
     def test_cancel_missing_order_raises(self, tracker):
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         with pytest.raises(ValueError, match="不存在"):
@@ -271,10 +272,10 @@ class TestOrderTrackerCancel:
         self._track_sample(tracker)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 raise RuntimeError("QMT 拒绝")
 
-        with pytest.raises(ValueError, match="QMT 撤单失败"):
+        with pytest.raises(QMTInteractionError, match="QMT 拒绝"):
             tracker.cancel_order(MockTrader(), None, "100001")
 
     def test_cancel_triggers_state_change_callback(self, tracker):
@@ -287,11 +288,21 @@ class TestOrderTrackerCancel:
         tracker.on_state_change(on_change)
 
         class MockTrader:
-            def cancel_order(self, account, order_id):
+            def cancel_order_stock(self, account, order_id):
                 pass
 
         tracker.cancel_order(MockTrader(), None, "100001")
         assert "100001" in called
+
+    def test_cancel_order_stock_returns_minus_one_raises(self, tracker):
+        self._track_sample(tracker)
+
+        class MockTrader:
+            def cancel_order_stock(self, account, order_id):
+                return -1
+
+        with pytest.raises(QMTInteractionError, match="返回 -1"):
+            tracker.cancel_order(MockTrader(), None, "100001")
 
 
 class TestOrderTrackerLogging:
@@ -400,6 +411,31 @@ class TestOrderTrackerPoll:
         assert len(resolved) == 1
         assert resolved[0].status == OrderState.FILLED
         assert tracker.get_order(str(oid)).status == OrderState.FILLED
+
+    @pytest.mark.asyncio
+    async def test_poll_query_failure_logs_error(self, tracker, caplog):
+        class FailingTrader:
+            def query_stock_orders(self, account, cancelable_only=False):
+                raise RuntimeError("查询失败")
+
+        tracker.track_order(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id=None,
+            strategy_name="",
+            price=10.0,
+        )
+
+        with caplog.at_level("ERROR"):
+            resolved = await tracker.poll_and_reconcile(FailingTrader(), None)
+
+        assert resolved == []
+        assert "QMT 调用异常" in caplog.text
+        assert "查询失败" in caplog.text
 
 
 class TestOrderTrackerLoadHistory:

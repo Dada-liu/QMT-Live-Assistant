@@ -9,6 +9,7 @@ from backend.jukuan_orders import (
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import FIX_PRICE, LATEST_PRICE
+from backend.utils import QMTInteractionError
 
 
 class TestHelpers:
@@ -458,3 +459,26 @@ class TestGenericOrder:
         with pytest.raises(Exception, match="QMT 连接失败"):
             handler.generic_order("000001.SZ", 100, direction="buy", strategy_id="strat-1")
         strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)
+
+    def test_rollback_on_order_stock_minus_one(self, handler):
+        """order_stock 返回 -1 时应回滚乐观持仓并抛 QMTInteractionError。"""
+        snapshot = {"stock_code": "000001.SZ", "delta_cash": -1255.0}
+        strategy = MagicMock()
+        strategy.available_cash = 50000.0
+        strategy.positions = []
+        strategy_manager = MagicMock()
+        strategy_manager.get.return_value = strategy
+        strategy_manager.apply_optimistic_position.return_value = snapshot
+        handler.strategy_manager = strategy_manager
+
+        handler.trader.order_stock.return_value = -1
+        with pytest.raises(QMTInteractionError, match="返回 -1"):
+            handler.generic_order("000001.SZ", 100, direction="buy", strategy_id="strat-1")
+        strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)
+
+    def test_get_position_info_returns_empty_on_query_failure(self, handler):
+        """query_stock_positions 失败时返回空持仓信息。"""
+        handler.trader.query_stock_positions.side_effect = RuntimeError("QMT 查询失败")
+        from backend.jukuan_orders import _get_position_info
+        result = _get_position_info(handler.trader, handler.account, "000001.SZ")
+        assert result == {"volume": 0, "price": 0.0, "found": False}

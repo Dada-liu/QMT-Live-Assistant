@@ -144,11 +144,17 @@ class MockTrader:
         if min_counter > MockTrader._order_counter:
             MockTrader._order_counter = min_counter
 
-    def cancel_order(self, account, order_id):
+    def cancel_order_stock(self, account, order_id):
+        """根据订单编号撤单；成功返回 0，失败返回 -1。"""
         order = self._orders.get(str(order_id))
-        if order:
-            order.order_status = 54
-        return True
+        if order is None:
+            return -1
+        order.order_status = 54
+        return 0
+
+    def cancel_order(self, account, order_id):
+        """旧接口别名，内部转发到 cancel_order_stock。"""
+        return self.cancel_order_stock(account, order_id)
 
     def _advance_order_if_needed(self, order):
         """模拟订单状态推进：已报 -> 已成，并触发回调。"""

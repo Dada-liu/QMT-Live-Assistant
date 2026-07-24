@@ -306,7 +306,7 @@ graph LR
 
     subgraph "动态路由 (server.py 自动生成)"
         D1["POST /api/order_stock"]
-        D2["POST /api/cancel_order"]
+        D2["POST /api/cancel_order_stock"]
         D3["POST /api/query_stock_asset"]
         D4["POST /api/query_stock_orders"]
         D5["POST /api/query_stock_trades"]
@@ -359,11 +359,12 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 
 ### `backend/utils.py` — 工具函数
 - **代码转换**：`add_stock_suffix` / `jq_to_qmt` / `qmt_to_jq` / `normalize_to_qmt`（系统边界统一归一化为 QMT 格式 .SZ/.SH/.BJ）
-- **行情获取**（无 xtquant 时 fallback 到 mock_xtquant）：`fetch_preclose_from_xtdata` / `fetch_open_prices_from_xtdata` / `fetch_stock_names_from_xtdata` / `fetch_latest_prices_from_xtdata`（`get_full_tick` 的 lastPrice）
+- **行情获取**（无 xtquant 时 fallback 到 mock_xtquant）：`fetch_preclose_from_xtdata` / `fetch_open_prices_from_xtdata` / `fetch_stock_names_from_xtdata` / `fetch_latest_prices_from_xtdata`（`get_full_tick` 的 lastPrice）；异常时记录日志，不再静默吞错
+- **QMT 统一调用层**：`qmt_call(trader, method_name, *args, context=None, **kwargs)` 封装所有 xtquant 同步接口调用，捕获异常并检查返回值（`order_stock/-1`、`cancel_order_stock/-1`、`query_*/None`），失败时抛出 `QMTInteractionError` 并记录结构化日志
 - **时间**：`timestamp_to_datetime_string` / `convert_to_current_date` / `seconds_until_market_open`（开盘轮询用）
 
 ### `backend/qmt_client.py` — QMT 连接层
-`create_trader(account_id, mini_qmt_path, callback)` → `(trader, account, callback)`：随机 session_id 创建 XtQuantTrader，start → connect → subscribe → 注册回调。回调类将 xtquant 事件（on_stock_order / on_stock_trade / on_disconnected 等）转发给 OrderTracker 与连接看门狗。非 Windows 自动降级 mock_xtquant。
+`create_trader(account_id, mini_qmt_path, callback)` → `(trader, account, callback)`：随机 session_id 创建 XtQuantTrader，start → connect（失败/非 0 抛 `ConnectionError`）→ subscribe（失败/`-1` 抛 `ConnectionError`）→ 注册回调。回调类将 xtquant 事件（`on_stock_order` / `on_stock_trade` / `on_disconnected` / `on_order_error` / `on_cancel_error` 等）转发给 OrderTracker 与连接看门狗；`on_order_error` / `on_cancel_error` 结构化记录 `error_id`、`error_msg`、`account_id`、`order_id`、`market`、`order_sysid` 等字段，并使用有界去重避免内存泄漏。非 Windows 自动降级 mock_xtquant。
 
 ### `backend/connection_watchdog.py` — QMT 连接看门狗
 `ConnectionState` 状态机（DISCONNECTED / CONNECTING / CONNECTED / RECONNECTING / FAILED）。断线回调信号 + 定期健康检查（query_stock_asset）触发重连，指数退避 + 20% 抖动；断线期间 `qmt_connected=False`，交易/账户接口返回 503，前端展示重连横幅。
@@ -388,7 +389,7 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照与通知参数；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
 
 ### `backend/order_tracker.py` — 订单状态跟踪
-状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 轮询 QMT 修正状态；`cancel_order` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计。
+状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 通过 `qmt_call` 轮询 QMT 修正状态；`cancel_order` 调用 `cancel_order_stock` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计。
 
 ### `backend/source_platform_notifier.py` — 源平台状态通知
 - `resolve_webhook_url(order, mapping)`：优先订单显式 webhook，其次按 `source_platform` 查全局映射
@@ -480,6 +481,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 15：连接看门狗与订单主动管理** ✅ — 断线检测与指数退避重连；跨终端 Token 连接；每日 09:30 开盘轮询；订单手动撤销/一键重发（`retried_as_order_id` 链路）
 - **Phase 16：重发改参与买入资金校验** ✅ — 重发弹窗可修改价格/数量（resend 端点支持可选请求体）；`_freeze_position` 补买入透支检查，全部 5 条买入路径统一校验策略可用资金；市价买入单按最新价估算冻结
 - **Phase 17：策略手动下单与 Mock 订单号冲突修复** ✅ — 持仓明细新增买入/卖出按钮与下单弹窗（买入自由输入代码、卖出持仓下拉、数量 100 整数倍步进）；新增 `POST /api/strategies/{id}/order` 主 Token 手动下单端点，复用冻结/校验/跟踪链路并写 `manual_order` 交易记录；修复 MockTrader 订单号计数器每进程重置、与历史持久化订单冲突导致新单覆盖旧单（order_count 不增长、DB 行被改写）的问题——启动时将计数器抬升到历史最大订单号之上
+- **Phase 18：QMT 接口错误处理统一化** ✅ — 按 `reference-document/qmt_xtquant_api.md` 将撤单方法修正为 `cancel_order_stock`；新增 `QMTInteractionError` 与 `qmt_call` 统一封装所有 xtquant 同步调用，捕获异常并按文档检查返回值（`order_stock/-1`、`cancel_order_stock/-1`、`query_*/None`）；扩展 `on_order_error` / `on_cancel_error` 结构化日志与有界去重；`create_trader` 统一检查 `connect()` / `subscribe()` 返回值；行情获取函数异常时记录日志；全部测试覆盖新增错误场景
 
 ---
 
@@ -516,3 +518,5 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 18. 代码转换（jq ↔ qmt、normalize_to_qmt）行为正确
 19. `--window` / `--tray` 模式与 PyInstaller 打包 exe 验证
 20. 配置表单必填项不完整时启动/停止按钮禁用
+21. 模拟 QMT `order_stock` / `cancel_order_stock` 返回 `-1` 或 `query_stock_asset` 返回 `None` → 服务端记录结构化错误日志并返回 HTTP 500，策略乐观持仓正确回滚
+22. `POST /api/orders/{order_id}/cancel` 正常撤单 → 订单状态变 failed，Mock 内部走 `cancel_order_stock`，冻结资金释放

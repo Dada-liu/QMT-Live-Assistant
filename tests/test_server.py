@@ -1953,3 +1953,26 @@ class TestMockOrderIdCollision:
         finally:
             _stop_server(srv, loop, thread)
             self._restore_counter()
+
+
+class TestQMTInteractionErrors:
+    """QMT 同步接口失败时服务端应记录日志并返回 500。"""
+
+    def test_account_asset_query_failure_returns_500(self, client, server):
+        with patch.object(server.trader, "query_stock_asset", return_value=None):
+            response = client.get(
+                "/api/account-asset",
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 500
+        assert "失败" in response.json()["detail"] or "None" in response.json()["detail"]
+
+    def test_dynamic_endpoint_qmt_failure_returns_500(self, client, server):
+        """动态端点 /api/query_stock_asset 在 QMT 返回 None 时返回 500。"""
+        with patch.object(server.trader, "query_stock_asset", return_value=None):
+            response = client.post(
+                "/api/query_stock_asset",
+                headers={"X-Token": server.token},
+                json={},
+            )
+        assert response.status_code == 500

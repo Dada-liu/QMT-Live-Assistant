@@ -5,13 +5,14 @@
 """
 import sys
 import random
+from collections import deque
 
 from backend.order_tracker import OrderTracker
 from backend.utils import timestamp_to_datetime_string, parse_order_type, convert_to_current_date
 from backend.constants import RED, GREEN, BLUE, RESET, YELLOW
 from backend.logger import logger
 
-error_orders = []
+_error_order_ids = deque(maxlen=1000)
 
 
 class MyXtQuantTraderCallback:
@@ -45,19 +46,39 @@ class MyXtQuantTraderCallback:
             )
 
     def on_order_error(self, data):
-        if data.order_id in error_orders:
+        if data.order_id in _error_order_ids:
             return
-        error_orders.append(data.order_id)
-        logger.error(f"{RED}【委托失败】{RESET}错误信息:{data.error_msg.strip()}")
+        _error_order_ids.append(data.order_id)
+        logger.error(
+            f"{RED}【委托失败】{RESET}"
+            f" 账户:{getattr(data, 'account_id', '-')}"
+            f" 订单ID:{getattr(data, 'order_id', '-')}"
+            f" 错误码:{getattr(data, 'error_id', '-')}"
+            f" 策略:{getattr(data, 'strategy_name', '-')}"
+            f" 错误信息:{getattr(data, 'error_msg', '').strip()}"
+        )
 
         if self.order_tracker is not None:
-            self.order_tracker.update_from_error(data.order_id, data.error_msg.strip())
+            self.order_tracker.update_from_error(data.order_id, getattr(data, 'error_msg', '').strip())
 
     def on_cancel_error(self, data):
-        if data.order_id in error_orders:
+        if data.order_id in _error_order_ids:
             return
-        error_orders.append(data.order_id)
-        logger.error(f"{RED}【撤单失败】{RESET}错误信息:{data.error_msg.strip()}")
+        _error_order_ids.append(data.order_id)
+        logger.error(
+            f"{RED}【撤单失败】{RESET}"
+            f" 账户:{getattr(data, 'account_id', '-')}"
+            f" 订单ID:{getattr(data, 'order_id', '-')}"
+            f" 市场:{getattr(data, 'market', '-')}"
+            f" 柜台编号:{getattr(data, 'order_sysid', '-')}"
+            f" 错误码:{getattr(data, 'error_id', '-')}"
+            f" 错误信息:{getattr(data, 'error_msg', '').strip()}"
+        )
+
+        if self.order_tracker is not None:
+            order = self.order_tracker.get_order(data.order_id)
+            if order is not None:
+                order.error_msg = f"撤单失败: {getattr(data, 'error_msg', '').strip()}"
 
 
 def create_trader(account_id, mini_qmt_path, order_tracker=None, callback=None):
@@ -79,21 +100,27 @@ def create_trader(account_id, mini_qmt_path, order_tracker=None, callback=None):
     connect_result = xt_trader.connect()
 
     if is_real_xtquant:
-        if connect_result == 0:
-            logger.debug(f"{GREEN}【miniQMT连接成功】{RESET} 路径:{mini_qmt_path}")
-        else:
+        if connect_result != 0:
             raise ConnectionError(
                 f"miniQMT连接失败，connect() 返回 {connect_result}，请检查miniQMT是否已启动"
             )
-    else:
-        logger.debug(f"{GREEN}【Mock miniQMT连接成功】{RESET} 路径:{mini_qmt_path}")
+    elif not connect_result:
+        raise ConnectionError(
+            f"miniQMT连接失败，connect() 返回 {connect_result}，请检查miniQMT是否已启动"
+        )
+
+    logger.debug(f"{GREEN}【miniQMT连接成功】{RESET} 路径:{mini_qmt_path}")
 
     account = StockAccount(account_id)
 
     if sys.platform == 'win32':
         try:
             from xtquant.xttrader import XtQuantTrader
-            xt_trader.subscribe(account)
+            subscribe_result = xt_trader.subscribe(account)
+            if subscribe_result == -1:
+                raise ConnectionError(
+                    f"miniQMT账号订阅失败，subscribe() 返回 -1，账号:{account_id}"
+                )
         except ImportError:
             pass
     logger.debug(f"{GREEN}【账号订阅成功】{RESET} 账号ID:{account_id}")

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call
 from backend.jukuan_orders import JukuanOrderHandler, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -308,7 +308,12 @@ class QMTServer:
         """查询账户持仓列表，包含名称、每日盈亏和总盈亏。"""
         positions = []
         try:
-            qmt_positions_raw = self.trader.query_stock_positions(self.account)
+            qmt_positions_raw = qmt_call(
+                self.trader,
+                "query_stock_positions",
+                self.account,
+                context={"account_id": getattr(self.account, 'account_id', self.account)},
+            )
             stock_codes = set()
             qmt_positions = []
             for p in qmt_positions_raw:
@@ -367,7 +372,12 @@ class QMTServer:
                 params = request.dict(exclude_unset=True)
                 if 'account' in param_names:
                     params['account'] = _current_server.account
-                result = getattr(_current_server.trader, method_name)(**params)
+                result = qmt_call(
+                    _current_server.trader,
+                    method_name,
+                    context={"endpoint": f"/api/{method_name}", "params": params},
+                    **params,
+                )
                 converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
             except Exception as e:
@@ -428,7 +438,12 @@ class QMTServer:
         @app.get('/api/test-connection')
         async def test_connection(token: str = Depends(_require_qmt_connected)):
             try:
-                result = _current_server.trader.query_stock_asset(_current_server.account)
+                result = qmt_call(
+                    _current_server.trader,
+                    "query_stock_asset",
+                    _current_server.account,
+                    context={"account_id": getattr(_current_server.account, 'account_id', _current_server.account)},
+                )
                 converted_result = _current_server.convert_to_dict(result)
                 return {'success': True, 'data': converted_result}
             except Exception as e:
@@ -623,7 +638,12 @@ class QMTServer:
         @app.get('/api/account-asset')
         async def account_asset(token: str = Depends(_require_qmt_connected)):
             try:
-                result = _current_server.trader.query_stock_asset(_current_server.account)
+                result = qmt_call(
+                    _current_server.trader,
+                    "query_stock_asset",
+                    _current_server.account,
+                    context={"account_id": getattr(_current_server.account, 'account_id', _current_server.account)},
+                )
                 converted_result = _current_server.convert_to_dict(result)
 
                 positions = _current_server._query_account_positions()

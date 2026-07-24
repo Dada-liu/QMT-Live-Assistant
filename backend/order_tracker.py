@@ -15,6 +15,7 @@ from backend.qmt_xtconstant import (
 )
 from backend.logger import logger
 from backend.constants import GREEN, YELLOW, BLUE, RESET
+from backend.utils import qmt_call
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.models.order import TrackedOrder, OrderState
 
@@ -258,7 +259,7 @@ class OrderTracker:
     def cancel_order(self, trader, account, order_id: Any) -> TrackedOrder:
         """撤销一笔待成交或部分成交的订单，并将其标记为失败。
 
-        调用底层 trader.cancel_order 后，触发状态变更回调以回滚策略持仓。
+        调用底层 trader.cancel_order_stock 后，触发状态变更回调以回滚策略持仓。
         """
         order = self.get_order(order_id)
         if order is None:
@@ -266,10 +267,13 @@ class OrderTracker:
         if order.status not in (OrderState.PENDING, OrderState.PARTIAL):
             raise ValueError("订单状态不可撤销")
 
-        try:
-            trader.cancel_order(account, order.order_id)
-        except Exception as e:
-            raise ValueError(f"调用 QMT 撤单失败: {e}")
+        qmt_call(
+            trader,
+            "cancel_order_stock",
+            account,
+            order.order_id,
+            context={"order_id": order.order_id, "account_id": getattr(account, 'account_id', account)},
+        )
 
         old_status = order.status
         order.error_msg = "手动撤销"
@@ -312,7 +316,13 @@ class OrderTracker:
         order_map: Dict[str, Any] = {}
 
         try:
-            all_orders = trader.query_stock_orders(account, cancelable_only=False)
+            all_orders = qmt_call(
+                trader,
+                "query_stock_orders",
+                account,
+                cancelable_only=False,
+                context={"account_id": getattr(account, 'account_id', account)},
+            )
             for o in all_orders:
                 oid = str(getattr(o, 'order_id', ''))
                 if oid:
@@ -324,7 +334,13 @@ class OrderTracker:
             o = order_map.get(order.order_id)
             if not o:
                 try:
-                    o = trader.query_stock_order(account, order.order_id)
+                    o = qmt_call(
+                        trader,
+                        "query_stock_order",
+                        account,
+                        order.order_id,
+                        context={"order_id": order.order_id, "account_id": getattr(account, 'account_id', account)},
+                    )
                 except Exception:
                     o = None
 

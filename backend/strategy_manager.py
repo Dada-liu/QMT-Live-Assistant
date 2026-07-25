@@ -58,6 +58,7 @@ class StrategyManager:
             available_cash=data.allocated_funds,
             total_asset=data.allocated_funds,
             enabled=data.enabled,
+            insufficient_funds_policy=data.insufficient_funds_policy,
         )
         if data.positions:
             codes = [pa.stock_code for pa in data.positions]

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from backend.db.base import Base
+from backend.db.models.strategy import StrategyModel
 from backend.db.repositories.strategy import SQLAlchemyStrategyRepository, InMemoryStrategyRepository
 from backend.models.strategy import Strategy, StrategyCreate
 from backend.strategy_manager import StrategyManager
@@ -117,6 +118,33 @@ class TestSQLAlchemyStrategyRepository:
         assert found.positions[0]["quantity"] == 100
         assert found.positions[0]["available_quantity"] == 60
         assert found.positions[0]["frozen_quantity"] == 40
+
+    def test_save_persists_insufficient_funds_policy(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        strategy = Strategy(name="策略配置", allocated_funds=10000,
+                            insufficient_funds_policy="max_buyable")
+        saved = repo.save(strategy)
+        found = repo.get_by_id(saved.id)
+        assert found.insufficient_funds_policy == "max_buyable"
+
+    def test_update_persists_insufficient_funds_policy(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="策略配置", allocated_funds=10000))
+        assert saved.insufficient_funds_policy == "reject"
+        updated = saved.model_copy(update={"insufficient_funds_policy": "max_buyable"})
+        repo.save(updated)
+        found = repo.get_by_id(saved.id)
+        assert found.insufficient_funds_policy == "max_buyable"
+
+    def test_null_policy_normalized_to_reject(self, db_session):
+        """历史数据中 NULL 的 insufficient_funds_policy 应归一为 reject。"""
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="旧数据", allocated_funds=10000))
+        row = db_session.get(StrategyModel, saved.id)
+        row.insufficient_funds_policy = None
+        db_session.commit()
+        found = repo.get_by_id(saved.id)
+        assert found.insufficient_funds_policy == "reject"
 
 
 class TestInMemoryStrategyRepository:

@@ -1053,11 +1053,19 @@ class QMTServer:
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"下单失败: {e}")
 
+            # 策略配置为 max_buyable 且可用资金不足一手时，_submit_order 返回订单取消
+            if not result.get('order_id'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=result.get('message', '策略可用资金不足，订单取消'),
+                )
+
+            actual_quantity = result.get('quantity', data.quantity)
             order_result = {
                 'order_id': result['order_id'],
                 'jq_code': qmt_to_jq(qmt_code),
                 'direction': data.direction,
-                'quantity': data.quantity,
+                'quantity': actual_quantity,
                 'price': data.price,
                 'order_type': order_type,
                 'optimistic_snapshot': result['optimistic_snapshot'],
@@ -1075,7 +1083,7 @@ class QMTServer:
                 'timestamp': datetime.now().isoformat(),
                 'stock_code': qmt_code,
                 'direction': data.direction,
-                'quantity': data.quantity,
+                'quantity': actual_quantity,
                 'price': data.price,
                 'order_id': str(result['order_id']),
                 'method': 'manual_order',

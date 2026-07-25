@@ -2,8 +2,9 @@
 import uuid
 import secrets
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, Field
+from backend.constants import INSUFFICIENT_FUNDS_REJECT
 
 
 def _now_iso() -> str:
@@ -21,6 +22,7 @@ class Strategy(BaseModel):
     available_cash: float = 0.0
     total_asset: float = 0.0
     daily_pnl: float = 0.0
+    insufficient_funds_policy: str = INSUFFICIENT_FUNDS_REJECT
     last_rollover_date: Optional[str] = None
     positions: list = []
     trading_records: list = []
@@ -43,6 +45,7 @@ class StrategyCreate(BaseModel):
     description: str = ""
     allocated_funds: float = Field(gt=0)
     enabled: bool = True
+    insufficient_funds_policy: Literal["reject", "max_buyable"] = INSUFFICIENT_FUNDS_REJECT
     positions: List[PositionAssignment] = []
 
 
@@ -52,4 +55,5 @@ class StrategyUpdate(BaseModel):
     description: Optional[str] = None
     allocated_funds: Optional[float] = None
     enabled: Optional[bool] = None
+    insufficient_funds_policy: Optional[Literal["reject", "max_buyable"]] = None
     positions: Optional[List[PositionAssignment]] = None

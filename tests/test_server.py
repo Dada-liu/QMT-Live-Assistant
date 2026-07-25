@@ -236,6 +236,65 @@ class TestStrategyManagement:
         )
         assert response.status_code == 404
 
+    def test_create_strategy_default_funds_policy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "默认策略配置", "allocated_funds": 10000},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["insufficient_funds_policy"] == "reject"
+
+    def test_create_strategy_with_max_buyable_policy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={
+                "name": "封顶策略",
+                "allocated_funds": 10000,
+                "insufficient_funds_policy": "max_buyable",
+            },
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["insufficient_funds_policy"] == "max_buyable"
+
+    def test_create_strategy_invalid_funds_policy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={
+                "name": "非法策略配置",
+                "allocated_funds": 10000,
+                "insufficient_funds_policy": "bogus",
+            },
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 422
+
+    def test_update_strategy_funds_policy(self, client, server):
+        create_resp = client.post(
+            "/api/strategies",
+            json={"name": "策略配置更新", "allocated_funds": 10000},
+            headers={"X-Token": server.token},
+        )
+        sid = create_resp.json()["data"]["id"]
+
+        response = client.put(
+            f"/api/strategies/{sid}",
+            json={"insufficient_funds_policy": "max_buyable"},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["insufficient_funds_policy"] == "max_buyable"
+
+        # 不携带该字段的更新应保持原值
+        response = client.put(
+            f"/api/strategies/{sid}",
+            json={"name": "改名称"},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["insufficient_funds_policy"] == "max_buyable"
+
     def test_delete_strategy(self, client, server):
         create_resp = client.post(
             "/api/strategies",
@@ -1085,8 +1144,17 @@ class TestOrderTrackingIntegration:
         assert data["quantity"] == 200
 
     def test_strategy_jukuan_order_value_capped_by_strategy_cash(self, client, server):
-        """策略 token 按金额买入不应超出策略可用资金。"""
-        strategy = self._create_strategy(client, server)
+        """策略配置为 max_buyable 时，按金额买入按可用资金封顶。"""
+        response = client.post(
+            "/api/strategies",
+            json={
+                "name": "封顶策略",
+                "allocated_funds": 100000,
+                "insufficient_funds_policy": "max_buyable",
+            },
+            headers={"X-Token": server.token},
+        )
+        strategy = response.json()["data"]
         # 策略可用资金 100000，mock 行情价格 12.55，最多买 7900 股（按手数 100 取整）
         response = client.post(
             "/api/jukuan_order_value",
@@ -1097,6 +1165,43 @@ class TestOrderTrackingIntegration:
         data = response.json()["data"]
         assert data["direction"] == "buy"
         assert data["quantity"] == 7900
+
+    def test_strategy_jukuan_order_value_rejected_by_default_policy(self, client, server):
+        """默认 reject 策略下，按金额买入超资应被拒绝（行为变化：不再静默封顶）。"""
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order_value",
+            json={"security": "000001.XSHE", "value": 200000},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 500
+        assert "策略可用资金不足" in response.json()["detail"]
+
+    def test_strategy_jukuan_order_capped_under_max_buyable(self, client, server):
+        """策略配置为 max_buyable 时，固定数量买入超资按最大可买数量下单。"""
+        response = client.post(
+            "/api/strategies",
+            json={
+                "name": "固定数量封顶策略",
+                "allocated_funds": 100000,
+                "insufficient_funds_policy": "max_buyable",
+            },
+            headers={"X-Token": server.token},
+        )
+        strategy = response.json()["data"]
+        # 10000 股 × 12.55 = 125500 > 100000，封顶为 7900 股
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 10000},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["direction"] == "buy"
+        assert data["quantity"] == 7900
+
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.available_cash == 100000 - 7900 * 12.55
 
     def test_strategy_jukuan_order_sell_rejected_without_position(self, client, server):
         """无持仓策略 token 卖出应被拒绝。"""
@@ -1125,6 +1230,60 @@ class TestOrderTrackingIntegration:
         assert orders_resp.json()["data"] == []
         s = server.strategy_manager.get(strategy["id"])
         assert s.available_cash == 100000
+
+
+class TestManualOrderInsufficientFunds:
+    """手动下单在策略可用资金不足时的行为。"""
+
+    def _create_strategy(self, client, server, policy=None, funds=100000):
+        payload = {"name": "手动下单测试策略", "allocated_funds": funds}
+        if policy is not None:
+            payload["insufficient_funds_policy"] = policy
+        response = client.post(
+            "/api/strategies",
+            json=payload,
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def test_manual_order_capped_under_max_buyable(self, client, server):
+        """max_buyable：手动买入超资时按最大可买数量下单。"""
+        strategy = self._create_strategy(client, server, policy="max_buyable")
+        # 10000 股 × 12.5 = 125000 > 100000，封顶为 8000 股
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.XSHE", "direction": "buy", "quantity": 10000, "price": 12.5},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["quantity"] == 8000
+
+        s = server.strategy_manager.get(strategy["id"])
+        assert s.available_cash == 100000 - 8000 * 12.5
+
+    def test_manual_order_cancelled_to_zero_returns_400(self, client, server):
+        """max_buyable：可用资金不足一手时返回 400 并说明订单取消。"""
+        strategy = self._create_strategy(client, server, policy="max_buyable", funds=1000)
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.XSHE", "direction": "buy", "quantity": 100, "price": 12.5},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "订单取消" in response.json()["detail"]
+
+    def test_manual_order_rejected_under_default_reject(self, client, server):
+        """默认 reject：手动买入超资时返回 400 资金不足。"""
+        strategy = self._create_strategy(client, server, funds=10000)
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.XSHE", "direction": "buy", "quantity": 10000, "price": 12.5},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "策略可用资金不足" in response.json()["detail"]
 
 
 class TestOrderCancelResendApi:

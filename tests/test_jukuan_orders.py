@@ -309,7 +309,10 @@ class TestJukuanOrderStrategyScoped:
             handler.jukuan_order_target("000001.SZ", 0, strategy_id="strat-1")
 
     def test_value_buy_capped_by_strategy_cash(self, handler):
+        # 策略配置为 max_buyable 时，按金额买入按可用资金封顶：
         # 策略可用资金 50000，价格 12，最多可买 4100 股（按手数 100 取整）
+        strategy = handler.strategy_manager.get.return_value
+        strategy.insufficient_funds_policy = "max_buyable"
         result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
         assert result["direction"] == "buy"
         assert result["quantity"] == 4100
@@ -482,3 +485,132 @@ class TestGenericOrder:
         from backend.jukuan_orders import _get_position_info
         result = _get_position_info(handler.trader, handler.account, "000001.SZ")
         assert result == {"volume": 0, "price": 0.0, "found": False}
+
+
+class TestInsufficientFundsPolicy:
+    """策略可用资金不足时的处理策略（insufficient_funds_policy）。"""
+
+    @pytest.fixture
+    def make_handler(self):
+        def _make(policy, available_cash=50000.0):
+            trader = MagicMock()
+            trader.order_stock.return_value = 200001
+            trader.query_stock_positions.return_value = []
+            account = MagicMock()
+
+            strategy = MagicMock()
+            strategy.available_cash = available_cash
+            strategy.insufficient_funds_policy = policy
+            strategy.positions = [
+                {
+                    "stock_code": "000001.SZ",
+                    "quantity": 300,
+                    "available_quantity": 300,
+                    "frozen_quantity": 0,
+                    "avg_cost": 12.0,
+                }
+            ]
+
+            strategy_manager = MagicMock()
+            strategy_manager.get.return_value = strategy
+            return JukuanOrderHandler(
+                trader=trader, account=account, strategy_manager=strategy_manager
+            )
+        return _make
+
+    def test_fixed_quantity_buy_capped_under_max_buyable(self, make_handler):
+        """max_buyable：固定数量买入超资时按最大可买数量下单。"""
+        handler = make_handler("max_buyable")
+        # 5000 股 × 12 = 60000 > 50000，封顶为 4100 股
+        result = handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
+        assert result["order_id"] == 200001
+        assert result["quantity"] == 4100
+        assert result["direction"] == "buy"
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 4100
+        handler.strategy_manager.apply_optimistic_position.assert_called_once_with(
+            "strat-1", "000001.SZ", "buy", 4100, 12.0
+        )
+
+    def test_capped_to_zero_returns_cancelled(self, make_handler):
+        """max_buyable：可用资金不足一手时返回订单取消，不调用 QMT、不冻结。"""
+        handler = make_handler("max_buyable", available_cash=500.0)
+        result = handler.jukuan_order("000001.SZ", 100, strategy_id="strat-1")
+        assert result["order_id"] is None
+        assert result["direction"] == "none"
+        assert result["quantity"] == 0
+        assert "订单取消" in result["message"]
+        handler.trader.order_stock.assert_not_called()
+        handler.strategy_manager.apply_optimistic_position.assert_not_called()
+
+    def test_fixed_quantity_buy_rejected_under_reject(self, make_handler):
+        """reject：固定数量买入超资时拒绝下单。"""
+        handler = make_handler("reject")
+        handler.strategy_manager.apply_optimistic_position.return_value = None
+        with pytest.raises(ValueError, match="策略可用资金不足"):
+            handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
+        handler.trader.order_stock.assert_not_called()
+
+    def test_order_value_capped_under_max_buyable(self, make_handler):
+        """max_buyable：按金额买入超资时按最大可买数量下单。"""
+        handler = make_handler("max_buyable")
+        result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
+        assert result["order_id"] == 200001
+        assert result["quantity"] == 4100
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 4100
+
+    def test_order_value_rejected_under_reject(self, make_handler):
+        """reject：按金额买入超资时拒绝下单（行为变化：不再静默封顶）。"""
+        handler = make_handler("reject")
+        handler.strategy_manager.apply_optimistic_position.return_value = None
+        with pytest.raises(ValueError, match="策略可用资金不足"):
+            handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
+        handler.trader.order_stock.assert_not_called()
+
+    def test_order_target_capped_under_max_buyable(self, make_handler):
+        """max_buyable：目标持仓买入缺口超资时按最大可买数量下单。"""
+        handler = make_handler("max_buyable")
+        # 策略当前 300 股，目标 5000，缺口 4700 股 × 12 = 56400 > 50000，封顶 4100
+        result = handler.jukuan_order_target("000001.SZ", 5000, strategy_id="strat-1")
+        assert result["order_id"] == 200001
+        assert result["quantity"] == 4100
+
+    def test_market_buy_capped_using_latest_price(self, make_handler):
+        """max_buyable：市价买入按最新价估算成本并封顶。"""
+        handler = make_handler("max_buyable")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.generic_order(
+                "000001.SZ", 5000, direction="buy", price=0, strategy_id="strat-1"
+            )
+        assert result["order_id"] == 200001
+        assert result["quantity"] == 4100
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 4100
+        assert call.kwargs["price_type"] == LATEST_PRICE
+
+    def test_generic_order_cancelled_when_capped_to_zero(self, make_handler):
+        """max_buyable：通用下单封顶为 0 时返回订单取消结果。"""
+        handler = make_handler("max_buyable", available_cash=500.0)
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0, strategy_id="strat-1"
+            )
+        assert result["order_id"] is None
+        assert result["quantity"] == 0
+        assert "订单取消" in result["message"]
+        handler.trader.order_stock.assert_not_called()
+
+    def test_sell_unaffected_by_max_buyable_policy(self, make_handler):
+        """max_buyable 只影响买入，卖出数量保持不变。"""
+        handler = make_handler("max_buyable")
+        result = handler.jukuan_order("000001.SZ", -300, strategy_id="strat-1")
+        assert result["direction"] == "sell"
+        assert result["quantity"] == 300
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 300
+        handler.strategy_manager.apply_optimistic_position.assert_called_once_with(
+            "strat-1", "000001.SZ", "sell", 300, 12.0
+        )

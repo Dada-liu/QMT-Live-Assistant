@@ -171,6 +171,7 @@ async function showStrategyModal(strategy = null) {
     const nameInput = document.getElementById('strategy-name');
     const descInput = document.getElementById('strategy-desc');
     const fundsInput = document.getElementById('strategy-funds');
+    const fundsPolicyInput = document.getElementById('strategy-funds-policy');
     const tokenResult = document.getElementById('strategy-token-result');
 
     if (strategy) {
@@ -179,6 +180,7 @@ async function showStrategyModal(strategy = null) {
         if (nameInput) nameInput.value = strategy.name || '';
         if (descInput) descInput.value = strategy.description || '';
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
+        if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
         if (tokenResult) tokenResult.classList.add('hidden');
     } else {
         if (title) title.textContent = '添加策略';
@@ -186,6 +188,7 @@ async function showStrategyModal(strategy = null) {
         if (nameInput) nameInput.value = '';
         if (descInput) descInput.value = '';
         if (fundsInput) fundsInput.value = '';
+        if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
         if (tokenResult) tokenResult.classList.add('hidden');
     }
 
@@ -331,12 +334,14 @@ export function initStrategyPanel() {
         const nameEl = document.getElementById('strategy-name');
         const descEl = document.getElementById('strategy-desc');
         const fundsEl = document.getElementById('strategy-funds');
+        const fundsPolicyEl = document.getElementById('strategy-funds-policy');
 
         const editId = editIdEl ? editIdEl.value : '';
         const name = nameEl ? nameEl.value.trim() : '';
         const description = descEl ? descEl.value.trim() : '';
         const fundsStr = fundsEl ? fundsEl.value.trim() : '';
         const allocated_funds = parseFloat(fundsStr) || 0;
+        const insufficient_funds_policy = fundsPolicyEl ? fundsPolicyEl.value : 'reject';
 
         if (!name) {
             Toast.warning('请输入策略名称');
@@ -383,7 +388,7 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, positions };
+        const data = { name, description, allocated_funds, insufficient_funds_policy, positions };
         const token = getState('token');
 
         try {

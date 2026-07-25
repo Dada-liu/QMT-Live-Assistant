@@ -399,9 +399,9 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 ### `backend/jukuan_orders.py` — 聚宽风格下单
 `JukuanOrderHandler` 实现 4 个聚宽 API 风格方法 + 1 个通用下单方法：
 - 策略级取数：`_get_price`（优先策略持仓 avg_cost → 账户持仓 → 行情最新价）、`_get_volume`（优先策略持仓）
-- `jukuan_order`（按数量）/ `jukuan_order_target`（目标仓位差额）/ `jukuan_order_value`（按金额，**按策略可用资金封顶数量**）/ `jukuan_order_target_value`（目标市值，委托给 order_value）
+- `jukuan_order`（按数量）/ `jukuan_order_target`（目标仓位差额）/ `jukuan_order_value`（按金额）/ `jukuan_order_target_value`（目标市值，委托给 order_value）
 - `generic_order`（通用下单）：按 `direction` 或显式 `order_type` 确定委托类型，支持显式 `price_type` 与 `order_remark`，股票买入整手校验，返回含 `price_type` / `order_type` 的统一结果
-- **`_submit_order` 原子校验与冻结**：先 `apply_optimistic_position` 冻结（资金/持仓不足抛 ValueError，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级；支持显式 `price_type` 与 `order_remark`
+- **`_submit_order` 原子校验与冻结**：买入先按策略 `insufficient_funds_policy` 处理资金不足——`max_buyable` 时 `_cap_quantity_by_funds_policy` 将数量封顶到可用资金可负担的最大整手数（不足一手返回"订单取消"结果），`reject`（默认）保持原数量；再 `apply_optimistic_position` 冻结（资金/持仓不足抛 ValueError，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级；支持显式 `price_type` 与 `order_remark`；返回实际委托 `quantity` 供调用方响应与记账
 - 数量按手数向下取整（股票 100、期货 1）；期货支持 `side='short'`；返回 QMT/聚宽双格式代码与 `optimistic_snapshot`
 
 ### `backend/window.py` / `backend/tray.py` — 桌面壳
@@ -414,10 +414,10 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。MockTrader 订单号计数器为类属性（每进程从 100000 重计），提供 `bump_order_counter()` 供服务器启动时抬升，避免与已持久化的历史订单号冲突。
 
 ### `backend/db/` — 数据库层
-7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
+7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；strategies 表新增 `insufficient_funds_policy` 列（历史 NULL 行归一为 reject）；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
 
 ### `backend/models/` — 领域模型
-- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`
+- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`；`insufficient_funds_policy`（reject / max_buyable）在 API 边界用 Literal 校验
 - `order.py`：`TrackedOrder`（dataclass，新增 `notify_source` / `source_platform_webhook` / `source_platform`）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）、`GenericOrderRequest` / `ManualOrderRequest`（新增通知相关字段）
 - 解耦业务层与数据库层，消除 Repository 与业务层循环依赖
 
@@ -457,7 +457,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 | `ui.js` | 渲染层：订单列表（含撤销/重发按钮列）、仪表板、策略概览卡片、持仓明细表、Logo 圆点、重连横幅、Tab 切换、配置按钮禁用态 |
 | `config-panel.js` | 配置表单提交（启动/停止）、测试连接、表单完整性实时校验 |
 | `monitor.js` | 订单/信号日志轮询与筛选；订单操作事件委托（撤销直接调 API，重发打开 `#resend-modal` 弹窗：预填原参数、市价/限价切换、数量与价格校验后提交）；`startStatusCheck` 连接状态轮询 |
-| `strategy.js` | 策略列表渲染与 CRUD 模态框（名称/金额必填、持仓分配、数量为 100 整数倍校验）；策略下拉填充；持仓明细买入/卖出按钮与手动下单弹窗（买入自由输入代码、卖出持仓下拉预填现价、数量 100 步进、可用上限校验） |
+| `strategy.js` | 策略列表渲染与 CRUD 模态框（名称/金额必填、"策略可用资金不足时"下拉、持仓分配、数量为 100 整数倍校验）；策略下拉填充；持仓明细买入/卖出按钮与手动下单弹窗（买入自由输入代码、卖出持仓下拉预填现价、数量 100 步进、可用上限校验） |
 | `dashboard.js` | 账户资产四卡片刷新；持仓明细展开（loading/错误态） |
 | `docs.js` | 文档列表与 Markdown 渲染（marked CDN） |
 | `toast.js` | Toast.success/error/warning/info，自动消失 |
@@ -482,6 +482,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 16：重发改参与买入资金校验** ✅ — 重发弹窗可修改价格/数量（resend 端点支持可选请求体）；`_freeze_position` 补买入透支检查，全部 5 条买入路径统一校验策略可用资金；市价买入单按最新价估算冻结
 - **Phase 17：策略手动下单与 Mock 订单号冲突修复** ✅ — 持仓明细新增买入/卖出按钮与下单弹窗（买入自由输入代码、卖出持仓下拉、数量 100 整数倍步进）；新增 `POST /api/strategies/{id}/order` 主 Token 手动下单端点，复用冻结/校验/跟踪链路并写 `manual_order` 交易记录；修复 MockTrader 订单号计数器每进程重置、与历史持久化订单冲突导致新单覆盖旧单（order_count 不增长、DB 行被改写）的问题——启动时将计数器抬升到历史最大订单号之上
 - **Phase 18：QMT 接口错误处理统一化** ✅ — 按 `reference-document/qmt_xtquant_api.md` 将撤单方法修正为 `cancel_order_stock`；新增 `QMTInteractionError` 与 `qmt_call` 统一封装所有 xtquant 同步调用，捕获异常并按文档检查返回值（`order_stock/-1`、`cancel_order_stock/-1`、`query_*/None`）；扩展 `on_order_error` / `on_cancel_error` 结构化日志与有界去重；`create_trader` 统一检查 `connect()` / `subscribe()` 返回值；行情获取函数异常时记录日志；全部测试覆盖新增错误场景
+- **Phase 19：策略资金不足处理策略配置** ✅ — 策略新增 `insufficient_funds_policy` 配置项（`reject` 默认"放弃本次下单" / `max_buyable`"按最大可买数量下单"），统一约束全部 6 条买入路径：`_submit_order` 冻结前按可用资金将买入数量封顶到最大整手数，不足一手取消下单（聚宽/通用接口返回"订单取消"，手动下单返回 400）；删除 `jukuan_order_value` 原有无条件静默封顶（**行为变化**：默认 reject 下金额类接口超资拒单）；strategies 表新列 + Alembic 迁移（历史 NULL 归一 reject）；前端策略表单新增下拉配置；响应与记账均以实际委托数量为准
 
 ---
 
@@ -495,7 +496,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 3. 策略 Token 调 `/api/jukuan_order` → 自动下单、OrderTracker 记录、策略持仓与资金更新；主 Token 调用返回 403
 4. 买入成本超策略可用资金（任意买入路径）→ 拒绝并提示"策略可用资金不足"，无订单生成、资金不变；并发多笔买入不超冻
 5. 卖出超策略可用持仓 → 拒绝并提示"策略可用持仓不足"
-6. `/api/jukuan_order_value` 对无持仓股票 → 自动取最新价计算数量，且买入金额受策略可用资金封顶
+6. `/api/jukuan_order_value` 对无持仓股票 → 自动取最新价计算数量；默认 reject 下买入金额超可用资金拒单，策略配置为 max_buyable 时按最大可买数量下单
 
 **订单管理**
 7. 制造 pending 订单点「撤销」→ 状态变 failed、冻结资金释放
@@ -520,3 +521,4 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 20. 配置表单必填项不完整时启动/停止按钮禁用
 21. 模拟 QMT `order_stock` / `cancel_order_stock` 返回 `-1` 或 `query_stock_asset` 返回 `None` → 服务端记录结构化错误日志并返回 HTTP 500，策略乐观持仓正确回滚
 22. `POST /api/orders/{order_id}/cancel` 正常撤单 → 订单状态变 failed，Mock 内部走 `cancel_order_stock`，冻结资金释放
+23. 策略配置"按最大可买数量下单"→ 各买入路径（按数量/目标仓位/按金额/目标市值/通用下单/手动下单）超资按最大整手数成交、冻结金额与订单数量以封顶后为准；不足一手时聚宽/通用接口返回"订单取消"、手动下单返回 400；改回默认"放弃本次下单"后超资拒单

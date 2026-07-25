@@ -89,6 +89,55 @@ class TestStrategyUpdateModel:
         assert data.description is None
 
 
+class TestInsufficientFundsPolicyConfig:
+    """策略可用资金不足时的处理策略配置项。"""
+
+    def test_domain_default_reject(self):
+        s = Strategy(name="测试策略")
+        assert s.insufficient_funds_policy == "reject"
+
+    def test_create_model_default_reject(self):
+        data = StrategyCreate(name="测试", allocated_funds=10000)
+        assert data.insufficient_funds_policy == "reject"
+
+    def test_create_model_invalid_policy(self):
+        with pytest.raises(Exception):
+            StrategyCreate(name="测试", allocated_funds=10000, insufficient_funds_policy="bogus")
+
+    def test_update_model_invalid_policy(self):
+        with pytest.raises(Exception):
+            StrategyUpdate(insufficient_funds_policy="bogus")
+
+    def test_manager_create_default_reject(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
+        assert s.insufficient_funds_policy == "reject"
+        assert mgr.get(s.id).insufficient_funds_policy == "reject"
+
+    def test_manager_create_with_max_buyable(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="策略1", allocated_funds=10000, insufficient_funds_policy="max_buyable"
+        ))
+        assert s.insufficient_funds_policy == "max_buyable"
+        assert mgr.get(s.id).insufficient_funds_policy == "max_buyable"
+
+    def test_manager_update_policy(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
+        updated = mgr.update(s.id, StrategyUpdate(insufficient_funds_policy="max_buyable"))
+        assert updated.insufficient_funds_policy == "max_buyable"
+        assert mgr.get(s.id).insufficient_funds_policy == "max_buyable"
+
+    def test_manager_update_without_policy_keeps_value(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="策略1", allocated_funds=10000, insufficient_funds_policy="max_buyable"
+        ))
+        updated = mgr.update(s.id, StrategyUpdate(name="新名称"))
+        assert updated.insufficient_funds_policy == "max_buyable"
+
+
 class TestStrategyManagerCRUD:
     @pytest.fixture
     def mgr(self):

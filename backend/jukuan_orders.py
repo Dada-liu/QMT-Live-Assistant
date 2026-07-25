@@ -7,7 +7,10 @@ from typing import Optional
 from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq, qmt_call
 from backend.qmt_client import create_trader
 from backend.logger import logger
-from backend.constants import GREEN, BLUE, YELLOW, RED, RESET, STOCK_BUY, STOCK_SELL
+from backend.constants import (
+    GREEN, BLUE, YELLOW, RED, RESET, STOCK_BUY, STOCK_SELL,
+    INSUFFICIENT_FUNDS_REJECT, INSUFFICIENT_FUNDS_MAX_BUYABLE,
+)
 from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE, ORDER_TYPE_SET, PRICE_TYPE_SET
 
 FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
@@ -160,6 +163,32 @@ class JukuanOrderHandler:
         strategy = self.strategy_manager.get(strategy_id)
         return strategy.available_cash if strategy else 0.0
 
+    def _cap_quantity_by_funds_policy(self, strategy_id: Optional[str], stock_code: str,
+                                      direction: str, quantity: int, freeze_price: float) -> int:
+        """按策略的资金不足处理策略调整买入数量。
+
+        仅当策略配置为 max_buyable 且买入成本超出可用资金时，将数量封顶到
+        可用资金可负担的最大整手数；其余情况原样返回。返回 0 表示一手都买不起。
+        """
+        if direction != 'buy' or not strategy_id or self.strategy_manager is None:
+            return quantity
+        if freeze_price <= 0:
+            return quantity
+        strategy = self.strategy_manager.get(strategy_id)
+        if strategy is None:
+            return quantity
+        policy = getattr(strategy, 'insufficient_funds_policy', INSUFFICIENT_FUNDS_REJECT)
+        if policy != INSUFFICIENT_FUNDS_MAX_BUYABLE:
+            return quantity
+        if quantity * freeze_price <= strategy.available_cash:
+            return quantity
+        capped = _round_down_to_lot(strategy.available_cash / freeze_price, stock_code)
+        logger.warning(
+            f"{YELLOW}【聚宽下单】{RESET} {stock_code} 可用资金不足，"
+            f"按策略配置调整为最大可买数量: {quantity} → {capped}"
+        )
+        return capped
+
     def _submit_order(self, stock_code: str, order_type: int, quantity: int,
                       price: float = 0.0,
                       price_type: Optional[int] = None,
@@ -192,6 +221,21 @@ class JukuanOrderHandler:
         freeze_price = price
         if direction == 'buy' and price <= 0 and strategy_id and self.strategy_manager is not None:
             freeze_price = fetch_latest_prices_from_xtdata([stock_code]).get(stock_code, 0.0)
+
+        # 策略配置为 max_buyable 时，买入数量先按可用资金封顶；封顶为 0 说明一手都买不起，订单取消
+        quantity = self._cap_quantity_by_funds_policy(
+            strategy_id, stock_code, direction, quantity, freeze_price
+        )
+        if direction == 'buy' and quantity == 0:
+            msg = f"策略可用资金不足一手，订单取消: {stock_code}"
+            logger.warning(f"{YELLOW}【聚宽下单】{RESET} {msg}")
+            return {
+                'order_id': None,
+                'optimistic_snapshot': None,
+                'quantity': 0,
+                'cancelled': True,
+                'message': msg,
+            }
 
         # 先原子性地冻结资金/持仓；返回 None 说明资金或持仓不足
         optimistic_snapshot = None
@@ -271,6 +315,7 @@ class JukuanOrderHandler:
         return {
             'order_id': order_id,
             'optimistic_snapshot': optimistic_snapshot,
+            'quantity': quantity,
         }
 
     # ---- (1) jukuan_order ----
@@ -324,15 +369,27 @@ class JukuanOrderHandler:
             submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            if submit_result.get('cancelled'):
+                return {
+                    'order_id': None,
+                    'stock_code': stock_code,
+                    'jq_code': qmt_to_jq(stock_code),
+                    'direction': 'none',
+                    'quantity': 0,
+                    'price': price,
+                    'order_type': None,
+                    'message': submit_result['message'],
+                }
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
-            msg = f"聚宽下单: {direction} {stock_code} {quantity}股"
+            actual_quantity = submit_result['quantity']
+            msg = f"聚宽下单: {direction} {stock_code} {actual_quantity}股"
             return {
                 'order_id': order_id,
                 'stock_code': stock_code,
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
-                'quantity': quantity,
+                'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
                 'optimistic_snapshot': optimistic_snapshot,
@@ -412,15 +469,27 @@ class JukuanOrderHandler:
             submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            if submit_result.get('cancelled'):
+                return {
+                    'order_id': None,
+                    'stock_code': stock_code,
+                    'jq_code': qmt_to_jq(stock_code),
+                    'direction': 'none',
+                    'quantity': 0,
+                    'price': price,
+                    'order_type': None,
+                    'message': submit_result['message'],
+                }
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
-            msg = f"聚宽调仓: {direction} {stock_code} {quantity}股 (当前:{current_qty}→目标:{amount})"
+            actual_quantity = submit_result['quantity']
+            msg = f"聚宽调仓: {direction} {stock_code} {actual_quantity}股 (当前:{current_qty}→目标:{amount})"
             return {
                 'order_id': order_id,
                 'stock_code': stock_code,
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
-                'quantity': quantity,
+                'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
                 'optimistic_snapshot': optimistic_snapshot,
@@ -454,12 +523,6 @@ class JukuanOrderHandler:
         target_qty = abs(value) / price
         quantity = _round_down_to_lot(target_qty, stock_code)
 
-        # 策略级买入：按可用资金限制数量
-        if strategy_id and self.strategy_manager is not None and value > 0:
-            available_cash = self._get_strategy_available_cash(strategy_id)
-            max_qty = _round_down_to_lot(available_cash / price, stock_code)
-            quantity = min(quantity, max_qty)
-
         if quantity == 0:
             msg = f"下单金额不足以购买一手 (价值:{value:.2f}, 价格:{price:.2f})，订单取消"
             logger.warning(f"{YELLOW}【聚宽价值下单】{RESET} {stock_code} {msg}")
@@ -486,16 +549,28 @@ class JukuanOrderHandler:
             submit_result = self._submit_order(
                 stock_code, order_type, quantity, price=price, strategy_id=strategy_id
             )
+            if submit_result.get('cancelled'):
+                return {
+                    'order_id': None,
+                    'stock_code': stock_code,
+                    'jq_code': qmt_to_jq(stock_code),
+                    'direction': 'none',
+                    'quantity': 0,
+                    'price': price,
+                    'order_type': None,
+                    'message': submit_result['message'],
+                }
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
-            msg = (f"聚宽价值下单: {direction} {stock_code} {quantity}股 "
+            actual_quantity = submit_result['quantity']
+            msg = (f"聚宽价值下单: {direction} {stock_code} {actual_quantity}股 "
                    f"(价值:{value:.2f}, 价格:{price:.2f})")
             return {
                 'order_id': order_id,
                 'stock_code': stock_code,
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
-                'quantity': quantity,
+                'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
                 'optimistic_snapshot': optimistic_snapshot,
@@ -618,18 +693,34 @@ class JukuanOrderHandler:
             order_remark=order_remark,
         )
 
+        if submit_result.get('cancelled'):
+            return {
+                'order_id': None,
+                'stock_code': stock_code,
+                'jq_code': qmt_to_jq(stock_code),
+                'direction': 'none',
+                'quantity': 0,
+                'price': price,
+                'price_type': None,
+                'order_type': None,
+                'optimistic_snapshot': None,
+                'strategy_name': strategy_name,
+                'message': submit_result['message'],
+            }
+
         final_price_type = (
             price_type if price_type is not None
             else (FIX_PRICE if price > 0 else LATEST_PRICE)
         )
 
-        msg = f"通用下单: {direction} {stock_code} {quantity}股"
+        actual_quantity = submit_result['quantity']
+        msg = f"通用下单: {direction} {stock_code} {actual_quantity}股"
         return {
             'order_id': submit_result['order_id'],
             'stock_code': stock_code,
             'jq_code': qmt_to_jq(stock_code),
             'direction': direction,
-            'quantity': quantity,
+            'quantity': actual_quantity,
             'price': price,
             'price_type': final_price_type,
             'order_type': final_order_type,

@@ -366,6 +366,13 @@
           <label class="form-label required-label" for="strategy-funds">分配金额 (元)</label>
           <input class="form-input" type="number" id="strategy-funds" placeholder="例如：50000" min="0" step="0.01" required>
         </div>
+        <div class="form-group">
+          <label class="form-label" for="strategy-funds-policy">策略可用资金不足时</label>
+          <select class="form-input" id="strategy-funds-policy">
+            <option value="reject">放弃本次下单（默认）</option>
+            <option value="max_buyable">按最大可买数量下单</option>
+          </select>
+        </div>
         <div class="form-group" id="strategy-positions-group" style="display:none;">
           <label class="form-label">添加持仓（可选）</label>
           <div class="position-assign-hint">选择账户现有持仓并分配数量到该策略</div>

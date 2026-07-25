@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from backend.constants import INSUFFICIENT_FUNDS_REJECT
 from backend.models.strategy import Strategy
 from backend.db.models.strategy import StrategyModel
 from backend.db.models.position import PositionModel
@@ -159,6 +160,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             token=self._resolve_token(row),
             allocated_funds=float(row.allocated_funds),
             available_cash=float(row.available_cash),
+            insufficient_funds_policy=row.insufficient_funds_policy or INSUFFICIENT_FUNDS_REJECT,
             total_asset=float(row.available_cash) + sum(
                 p["avg_cost"] * p["quantity"] for p in positions
             ),
@@ -180,6 +182,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             enabled=strategy.enabled,
             allocated_funds=strategy.allocated_funds,
             available_cash=strategy.available_cash,
+            insufficient_funds_policy=strategy.insufficient_funds_policy,
             trading_records=list(strategy.trading_records or []),
         )
         model.positions = self._positions_to_models(strategy)
@@ -192,6 +195,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
         model.enabled = strategy.enabled
         model.allocated_funds = strategy.allocated_funds
         model.available_cash = strategy.available_cash
+        model.insufficient_funds_policy = strategy.insufficient_funds_policy
         model.last_rollover_date = strategy.last_rollover_date
         model.trading_records = list(strategy.trading_records or [])
         model.updated_at = datetime.now(timezone.utc)

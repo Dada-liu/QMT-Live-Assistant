@@ -788,6 +788,12 @@ class QMTServer:
                     _current_server._signal_log_repository.update_processed_order(
                         signal_log.id, order_id
                     )
+                    # max_buyable 策略资金不足被封顶/取消时，信号日志记为异常并注明部分下单情况
+                    funds_cap_note = result.get('funds_cap_note')
+                    if funds_cap_note:
+                        _current_server._signal_log_repository.update_error(
+                            signal_log.id, funds_cap_note
+                        )
 
                 return {'success': True, 'data': result}
             except Exception as e:
@@ -912,6 +918,12 @@ class QMTServer:
                     _current_server._signal_log_repository.update_processed_order(
                         signal_log.id, order_id
                     )
+                    # max_buyable 策略资金不足被封顶/取消时，信号日志记为异常并注明部分下单情况
+                    funds_cap_note = result.get('funds_cap_note')
+                    if funds_cap_note:
+                        _current_server._signal_log_repository.update_error(
+                            signal_log.id, funds_cap_note
+                        )
 
                 return {'success': True, 'data': result}
             except ValueError as e:

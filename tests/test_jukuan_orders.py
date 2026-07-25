@@ -526,6 +526,10 @@ class TestInsufficientFundsPolicy:
         assert result["order_id"] == 200001
         assert result["quantity"] == 4100
         assert result["direction"] == "buy"
+        assert result["requested_quantity"] == 5000
+        assert result["funds_cap_note"] is not None
+        assert "请求 5000 股" in result["funds_cap_note"]
+        assert "实际下单 4100 股" in result["funds_cap_note"]
         call = handler.trader.order_stock.call_args
         assert call.kwargs["order_volume"] == 4100
         handler.strategy_manager.apply_optimistic_position.assert_called_once_with(
@@ -540,8 +544,21 @@ class TestInsufficientFundsPolicy:
         assert result["direction"] == "none"
         assert result["quantity"] == 0
         assert "订单取消" in result["message"]
+        assert result["requested_quantity"] == 100
+        assert result["funds_cap_note"] is not None
+        assert "订单取消" in result["funds_cap_note"]
+        assert "请求 100 股" in result["funds_cap_note"]
         handler.trader.order_stock.assert_not_called()
         handler.strategy_manager.apply_optimistic_position.assert_not_called()
+
+    def test_normal_buy_has_no_funds_cap_note(self, make_handler):
+        """max_buyable：未超资的正常下单不带封顶说明。"""
+        handler = make_handler("max_buyable")
+        result = handler.jukuan_order("000001.SZ", 100, strategy_id="strat-1")
+        assert result["order_id"] == 200001
+        assert result["quantity"] == 100
+        assert result["requested_quantity"] == 100
+        assert result["funds_cap_note"] is None
 
     def test_fixed_quantity_buy_rejected_under_reject(self, make_handler):
         """reject：固定数量买入超资时拒绝下单。"""

@@ -223,11 +223,18 @@ class JukuanOrderHandler:
             freeze_price = fetch_latest_prices_from_xtdata([stock_code]).get(stock_code, 0.0)
 
         # 策略配置为 max_buyable 时，买入数量先按可用资金封顶；封顶为 0 说明一手都买不起，订单取消
+        requested_quantity = quantity
         quantity = self._cap_quantity_by_funds_policy(
             strategy_id, stock_code, direction, quantity, freeze_price
         )
+        funds_cap_note = None
+        if direction == 'buy' and quantity < requested_quantity:
+            funds_cap_note = (
+                f"策略可用资金不足，按最大可买数量下单: "
+                f"请求 {requested_quantity} 股, 实际下单 {quantity} 股"
+            )
         if direction == 'buy' and quantity == 0:
-            msg = f"策略可用资金不足一手，订单取消: {stock_code}"
+            msg = f"策略可用资金不足一手，订单取消: {stock_code} (请求 {requested_quantity} 股)"
             logger.warning(f"{YELLOW}【聚宽下单】{RESET} {msg}")
             return {
                 'order_id': None,
@@ -235,6 +242,8 @@ class JukuanOrderHandler:
                 'quantity': 0,
                 'cancelled': True,
                 'message': msg,
+                'requested_quantity': requested_quantity,
+                'funds_cap_note': msg,
             }
 
         # 先原子性地冻结资金/持仓；返回 None 说明资金或持仓不足
@@ -316,6 +325,8 @@ class JukuanOrderHandler:
             'order_id': order_id,
             'optimistic_snapshot': optimistic_snapshot,
             'quantity': quantity,
+            'requested_quantity': requested_quantity,
+            'funds_cap_note': funds_cap_note,
         }
 
     # ---- (1) jukuan_order ----
@@ -378,6 +389,8 @@ class JukuanOrderHandler:
                     'quantity': 0,
                     'price': price,
                     'order_type': None,
+                    'requested_quantity': submit_result['requested_quantity'],
+                    'funds_cap_note': submit_result['funds_cap_note'],
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -392,6 +405,8 @@ class JukuanOrderHandler:
                 'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
+                'requested_quantity': submit_result['requested_quantity'],
+                'funds_cap_note': submit_result['funds_cap_note'],
                 'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
@@ -478,6 +493,8 @@ class JukuanOrderHandler:
                     'quantity': 0,
                     'price': price,
                     'order_type': None,
+                    'requested_quantity': submit_result['requested_quantity'],
+                    'funds_cap_note': submit_result['funds_cap_note'],
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -492,6 +509,8 @@ class JukuanOrderHandler:
                 'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
+                'requested_quantity': submit_result['requested_quantity'],
+                'funds_cap_note': submit_result['funds_cap_note'],
                 'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
@@ -558,6 +577,8 @@ class JukuanOrderHandler:
                     'quantity': 0,
                     'price': price,
                     'order_type': None,
+                    'requested_quantity': submit_result['requested_quantity'],
+                    'funds_cap_note': submit_result['funds_cap_note'],
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -573,6 +594,8 @@ class JukuanOrderHandler:
                 'quantity': actual_quantity,
                 'price': price,
                 'order_type': order_type,
+                'requested_quantity': submit_result['requested_quantity'],
+                'funds_cap_note': submit_result['funds_cap_note'],
                 'optimistic_snapshot': optimistic_snapshot,
                 'message': msg,
             }
@@ -703,6 +726,8 @@ class JukuanOrderHandler:
                 'price': price,
                 'price_type': None,
                 'order_type': None,
+                'requested_quantity': submit_result['requested_quantity'],
+                'funds_cap_note': submit_result['funds_cap_note'],
                 'optimistic_snapshot': None,
                 'strategy_name': strategy_name,
                 'message': submit_result['message'],
@@ -724,6 +749,8 @@ class JukuanOrderHandler:
             'price': price,
             'price_type': final_price_type,
             'order_type': final_order_type,
+            'requested_quantity': submit_result['requested_quantity'],
+            'funds_cap_note': submit_result['funds_cap_note'],
             'optimistic_snapshot': submit_result.get('optimistic_snapshot'),
             'strategy_name': strategy_name,
             'message': msg,

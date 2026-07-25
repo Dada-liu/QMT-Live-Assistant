@@ -1286,6 +1286,112 @@ class TestManualOrderInsufficientFunds:
         assert "策略可用资金不足" in response.json()["detail"]
 
 
+class TestSignalLogFundsCap:
+    """max_buyable 策略资金不足被封顶时，信号日志应记为异常并注明部分下单情况。"""
+
+    def _create_strategy(self, client, server, funds=100000, name="封顶信号策略"):
+        response = client.post(
+            "/api/strategies",
+            json={
+                "name": name,
+                "allocated_funds": funds,
+                "insufficient_funds_policy": "max_buyable",
+            },
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def _enable_signal_logs(self, server):
+        from backend.db.repositories.signal_log import InMemorySignalLogRepository
+        server._signal_log_repository = InMemorySignalLogRepository()
+
+    def _get_logs(self, client, server, strategy_name, status=None):
+        url = f"/api/signal-logs?strategy_name={strategy_name}"
+        if status:
+            url += f"&status={status}"
+        response = client.get(url, headers={"X-Token": server.token})
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def test_capped_order_signal_logged_as_error(self, client, server):
+        """封顶部分下单：日志记为异常，error_msg 注明请求/实际股数，且保留订单关联。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 10000},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["quantity"] == 7900
+
+        logs = self._get_logs(client, server, "封顶信号策略", status="error")
+        assert len(logs) == 1
+        assert "请求 10000 股" in logs[0]["error_msg"]
+        assert "实际下单 7900 股" in logs[0]["error_msg"]
+        assert logs[0]["processed_order_id"]
+
+    def test_capped_to_zero_signal_logged_as_error(self, client, server):
+        """不足一手取消：日志记为异常并注明取消原因，无订单关联。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server, funds=1000, name="不足一手策略")
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["order_id"] is None
+
+        logs = self._get_logs(client, server, "不足一手策略", status="error")
+        assert len(logs) == 1
+        assert "订单取消" in logs[0]["error_msg"]
+        assert "请求 100 股" in logs[0]["error_msg"]
+        assert logs[0]["processed_order_id"] is None
+
+    def test_generic_order_capped_signal_logged_as_error(self, client, server):
+        """通用下单接口封顶时同样记录异常信号日志。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server, name="通用封顶策略")
+        response = client.post(
+            "/api/order",
+            json={
+                "security": "000001.XSHE",
+                "direction": "buy",
+                "quantity": 10000,
+                "price": 12.55,
+            },
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["quantity"] == 7900
+
+        logs = self._get_logs(client, server, "通用封顶策略", status="error")
+        assert len(logs) == 1
+        assert "请求 10000 股" in logs[0]["error_msg"]
+        assert "实际下单 7900 股" in logs[0]["error_msg"]
+
+    def test_normal_order_signal_not_marked_error(self, client, server):
+        """未触发封顶的正常下单不标记异常。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server, name="正常信号策略")
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+
+        error_logs = self._get_logs(client, server, "正常信号策略", status="error")
+        assert error_logs == []
+
+        all_logs = self._get_logs(client, server, "正常信号策略")
+        assert len(all_logs) == 1
+        assert all_logs[0]["error_msg"] is None
+        assert all_logs[0]["status"] == "success"
+
+
 class TestOrderCancelResendApi:
     """订单撤销与重发 API 测试"""
 

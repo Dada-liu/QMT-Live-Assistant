@@ -14,6 +14,7 @@ from backend.utils import (
     seconds_until_market_open,
     qmt_call,
     QMTInteractionError,
+    build_server_url,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 
@@ -198,3 +199,23 @@ class TestQmtCall:
                 )
 
         assert "000001.SZ" in caplog.text
+
+
+class TestBuildServerUrl:
+    def test_default_root_path(self):
+        assert build_server_url("0.0.0.0", 8000) == "http://127.0.0.1:8000"
+
+    def test_specific_host(self):
+        assert build_server_url("127.0.0.1", 8000) == "http://127.0.0.1:8000"
+
+    def test_ipv6_wildcard_host(self):
+        assert build_server_url("::", 8000) == "http://127.0.0.1:8000"
+
+    def test_root_path_with_leading_slash(self):
+        assert build_server_url("0.0.0.0", 8000, "/qmt") == "http://127.0.0.1:8000/qmt"
+
+    def test_root_path_without_leading_slash(self):
+        assert build_server_url("0.0.0.0", 8000, "qmt") == "http://127.0.0.1:8000/qmt"
+
+    def test_empty_root_path(self):
+        assert build_server_url("0.0.0.0", 8000, "") == "http://127.0.0.1:8000"

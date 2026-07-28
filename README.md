@@ -67,6 +67,55 @@ python -m backend.main --port 8000
 
 前端界面模式下，浏览器打开 `http://localhost:8000`，填写账户 ID 与 QMT 路径，点击「启动服务器」。
 
+### nginx 反向代理部署
+
+项目已支持通过 nginx 反向代理访问，可部署在根路径或子路径下。
+
+**根路径代理**（`https://example.com/` → `localhost:8000`）：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**子路径代理**（`https://example.com/qmt/` → `localhost:8000`）：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    location /qmt/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Prefix /qmt;
+    }
+}
+```
+
+子路径代理需在后端启动时设置 `ROOT_PATH`：
+
+```bash
+ROOT_PATH=/qmt python -m backend.main --port 8000
+```
+
+前端静态资源与 API 请求均已改为相对路径，部署时无需修改前端代码。生产环境建议显式配置 `CORS_ALLOW_ORIGINS`，不要使用 `*`。
+
 ## 策略管理
 
 1. **创建策略**：名称与分配金额必填，可选配置"策略可用资金不足时"的处理方式（默认放弃本次下单，可选按最大可买数量下单）与从账户现有持仓分配数量；创建后自动生成独立策略 Token
@@ -215,6 +264,10 @@ python -m backend.main --port 8000
 |------|--------|------|
 | `SERVER_HOST` | `0.0.0.0` | 服务器地址 |
 | `SERVER_PORT` | `8000` | 服务器端口 |
+| `ROOT_PATH` | `` | FastAPI 子路径，如 `/qmt`，用于 nginx 子路径代理 |
+| `BASE_URL` | `` | 外部访问 URL 前缀，如 `https://example.com/qmt` |
+| `CORS_ALLOW_ORIGINS` | `*` | 允许的跨域来源，多个用逗号分隔；生产环境请配置具体域名 |
+| `CORS_ALLOW_CREDENTIALS` | `false` | 是否允许跨域请求携带凭证；为 `true` 时 `CORS_ALLOW_ORIGINS` 不能为 `*` |
 | `MINI_QMT_PATH` | `` | miniQMT 路径 |
 | `ACCOUNT_ID` | `` | 券商账户ID |
 | `LOG_LEVEL` | `INFO` | 日志级别 |

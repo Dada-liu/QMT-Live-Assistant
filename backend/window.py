@@ -9,6 +9,8 @@ import os,sys
 import webview
 
 from backend.logger import logger
+from backend.utils import build_server_url
+from config.settings import settings
 from pathlib import Path
 
 def _setup_webview2_runtime():
@@ -52,7 +54,7 @@ class WindowManager:
 
     def _wait_for_server(self, timeout: int = 10):
         import urllib.request
-        url = f"http://127.0.0.1:{self._port}/health"
+        url = build_server_url(self._host, self._port, settings.ROOT_PATH) + "/health"
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -82,7 +84,7 @@ class WindowManager:
     # ---- 生命周期 ----
 
     def start(self):
-        server_url = f"http://127.0.0.1:{self._port}"
+        server_url = build_server_url(self._host, self._port, settings.ROOT_PATH)
 
         server_thread = threading.Thread(target=self._start_uvicorn, daemon=True)
         server_thread.start()

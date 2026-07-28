@@ -486,6 +486,74 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 
 ---
 
+## 部署方案
+
+### nginx 反向代理
+
+为支持将服务部署在服务器并通过 nginx 反向代理访问，项目已做以下改造：
+
+1. **前端资源相对化**：`frontend/index.html` 中的 CSS/JS 引用改为 `./styles.css` 与 `./js/app.js`，不再硬编码 `/static` 前缀。
+2. **前端 API 动态 base URL**：`frontend/js/api.js` 基于 `window.location.pathname` 自动计算 API 前缀，兼容根路径（`/`）与子路径（如 `/qmt/`）部署。
+3. **后端 `ROOT_PATH` 配置**：通过环境变量 `ROOT_PATH` 设置 FastAPI 的 `root_path`，静态文件挂载路径（`/static`、`/docs-assets`）会自动加上此前缀。
+4. **CORS 可配置**：通过 `CORS_ALLOW_ORIGINS` 与 `CORS_ALLOW_CREDENTIALS` 配置跨域；当 origins 为 `*` 时强制不允许携带凭证，避免浏览器拒绝。
+5. **URL 构建工具**：`backend/utils.py` 新增 `build_server_url(host, port, root_path)`，桌面窗口与托盘统一使用它来构造访问地址。
+
+### nginx 配置示例
+
+**根路径代理**：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**子路径代理**（推荐通过 `ROOT_PATH` 实现）：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    location /qmt/ {
+        proxy_pass http://127.0.0.1:8000/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Prefix /qmt;
+    }
+}
+```
+
+后端启动：
+
+```bash
+ROOT_PATH=/qmt python -m backend.main --port 8000
+```
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ROOT_PATH` | `` | FastAPI 子路径，如 `/qmt` |
+| `BASE_URL` | `` | 外部访问 URL 前缀 |
+| `CORS_ALLOW_ORIGINS` | `*` | 允许跨域来源，多个用逗号分隔 |
+| `CORS_ALLOW_CREDENTIALS` | `false` | 是否允许跨域携带凭证 |
+
+---
+
 ## 验证方案
 
 **后端测试**

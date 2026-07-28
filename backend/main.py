@@ -37,12 +37,18 @@ async def lifespan(app: FastAPI):
         server = None
 
 
-app = FastAPI(title="QMT Live Assistant", lifespan=lifespan)
+app = FastAPI(title="QMT Live Assistant", lifespan=lifespan, root_path=settings.ROOT_PATH)
+
+_allow_origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+_allow_credentials = settings.CORS_ALLOW_CREDENTIALS.lower() in ("true", "1", "yes")
+# CORS 规范不允许 origins 为 * 的同时允许 credentials
+if "*" in _allow_origins and _allow_credentials:
+    _allow_credentials = False
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allow_origins or ["*"],
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -85,11 +91,13 @@ def _get_docs_dir() -> str:
 
 frontend_dir = _get_frontend_dir()
 if os.path.exists(frontend_dir):
-    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
+    _static_root = f"{settings.ROOT_PATH}/static" if settings.ROOT_PATH else "/static"
+    app.mount(_static_root, StaticFiles(directory=frontend_dir), name="static")
 
 docs_dir = _get_docs_dir()
 if docs_dir and os.path.exists(docs_dir):
-    app.mount("/docs-assets", StaticFiles(directory=docs_dir), name="docs-assets")
+    _docs_root = f"{settings.ROOT_PATH}/docs-assets" if settings.ROOT_PATH else "/docs-assets"
+    app.mount(_docs_root, StaticFiles(directory=docs_dir), name="docs-assets")
 
 DOCS_ALLOWED = ['jq-send-signal-to-qmt', 'qmt-live-assistant-usage']
 
@@ -169,8 +177,10 @@ async def start_server(data: dict):
 
     account_id = data.get("account_id", "").strip()
     qmt_path = data.get("qmt_path", "").strip()
-    host = data.get("host", "0.0.0.0")
-    port = int(data.get("port", 8000))
+    host = data.get("host", settings.SERVER_HOST)
+    if not host:
+        host = settings.SERVER_HOST
+    port = int(data.get("port", settings.SERVER_PORT))
 
     if not account_id:
         raise HTTPException(status_code=400, detail="请输入账户ID")
@@ -252,8 +262,8 @@ async def get_doc(doc_name: str):
     with open(doc_path, 'r', encoding='utf-8') as f:
         content = f.read()
 
-    print('doc: ', content)
-    content = content.replace(f"](assets/", f"](/docs-assets/{doc_name}/assets/")
+    _docs_root = f"{settings.ROOT_PATH}/docs-assets" if settings.ROOT_PATH else "/docs-assets"
+    content = content.replace(f"](assets/", f"]({_docs_root}/{doc_name}/assets/")
 
     return {"success": True, "data": {"name": doc_name, "content": content}}
 

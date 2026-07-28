@@ -5,6 +5,8 @@ import os
 class Settings:
     SERVER_HOST: str = os.getenv("SERVER_HOST", "0.0.0.0")
     SERVER_PORT: int = int(os.getenv("SERVER_PORT", "8000"))
+    ROOT_PATH: str = os.getenv("ROOT_PATH", "").rstrip("/")
+    BASE_URL: str = os.getenv("BASE_URL", "").rstrip("/")
     MINI_QMT_PATH: str = os.getenv("MINI_QMT_PATH", "")
     ACCOUNT_ID: str = os.getenv("ACCOUNT_ID", "")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "default-secret-key-change-in-production")
@@ -21,6 +23,8 @@ class Settings:
         "DATABASE_URL",
         "sqlite:///./data/qmt_live_assistant.db"
     )
+    CORS_ALLOW_ORIGINS: str = os.getenv("CORS_ALLOW_ORIGINS", "*")
+    CORS_ALLOW_CREDENTIALS: str = os.getenv("CORS_ALLOW_CREDENTIALS", "false")
 
 
 settings = Settings()

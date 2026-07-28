@@ -82,7 +82,7 @@ async def _require_qmt_connected(x_token: str = Header(...)):
 
 class QMTServer:
     def __init__(self, account_id: str, mini_qmt_path: str,
-                 host: str = "0.0.0.0", port: int = 8000, token: str = None,
+                 host: str = settings.SERVER_HOST, port: int = settings.SERVER_PORT, token: str = None,
                  strategy_repository: Optional[StrategyRepository] = None,
                  order_repository: Optional[OrderRepository] = None,
                  signal_log_repository: Optional[SignalLogRepository] = None,
@@ -94,7 +94,7 @@ class QMTServer:
         self.mini_qmt_path = mini_qmt_path
         self.host = host
         self.port = port
-        self.app = FastAPI(title="QMT Live Assistant")
+        self.app = FastAPI(title="QMT Live Assistant", root_path=settings.ROOT_PATH)
         self._watchdog = None
         self._jukuan_handler = None
         self.token = token if token else self.generate_token()
@@ -1222,5 +1222,5 @@ class QMTServer:
 
 
 def create_server(account_id: str, mini_qmt_path: str,
-                  host: str = "0.0.0.0", port: int = 8000, token: str = None):
+                  host: str = settings.SERVER_HOST, port: int = settings.SERVER_PORT, token: str = None):
     return QMTServer(account_id, mini_qmt_path, host, port, token)

@@ -12,6 +12,8 @@ import pystray
 from PIL import Image, ImageDraw
 
 from backend.logger import logger
+from backend.utils import build_server_url
+from config.settings import settings
 
 
 def _create_icon_image(size=32):
@@ -115,7 +117,7 @@ class TrayManager:
 
 def run_tray_mode(host: str, port: int, token: str, on_show=None, on_exit=None):
     """便利函数：创建并启动托盘管理器"""
-    server_url = f"http://127.0.0.1:{port}" if host == "0.0.0.0" else f"http://{host}:{port}"
+    server_url = build_server_url(host, port, settings.ROOT_PATH)
 
     tray = TrayManager(server_url=server_url, token=token,
                        on_show=on_show, on_exit=on_exit)

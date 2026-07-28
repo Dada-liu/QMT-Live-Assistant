@@ -18,11 +18,13 @@ export function initConfigPanel() {
         e.preventDefault();
 
         const formData = new FormData(form);
+        const hostValue = formData.get('host').trim();
+        const portValue = formData.get('port').trim();
         const config = {
             account_id: formData.get('account_id').trim(),
             qmt_path: formData.get('qmt_path').trim(),
-            host: formData.get('host').trim(),
-            port: parseInt(formData.get('port')) || 8000,
+            host: hostValue || undefined,
+            port: portValue ? parseInt(portValue) : undefined,
         };
 
         if (!config.account_id) {

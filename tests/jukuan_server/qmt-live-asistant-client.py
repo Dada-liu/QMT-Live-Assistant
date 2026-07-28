@@ -1,15 +1,19 @@
+import os
 import requests
 from typing import Any
+
+
+_DEFAULT_BASE_URL = os.getenv("QMT_BASE_URL", "http://localhost:8000")
 
 
 class QMT_LA_Client:
     """QMT客户端最小内核版本 - 仅保留client.api核心功能"""
 
-    def __init__(self, base_url: str = "http://localhost:8000", token: str = None):
+    def __init__(self, base_url: str = _DEFAULT_BASE_URL, token: str = None):
         """初始化交易客户端
 
         Args:
-            base_url: API服务器地址，默认为本地8000端口
+            base_url: API服务器地址，默认从环境变量 QMT_BASE_URL 读取
             token: 访问令牌，必须与服务器的token一致
         """
         if not token:

@@ -306,3 +306,16 @@ def qmt_call(trader, method_name: str, *args, context: dict = None, **kwargs):
         raise QMTInteractionError(reason)
 
     return result
+
+
+def build_server_url(host: str, port: int, root_path: str = "") -> str:
+    """构建本地访问 URL。
+
+    - 当 host 为 0.0.0.0 或 :: 时，回退到 127.0.0.1，便于本地浏览器/桌面壳访问。
+    - 当传入 root_path 时，拼接到 base URL 之后，支持 nginx 子路径代理。
+    """
+    effective_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    base = f"http://{effective_host}:{port}"
+    if root_path:
+        base = f"{base}/{root_path.lstrip('/')}"
+    return base

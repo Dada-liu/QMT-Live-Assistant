@@ -2,7 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 
-_TOKEN = "f5d0153fcf9d24c112ec96eb9ff9b12a"
+_TOKEN = os.getenv("QMT_TOKEN", "")
 
 def _load_client_class():
     """动态加载带横杠文件名的客户端模块"""
@@ -18,17 +18,18 @@ def _load_client_class():
 QMT_LA_Client = _load_client_class()
 
 
-def create_client(token: str = None, base_url: str = "http://localhost:8000") -> QMT_LA_Client:
+def create_client(token: str = None, base_url: str = None) -> QMT_LA_Client:
     """创建 QMT 客户端实例
 
     Args:
         token: 访问令牌，默认从环境变量 QMT_TOKEN 读取
-        base_url: API 服务器地址
+        base_url: API 服务器地址，默认从环境变量 QMT_BASE_URL 读取，未设置时使用 http://localhost:8000
 
     Returns:
         QMT_LA_Client 实例
     """
     token = token or _TOKEN
+    base_url = base_url or os.getenv("QMT_BASE_URL", "http://localhost:8000")
     if not token:
         raise ValueError("必须提供 token 或通过环境变量 QMT_TOKEN 设置")
 

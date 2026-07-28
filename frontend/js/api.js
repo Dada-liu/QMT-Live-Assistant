@@ -1,6 +1,15 @@
 import { getState, getStoredToken } from './state.js';
 
-const BASE_URL = '/';
+function getBaseUrl() {
+    const path = window.location.pathname;
+    if (path.endsWith('/index.html')) {
+        return path.slice(0, -'index.html'.length);
+    }
+    if (path.endsWith('/')) {
+        return path;
+    }
+    return path + '/';
+}
 
 class APIClient {
     async request(url, options = {}) {
@@ -10,7 +19,9 @@ class APIClient {
         };
 
         try {
-            const response = await fetch(`${BASE_URL}${url.replace(/^\//, '')}`, config);
+            const base = getBaseUrl();
+            const cleanUrl = url.startsWith('/') ? url.slice(1) : url;
+            const response = await fetch(base + cleanUrl, config);
             const data = await response.json();
 
             if (!response.ok) {

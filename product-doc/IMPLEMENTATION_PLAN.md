@@ -539,9 +539,43 @@ server {
 
 后端启动：
 
+**Linux / macOS：**
+
 ```bash
 ROOT_PATH=/qmt python -m backend.main --port 8000
 ```
+
+**Windows cmd：**
+
+```cmd
+set ROOT_PATH=/qmt
+python -m backend.main --port 8000
+```
+
+**Windows PowerShell：**
+
+```powershell
+$env:ROOT_PATH="/qmt"
+python -m backend.main --port 8000
+```
+
+**跨平台推荐（`.env` 文件）：**
+
+应用启动时会自动读取项目根目录下的 `.env` 文件，所有平台均可直接把配置写在文件里，避免命令行环境变量语法差异。
+
+```bash
+# 复制示例文件并按需修改
+cp .env.example .env
+```
+
+`.env` 示例内容：
+
+```env
+ROOT_PATH=/qmt
+CORS_ALLOW_ORIGINS=https://example.com
+```
+
+`.env` 已被 `.gitignore` 忽略，不会提交到仓库。
 
 ### 环境变量
 

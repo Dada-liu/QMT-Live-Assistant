@@ -110,9 +110,41 @@ server {
 
 子路径代理需在后端启动时设置 `ROOT_PATH`：
 
+**Linux / macOS：**
+
 ```bash
 ROOT_PATH=/qmt python -m backend.main --port 8000
 ```
+
+**Windows cmd：**
+
+```cmd
+set ROOT_PATH=/qmt
+python -m backend.main --port 8000
+```
+
+**Windows PowerShell：**
+
+```powershell
+$env:ROOT_PATH="/qmt"
+python -m backend.main --port 8000
+```
+
+或者将配置写入 `.env` 文件（推荐，跨平台通用）：
+
+```bash
+# 复制示例文件并编辑
+cp .env.example .env
+```
+
+`.env` 示例内容：
+
+```env
+ROOT_PATH=/qmt
+CORS_ALLOW_ORIGINS=https://example.com
+```
+
+应用启动时会自动读取 `.env` 中的环境变量，Windows 上无需再写 `set` / `$env` 命令。
 
 前端静态资源与 API 请求均已改为相对路径，部署时无需修改前端代码。生产环境建议显式配置 `CORS_ALLOW_ORIGINS`，不要使用 `*`。
 

@@ -135,14 +135,24 @@ class StrategyManager:
         positions_value = update_data.pop("positions", None)
 
         if "allocated_funds" in update_data:
+            # 校验：修改后的分配资金不能低于现有持仓总成本
+            current_positions_cost = sum(
+                p["avg_cost"] * p["quantity"] for p in strategy.positions
+            )
+            if update_data["allocated_funds"] < current_positions_cost:
+                raise ValueError(
+                    f"修改后的分配资金({update_data['allocated_funds']:.2f})"
+                    f"低于现有持仓成本({current_positions_cost:.2f})，无法修改"
+                )
             diff = update_data["allocated_funds"] - strategy.allocated_funds
             update_data["available_cash"] = strategy.available_cash + diff
 
         update_data["updated_at"] = _now_iso()
 
         if positions_value is not None:
+            base_cash = update_data.get("available_cash", strategy.available_cash)
             new_positions, new_cash = self._rebuild_positions(
-                strategy.positions, positions_value, strategy.available_cash
+                strategy.positions, positions_value, base_cash
             )
             update_data["positions"] = new_positions
             update_data["available_cash"] = new_cash

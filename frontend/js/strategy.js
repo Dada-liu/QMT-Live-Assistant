@@ -5,6 +5,7 @@ import { Toast } from './toast.js';
 import { applyOrderFilters, fetchOrders } from './monitor.js';
 
 let _strategies = [];
+let _originalStrategyPositions = null;
 
 export function getStrategies() {
     return _strategies;
@@ -182,6 +183,7 @@ async function showStrategyModal(strategy = null) {
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
         if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
         if (tokenResult) tokenResult.classList.add('hidden');
+        _originalStrategyPositions = JSON.stringify(strategy.positions || []);
     } else {
         if (title) title.textContent = '添加策略';
         if (editId) editId.value = '';
@@ -190,6 +192,7 @@ async function showStrategyModal(strategy = null) {
         if (fundsInput) fundsInput.value = '';
         if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
         if (tokenResult) tokenResult.classList.add('hidden');
+        _originalStrategyPositions = null;
     }
 
     modal.style.display = 'flex';
@@ -388,7 +391,13 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, insufficient_funds_policy, positions };
+        const data = { name, description, allocated_funds, insufficient_funds_policy };
+        const positionsChanged = editId
+            ? (JSON.stringify(positions) !== _originalStrategyPositions)
+            : (positions.length > 0);
+        if (positionsChanged) {
+            data.positions = positions;
+        }
         const token = getState('token');
 
         try {

@@ -35,7 +35,6 @@ logs/
 .claude/
 
 # Database
-data/
 *.db
 
 # QMT

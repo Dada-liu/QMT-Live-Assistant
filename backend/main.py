@@ -91,13 +91,13 @@ def _get_docs_dir() -> str:
 
 frontend_dir = _get_frontend_dir()
 if os.path.exists(frontend_dir):
-    _static_root = f"{settings.ROOT_PATH}/static" if settings.ROOT_PATH else "/static"
-    app.mount(_static_root, StaticFiles(directory=frontend_dir), name="static")
+    # 固定挂载到 /static；FastAPI root_path 与 nginx 子路径代理会协同剥离前缀
+    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 docs_dir = _get_docs_dir()
 if docs_dir and os.path.exists(docs_dir):
-    _docs_root = f"{settings.ROOT_PATH}/docs-assets" if settings.ROOT_PATH else "/docs-assets"
-    app.mount(_docs_root, StaticFiles(directory=docs_dir), name="docs-assets")
+    # 文档静态资源同样固定挂载到 /docs-assets
+    app.mount("/docs-assets", StaticFiles(directory=docs_dir), name="docs-assets")
 
 DOCS_ALLOWED = ['jq-send-signal-to-qmt', 'qmt-live-assistant-usage']
 

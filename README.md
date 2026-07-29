@@ -146,7 +146,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 
 应用启动时会自动读取 `.env` 中的环境变量，Windows 上无需再写 `set` / `$env` 命令。
 
-前端静态资源与 API 请求均已改为相对路径，部署时无需修改前端代码。生产环境建议显式配置 `CORS_ALLOW_ORIGINS`，不要使用 `*`。
+前端静态资源通过 `./static/...` 相对路径引用，API 请求基于页面路径动态计算 base URL，部署时无需修改前端代码。生产环境建议显式配置 `CORS_ALLOW_ORIGINS`，不要使用 `*`。
 
 ## 策略管理
 
@@ -294,7 +294,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SERVER_HOST` | `0.0.0.0` | 服务器地址 |
+| `SERVER_HOST` | `127.0.0.1` | 服务器地址 |
 | `SERVER_PORT` | `8000` | 服务器端口 |
 | `ROOT_PATH` | `` | FastAPI 子路径，如 `/qmt`，用于 nginx 子路径代理 |
 | `BASE_URL` | `` | 外部访问 URL 前缀，如 `https://example.com/qmt` |

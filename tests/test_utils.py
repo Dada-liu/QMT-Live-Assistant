@@ -203,7 +203,7 @@ class TestQmtCall:
 
 class TestBuildServerUrl:
     def test_default_root_path(self):
-        assert build_server_url("0.0.0.0", 8000) == "http://127.0.0.1:8000"
+        assert build_server_url("127.0.0.1", 8000) == "http://127.0.0.1:8000"
 
     def test_specific_host(self):
         assert build_server_url("127.0.0.1", 8000) == "http://127.0.0.1:8000"
@@ -212,10 +212,10 @@ class TestBuildServerUrl:
         assert build_server_url("::", 8000) == "http://127.0.0.1:8000"
 
     def test_root_path_with_leading_slash(self):
-        assert build_server_url("0.0.0.0", 8000, "/qmt") == "http://127.0.0.1:8000/qmt"
+        assert build_server_url("127.0.0.1", 8000, "/qmt") == "http://127.0.0.1:8000/qmt"
 
     def test_root_path_without_leading_slash(self):
-        assert build_server_url("0.0.0.0", 8000, "qmt") == "http://127.0.0.1:8000/qmt"
+        assert build_server_url("127.0.0.1", 8000, "qmt") == "http://127.0.0.1:8000/qmt"
 
     def test_empty_root_path(self):
-        assert build_server_url("0.0.0.0", 8000, "") == "http://127.0.0.1:8000"
+        assert build_server_url("127.0.0.1", 8000, "") == "http://127.0.0.1:8000"

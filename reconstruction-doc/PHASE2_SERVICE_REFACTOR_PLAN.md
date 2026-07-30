@@ -407,7 +407,7 @@ async def account_positions(account_service: IAccountService = Depends(get_accou
 ```python
 class QMTServer:
     def __init__(self, account_id: str, mini_qmt_path: str,
-                 host: str = "0.0.0.0", port: int = 8000, token: str = None):
+                 host: str = "127.0.0.1", port: int = 8000, token: str = None):
         self.account_id = account_id
         self.mini_qmt_path = mini_qmt_path
         self.host = host

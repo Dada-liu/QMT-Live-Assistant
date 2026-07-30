@@ -56,7 +56,7 @@ def server():
     srv = QMTServer(
         account_id="test_account",
         mini_qmt_path="/tmp/mock_qmt",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8001,
     )
     loop, thread = _start_server(srv)
@@ -164,7 +164,7 @@ class TestJqConversion:
 
 class TestCreateServerUtil:
     def test_create_server(self):
-        srv = create_server("test", "/tmp/mock", "0.0.0.0", 8002)
+        srv = create_server("test", "/tmp/mock", "127.0.0.1", 8002)
         assert isinstance(srv, QMTServer)
         assert srv.account_id == "test"
         assert srv.mini_qmt_path == "/tmp/mock"
@@ -1790,7 +1790,7 @@ class TestMarketOpenPoll:
 
 class TestServerLifecycle:
     def test_init_and_setup_sync_lifecycle(self):
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8004)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8004)
         try:
             srv.init_and_setup()
             assert srv.running is True
@@ -1800,12 +1800,12 @@ class TestServerLifecycle:
         assert srv.running is False
 
     def test_stop_without_running_loop(self):
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8005)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8005)
         srv.stop()
         assert srv.running is False
 
     def test_stop_async_directly(self):
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8006)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8006)
 
         async def dummy_task():
             while True:
@@ -1825,7 +1825,7 @@ class TestServerLifecycle:
     @pytest.mark.asyncio
     async def test_market_open_poll_loop_triggers_reconcile(self):
         from unittest.mock import AsyncMock, patch as local_patch
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8007)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8007)
         srv.running = True
 
         class FakeWatchdog:
@@ -1847,7 +1847,7 @@ class TestServerLifecycle:
 
     def test_ensure_account_record_creates_new_account(self):
         from unittest.mock import MagicMock
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8008)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8008)
         repo = MagicMock()
         repo.get_by_account_id.return_value = None
         srv._account_repository = repo
@@ -1860,7 +1860,7 @@ class TestServerLifecycle:
 
     def test_ensure_account_record_updates_existing_account(self):
         from unittest.mock import MagicMock
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8009)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8009)
         existing = MagicMock()
         repo = MagicMock()
         repo.get_by_account_id.return_value = existing
@@ -1880,7 +1880,7 @@ class TestServerLifecycle:
         assert response.json()["data"] == []
 
     def test_stop_with_running_loop(self):
-        srv = create_server("test_account", "/tmp/mock_qmt", "0.0.0.0", 8010)
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8010)
 
         async def dummy_task():
             while True:
@@ -2171,7 +2171,7 @@ class TestMockOrderIdCollision:
         srv = QMTServer(
             account_id="test_account",
             mini_qmt_path="/tmp/mock_qmt",
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=port,
             order_repository=repo,
         )

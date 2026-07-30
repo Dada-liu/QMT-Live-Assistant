@@ -7,7 +7,7 @@ load_dotenv()
 
 
 class Settings:
-    SERVER_HOST: str = os.getenv("SERVER_HOST", "0.0.0.0")
+    SERVER_HOST: str = os.getenv("SERVER_HOST", "127.0.0.1")
     SERVER_PORT: int = int(os.getenv("SERVER_PORT", "8000"))
     ROOT_PATH: str = os.getenv("ROOT_PATH", "").rstrip("/")
     BASE_URL: str = os.getenv("BASE_URL", "").rstrip("/")

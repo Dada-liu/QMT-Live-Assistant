@@ -117,9 +117,12 @@ class OrderTracker:
         new_status = self._normalize_status(xtquant_status)
 
         if traded_volume > 0:
-            order.filled_quantity, order.filled_price = self._compute_fill(
-                order, traded_volume, traded_price
-            )
+            # on_stock_order / query_stock_orders 返回的是累计成交量，
+            # 仅当超过当前已记录成交量时才更新，避免部分成交时被重复累加。
+            if traded_volume > order.filled_quantity:
+                order.filled_quantity = traded_volume
+                if traded_price > 0:
+                    order.filled_price = round(traded_price, 4)
 
         if new_status == OrderState.FILLED:
             self._resolve(order, OrderState.FILLED, old_status, "callback")

@@ -103,6 +103,44 @@ class TestOrderTracker:
         assert order.filled_quantity == 100
         assert order.filled_price == round((40 * 10.0 + 60 * 10.2) / 100, 4)
 
+    def test_callback_cumulative_traded_volume_not_double_counted(self, tracker):
+        """on_stock_order / query_stock_orders 返回累计成交量，不能按增量累加。"""
+        order = self._track_sample(tracker, order_id="100002")
+        tracker.update_from_callback("100002", ORDER_PART_SUCC, 500, 10.0)
+        assert order.status == OrderState.PARTIAL
+        assert order.filled_quantity == 500
+        assert order.filled_price == 10.0
+
+        tracker.update_from_callback("100002", ORDER_PART_SUCC, 1200, 10.1)
+        assert order.status == OrderState.PARTIAL
+        assert order.filled_quantity == 1200
+        assert order.filled_price == round(1200 * 10.1 / 1200, 4)
+
+        tracker.update_from_callback("100002", ORDER_SUCCEEDED, 2000, 10.2)
+        assert order.status == OrderState.FILLED
+        assert order.filled_quantity == 2000
+        assert order.filled_price == 10.2
+
+    def test_callback_and_trade_mixed_partial_fill(self, tracker):
+        """单笔成交回调累加 + 订单状态回调累计量，不应重复计算。"""
+        order = self._track_sample(tracker, order_id="100003")
+        # on_stock_trade 单笔成交 300 股
+        tracker.update_from_trade("100003", 300, 10.0)
+        assert order.filled_quantity == 300
+
+        # on_stock_order 返回累计成交量 800 股（新增 500）
+        tracker.update_from_callback("100003", ORDER_PART_SUCC, 800, 10.1)
+        assert order.filled_quantity == 800
+
+        # on_stock_trade 又成交 200 股
+        tracker.update_from_trade("100003", 200, 10.2)
+        assert order.filled_quantity == 1000
+
+        # 最终 on_stock_order 返回累计 1000 股
+        tracker.update_from_callback("100003", ORDER_SUCCEEDED, 1000, 10.15)
+        assert order.status == OrderState.FILLED
+        assert order.filled_quantity == 1000
+
     def test_error_callback(self, tracker):
         self._track_sample(tracker)
         updated = tracker.update_from_error("100001", "资金不足")

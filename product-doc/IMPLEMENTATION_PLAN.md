@@ -391,6 +391,8 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 ### `backend/order_tracker.py` — 订单状态跟踪
 状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 通过 `qmt_call` 轮询 QMT 修正状态；`cancel_order` 调用 `cancel_order_stock` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计。
 
+- **成交量处理**：`on_stock_order` 与 `query_stock_orders` 返回的 `traded_volume` 是**累计成交量**；`update_from_callback` 仅在 reported 累计量大于当前已记录量时才更新 `filled_quantity`，避免部分成交多次回调时被重复累加。`on_stock_trade` 返回单笔成交，`update_from_trade` 保持增量累加并计算加权成交均价。
+
 ### `backend/source_platform_notifier.py` — 源平台状态通知
 - `resolve_webhook_url(order, mapping)`：优先订单显式 webhook，其次按 `source_platform` 查全局映射
 - `build_payload(order)`：构造包含 event / order_id / status / 成交信息 / 时间戳的结构化 JSON

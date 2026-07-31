@@ -19,6 +19,11 @@ from backend.db.repositories.signal_log import (
     InMemorySignalLogRepository,
     SQLAlchemySignalLogRepository,
 )
+from backend.db.repositories.settings import (
+    SettingsRepository,
+    InMemorySettingsRepository,
+    SQLAlchemySettingsRepository,
+)
 
 __all__ = [
     "Repository",
@@ -35,4 +40,7 @@ __all__ = [
     "SignalLogRepository",
     "InMemorySignalLogRepository",
     "SQLAlchemySignalLogRepository",
+    "SettingsRepository",
+    "InMemorySettingsRepository",
+    "SQLAlchemySettingsRepository",
 ]

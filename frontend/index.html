@@ -92,6 +92,40 @@
           </div>
         </form>
       </div>
+
+      <!-- Bark 推送设置 -->
+      <div class="card" style="margin-top: var(--spacing-base);">
+        <form id="bark-config-form" novalidate>
+          <span class="section-label">Bark 推送设置</span>
+          <p class="section-desc" style="margin-bottom: var(--spacing-base);">绑定 iOS Bark App 后，订单发起、成交、失败、超时未成交时将推送消息到手机。</p>
+          <div class="connection-result info" id="bark-config-hint" style="display:none;margin-top:0;margin-bottom:var(--spacing-base);">启动服务器并连接后，可配置 Bark 推送</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="bark-key">Bark Key</label>
+              <input class="form-input" type="text" id="bark-key" placeholder="Bark App 中的设备 Key">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bark-server">服务器地址</label>
+              <input class="form-input" type="text" id="bark-server" placeholder="https://api.day.app">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group form-checkbox">
+              <label class="form-label">
+                <input type="checkbox" id="bark-enabled"> 启用订单消息推送
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bark-stale-minutes">未成交提醒（分钟）</label>
+              <input class="form-input" type="number" id="bark-stale-minutes" min="1" step="1" placeholder="5">
+            </div>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" type="submit" id="btn-bark-save">保存推送设置</button>
+            <button class="btn btn-secondary" type="button" id="btn-bark-test">发送测试推送</button>
+          </div>
+        </form>
+      </div>
     </section>
 
     <!-- 服务器信息 -->
@@ -390,6 +424,11 @@
               <tbody id="strategy-positions-tbody"></tbody>
             </table>
           </div>
+        </div>
+        <div class="form-group form-checkbox">
+          <label class="form-label">
+            <input type="checkbox" id="strategy-bark-notify" checked> 开启订单消息推送（Bark）
+          </label>
         </div>
         <div id="strategy-token-result" class="connection-result success hidden" style="margin-bottom:var(--spacing-base);"></div>
         <div class="btn-group">

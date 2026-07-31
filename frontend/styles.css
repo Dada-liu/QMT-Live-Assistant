@@ -1354,6 +1354,20 @@ a:hover { text-decoration: underline; }
   margin-top: var(--spacing-xs);
 }
 
+.form-checkbox .form-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.form-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
 .btn-sm-copy {
   display: inline-flex;
   align-items: center;

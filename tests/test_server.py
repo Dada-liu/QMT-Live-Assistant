@@ -2241,3 +2241,152 @@ class TestQMTInteractionErrors:
                 json={},
             )
         assert response.status_code == 500
+
+
+class TestBarkConfigApi:
+    """Bark 推送配置 API 与策略推送开关测试"""
+
+    def test_get_bark_config_without_token_header(self, client):
+        response = client.get("/api/bark-config")
+        assert response.status_code == 422
+
+    def test_get_bark_config_with_invalid_token(self, client):
+        response = client.get("/api/bark-config", headers={"X-Token": "wrong"})
+        assert response.status_code == 401
+
+    def test_get_default_config(self, client, server):
+        response = client.get("/api/bark-config", headers={"X-Token": server.token})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["enabled"] is False
+        assert data["data"]["device_key"] == ""
+        assert data["data"]["server_url"] == "https://api.day.app"
+        assert data["data"]["stale_minutes"] == 5
+
+    def test_update_and_get_roundtrip(self, client, server):
+        payload = {
+            "enabled": True,
+            "device_key": "k123",
+            "server_url": "https://bark.example.com",
+            "stale_minutes": 3,
+        }
+        put_resp = client.put(
+            "/api/bark-config", json=payload, headers={"X-Token": server.token}
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["data"] == payload
+
+        get_resp = client.get("/api/bark-config", headers={"X-Token": server.token})
+        assert get_resp.json()["data"] == payload
+
+    def test_update_invalid_stale_minutes_returns_422(self, client, server):
+        response = client.put(
+            "/api/bark-config",
+            json={"enabled": True, "device_key": "k", "stale_minutes": 0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 422
+
+    def test_test_push_success(self, client, server):
+        with patch("backend.bark_service.bark_notifier.send_push", return_value=True):
+            response = client.post(
+                "/api/bark-config/test",
+                json={"enabled": True, "device_key": "k123"},
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    def test_test_push_failure_returns_502(self, client, server):
+        with patch("backend.bark_service.bark_notifier.send_push", return_value=False):
+            response = client.post(
+                "/api/bark-config/test",
+                json={"enabled": True, "device_key": "k123"},
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 502
+
+    def test_test_push_without_device_key_returns_502(self, client, server):
+        response = client.post(
+            "/api/bark-config/test",
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 502
+
+    def test_strategy_bark_notify_defaults_on(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "默认推送策略", "allocated_funds": 10000},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["bark_notify_enabled"] is True
+
+    def test_strategy_bark_notify_update(self, client, server):
+        create_resp = client.post(
+            "/api/strategies",
+            json={"name": "开关策略", "allocated_funds": 10000},
+            headers={"X-Token": server.token},
+        )
+        sid = create_resp.json()["data"]["id"]
+
+        put_resp = client.put(
+            f"/api/strategies/{sid}",
+            json={"bark_notify_enabled": False},
+            headers={"X-Token": server.token},
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["data"]["bark_notify_enabled"] is False
+        assert server.strategy_manager.get(sid).bark_notify_enabled is False
+
+    def test_bark_strategy_gate(self, client, server):
+        create_resp = client.post(
+            "/api/strategies",
+            json={"name": "门控策略", "allocated_funds": 10000},
+            headers={"X-Token": server.token},
+        )
+        sid = create_resp.json()["data"]["id"]
+
+        # 无策略订单只看全局开关
+        assert server._bark_strategy_gate(None) is True
+        # 策略默认开启
+        assert server._bark_strategy_gate(sid) is True
+        # 策略已删除默认放行
+        assert server._bark_strategy_gate("nonexistent") is True
+
+        client.put(
+            f"/api/strategies/{sid}",
+            json={"bark_notify_enabled": False},
+            headers={"X-Token": server.token},
+        )
+        assert server._bark_strategy_gate(sid) is False
+
+    async def test_poll_orders_loop_invokes_stale_check(self):
+        from unittest.mock import AsyncMock, patch as local_patch
+
+        srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8009)
+        srv.running = True
+
+        class FakeWatchdog:
+            connected = True
+            trader = object()
+            account = object()
+
+        srv._watchdog = FakeWatchdog()
+        real_sleep = asyncio.sleep
+
+        async def fast_sleep(_seconds):
+            await real_sleep(0.001)
+
+        with local_patch("backend.server.asyncio.sleep", new=fast_sleep):
+            with local_patch.object(srv.order_tracker, "poll_and_reconcile", new=AsyncMock()):
+                with local_patch.object(srv.bark_service, "check_stale_orders") as mock_check:
+                    task = asyncio.create_task(srv._poll_orders_loop())
+                    await real_sleep(0.05)
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+        mock_check.assert_called()

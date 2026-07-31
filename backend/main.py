@@ -21,6 +21,7 @@ from backend.db.repositories import (
     SQLAlchemyOrderRepository,
     SQLAlchemyAccountRepository,
     SQLAlchemySignalLogRepository,
+    SQLAlchemySettingsRepository,
 )
 from config.settings import settings
 
@@ -57,13 +58,14 @@ app.add_middleware(
 def _create_repositories(session):
     """根据配置创建 Repository。若 PERSISTENCE_MODE=memory 返回 None，使用内存实现。"""
     if settings.PERSISTENCE_MODE == "memory":
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     return (
         session,
         SQLAlchemyStrategyRepository(session),
         SQLAlchemyOrderRepository(session),
         SQLAlchemyAccountRepository(session),
         SQLAlchemySignalLogRepository(session),
+        SQLAlchemySettingsRepository(session),
     )
 
 
@@ -194,6 +196,7 @@ async def start_server(data: dict):
         order_repository,
         account_repository,
         signal_log_repository,
+        settings_repository,
     ) = _create_repositories(db_session)
 
     server = QMTServer(
@@ -205,6 +208,7 @@ async def start_server(data: dict):
         order_repository=order_repository,
         account_repository=account_repository,
         signal_log_repository=signal_log_repository,
+        settings_repository=settings_repository,
         db_session=db_session,
     )
 
@@ -339,6 +343,7 @@ if __name__ == "__main__":
             order_repository,
             account_repository,
             signal_log_repository,
+            settings_repository,
         ) = _create_repositories(db_session)
         server = QMTServer(
             account_id=args.account,
@@ -350,6 +355,7 @@ if __name__ == "__main__":
             order_repository=order_repository,
             account_repository=account_repository,
             signal_log_repository=signal_log_repository,
+            settings_repository=settings_repository,
             db_session=db_session,
         )
 

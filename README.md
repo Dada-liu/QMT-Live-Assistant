@@ -26,7 +26,8 @@
 **监控与数据**
 - 账户仪表板：可用资金/持仓市值/总资产/当日盈亏四卡片，点击可展开账户持仓明细
 - 订单监控：按日期/策略/状态筛选；信号日志默认展示异常信号（含 max_buyable 封顶的部分下单），便于排查问题
-- 数据持久化：策略、持仓、订单、信号日志默认落库 SQLite，重启不丢失
+- Bark 手机推送：配置页绑定 iOS Bark Key 后，订单发起/成交/失败/超时未成交（分钟数可配，每笔仅提醒一次）自动推送到手机；失败与超时未成交为 critical 级别（静音/勿扰也提醒），失败带铃声；可按策略单独关闭推送
+- 数据持久化：策略、持仓、订单、信号日志、应用设置（Bark 配置）默认落库 SQLite，重启不丢失
 
 **连接与安全**
 - QMT 连接看门狗：断线自动检测、指数退避重连，连接状态实时同步到页面
@@ -237,6 +238,27 @@ CORS_ALLOW_ORIGINS=https://example.com
 - `notify_source` 默认为 `false`，不传则不触发通知
 - `source_platform_webhook` 为空时，会尝试从环境变量 `SOURCE_PLATFORM_WEBHOOKS` 按 `source_platform` 查找对应 URL
 - 通知失败仅记录日志，不影响订单状态机和策略持仓修正
+
+### Bark 推送配置
+
+配置页可编辑的全局推送设置（主 Token），持久化到 SQLite `app_settings` 表：
+
+- `GET /api/bark-config` — 读取配置
+- `PUT /api/bark-config` — 保存配置
+- `POST /api/bark-config/test` — 发送测试推送验证绑定（可用请求体中未保存的值先试）
+
+```json
+{
+  "enabled": true,
+  "device_key": "Bark App 中的设备 Key",
+  "server_url": "https://api.day.app",
+  "stale_minutes": 5
+}
+```
+
+- 触发事件：订单发起、订单成交（普通级别）；订单失败（critical + alarm 铃声）、超过 `stale_minutes` 未成交（critical，每笔订单仅提醒一次）
+- 策略编辑弹窗可单独关闭某个策略的推送（`bark_notify_enabled`，默认开启）；无策略订单只看全局开关
+- 推送在 daemon 线程中异步发出，失败仅记录日志，不影响订单状态机
 
 ### 动态端点（自动生成）
 

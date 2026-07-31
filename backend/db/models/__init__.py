@@ -6,6 +6,7 @@ from backend.db.models.position import PositionModel
 from backend.db.models.order import OrderModel
 from backend.db.models.order_event import OrderEventModel
 from backend.db.models.signal_log import SignalLogModel
+from backend.db.models.settings import AppSettingsModel
 
 __all__ = [
     "AccountModel",
@@ -15,4 +16,5 @@ __all__ = [
     "OrderModel",
     "OrderEventModel",
     "SignalLogModel",
+    "AppSettingsModel",
 ]

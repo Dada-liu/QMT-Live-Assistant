@@ -304,6 +304,12 @@ graph LR
         S_REFRESH["POST /api/strategies/refresh"]
     end
 
+    subgraph "Bark 推送配置 (server.py)"
+        BARK_GET["GET /api/bark-config"]
+        BARK_PUT["PUT /api/bark-config"]
+        BARK_TEST["POST /api/bark-config/test"]
+    end
+
     subgraph "动态路由 (server.py 自动生成)"
         D1["POST /api/order_stock"]
         D2["POST /api/cancel_order_stock"]
@@ -386,6 +392,7 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录，支持 `notify_source` / `source_platform_webhook` / `source_platform`）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
 - **账户/工具**：account-asset、account-positions、代码转换、文档 API、动态端点（trader 方法自动映射）
 - **源平台状态通知**：`_register_order_state_callback` 在订单 filled/failed 终态时，若 `notify_source=true` 则解析 webhook URL 并启动 daemon 线程 POST 结构化 payload；通知失败仅记录日志，不影响状态机
+- **Bark 推送**：`GET/PUT /api/bark-config`、`POST /api/bark-config/test`（主 Token，可用未保存的配置先试）；`BarkService` 分别挂到 `_track_and_apply_order`（发起订单）、`_register_order_state_callback`（终态）、`_poll_orders_loop`（未成交检查，位于 QMT 连接守卫内）
 - 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照与通知参数；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
 
 ### `backend/order_tracker.py` — 订单状态跟踪
@@ -397,6 +404,16 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - `resolve_webhook_url(order, mapping)`：优先订单显式 webhook，其次按 `source_platform` 查全局映射
 - `build_payload(order)`：构造包含 event / order_id / status / 成交信息 / 时间戳的结构化 JSON
 - `notify_source_platform(order, webhook_url)`：同步 `requests.post`，调用方在 daemon 线程执行，失败仅记录日志
+
+### `backend/bark_notifier.py` — Bark 推送发送层
+- `send_push(server_url, device_key, title, body, group, level, sound)`：同步 `requests.post({server}/push)`，timeout=10，不重试，失败记日志返回 False（不抛出）；`level` / `sound` 仅在传入时加入 payload
+- 消息构造函数：`build_placed_message`（新订单）/ `build_terminal_message`（成交或失败含 error_msg）/ `build_stale_message`（已等待分钟数）/ `build_test_message`（"绑定成功"）
+
+### `backend/bark_service.py` — Bark 推送编排层
+- `BarkConfig`（Pydantic）：`enabled` / `device_key` / `server_url`（默认 https://api.day.app）/ `stale_minutes`（>0，默认 5）；持久化到 `app_settings` KV 表（key="bark"，JSON blob），`update_config` 写库并整体替换内存快照（线程安全）
+- 门控 `_gate`：全局 enabled + device_key + 策略级 `bark_notify_enabled`（由 server 注入 `strategy_lookup`；无策略订单只看全局，策略已删除默认放行，查询异常放行不中断状态机）
+- 事件：`notify_placed`（普通级别）；`notify_terminal`（成交普通级别；失败 `level=critical` + `sound=alarm`）；`check_stale_orders`（超龄未成交 critical，`_stale_notified` 内存集合保证每笔仅提醒一次，离开 pending 自动清理；DB 读回的 naive `placed_at` 按 UTC 兜底）
+- 所有推送经 `_spawn` 在 daemon 线程发出，不阻塞 xtquant 回调线程与事件循环
 
 ### `backend/jukuan_orders.py` — 聚宽风格下单
 `JukuanOrderHandler` 实现 4 个聚宽 API 风格方法 + 1 个通用下单方法：
@@ -416,10 +433,10 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。MockTrader 订单号计数器为类属性（每进程从 100000 重计），提供 `bump_order_counter()` 供服务器启动时抬升，避免与已持久化的历史订单号冲突。
 
 ### `backend/db/` — 数据库层
-7 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；strategies 表新增 `insufficient_funds_policy` 列（历史 NULL 行归一为 reject）；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
+8 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs、app_settings）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；strategies 表新增 `insufficient_funds_policy` 列（历史 NULL 行归一为 reject）与 `bark_notify_enabled` 列（存量默认开启）；app_settings 为键值表，存放 Bark 等全局配置；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
 
 ### `backend/models/` — 领域模型
-- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`；`insufficient_funds_policy`（reject / max_buyable）在 API 边界用 Literal 校验
+- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`；`insufficient_funds_policy`（reject / max_buyable）在 API 边界用 Literal 校验；`bark_notify_enabled` 控制该策略是否发送 Bark 推送（默认开启）
 - `order.py`：`TrackedOrder`（dataclass，新增 `notify_source` / `source_platform_webhook` / `source_platform`）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）、`GenericOrderRequest` / `ManualOrderRequest`（新增通知相关字段）
 - 解耦业务层与数据库层，消除 Repository 与业务层循环依赖
 
@@ -433,14 +450,14 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 .top-nav              — 固定顶部导航（Logo + 状态圆点 + 导航链接 + 主题切换）
 .main-content
   #account-empty       — 空状态（未连接 / Token 连接表单）
-  #config              — 服务器配置表单（必填项不完整时禁用启动/停止按钮）
+  #config              — 服务器配置表单（必填项不完整时禁用启动/停止按钮）+ Bark 推送设置卡片（Key/服务器地址/启用开关/未成交分钟数/测试推送，未启动时禁用并提示）
   #server-info         — 服务器状态卡片
   #strategy-management — 策略管理（列表 + 编辑模态框 + Token 复制）
   #dashboard           — 账户仪表板（4 资产卡片 + 可展开持仓明细）
   #strategy-overview   — 策略概览（资产卡片 + 点击展开持仓明细）
   #monitor             — 订单监控（筛选栏 + 订单列表 + 条数统计）+ 信号日志
   #converter / #docs   — 代码转换工具 / 文档浏览
-#strategy-modal / #resend-modal — 策略编辑 / 订单重发弹窗（共用 .modal-overlay 体系）
+#strategy-modal / #resend-modal — 策略编辑（含 Bark 推送开关复选框）/ 订单重发弹窗（共用 .modal-overlay 体系）
 #toast-container
 ```
 

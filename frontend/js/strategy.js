@@ -173,6 +173,7 @@ async function showStrategyModal(strategy = null) {
     const descInput = document.getElementById('strategy-desc');
     const fundsInput = document.getElementById('strategy-funds');
     const fundsPolicyInput = document.getElementById('strategy-funds-policy');
+    const barkNotifyInput = document.getElementById('strategy-bark-notify');
     const tokenResult = document.getElementById('strategy-token-result');
 
     if (strategy) {
@@ -182,6 +183,7 @@ async function showStrategyModal(strategy = null) {
         if (descInput) descInput.value = strategy.description || '';
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
         if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
+        if (barkNotifyInput) barkNotifyInput.checked = strategy.bark_notify_enabled !== false;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = JSON.stringify(strategy.positions || []);
     } else {
@@ -191,6 +193,7 @@ async function showStrategyModal(strategy = null) {
         if (descInput) descInput.value = '';
         if (fundsInput) fundsInput.value = '';
         if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
+        if (barkNotifyInput) barkNotifyInput.checked = true;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = null;
     }
@@ -345,6 +348,8 @@ export function initStrategyPanel() {
         const fundsStr = fundsEl ? fundsEl.value.trim() : '';
         const allocated_funds = parseFloat(fundsStr) || 0;
         const insufficient_funds_policy = fundsPolicyEl ? fundsPolicyEl.value : 'reject';
+        const barkNotifyEl = document.getElementById('strategy-bark-notify');
+        const bark_notify_enabled = barkNotifyEl ? barkNotifyEl.checked : true;
 
         if (!name) {
             Toast.warning('请输入策略名称');
@@ -391,7 +396,7 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, insufficient_funds_policy };
+        const data = { name, description, allocated_funds, insufficient_funds_policy, bark_notify_enabled };
         const positionsChanged = editId
             ? (JSON.stringify(positions) !== _originalStrategyPositions)
             : (positions.length > 0);

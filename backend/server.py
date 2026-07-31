@@ -30,6 +30,8 @@ from backend.source_platform_notifier import (
     notify_source_platform,
     resolve_webhook_url,
 )
+from backend.bark_service import BarkService, BarkConfig
+from backend.db.repositories.settings import SettingsRepository
 from config.settings import settings
 import threading
 
@@ -87,6 +89,7 @@ class QMTServer:
                  order_repository: Optional[OrderRepository] = None,
                  signal_log_repository: Optional[SignalLogRepository] = None,
                  account_repository: Optional[AccountRepository] = None,
+                 settings_repository: Optional[SettingsRepository] = None,
                  db_session=None):
         global _current_server
         _current_server = self
@@ -106,6 +109,9 @@ class QMTServer:
         self._market_open_poll_task: Optional[asyncio.Task] = None
         self.running = False
         self.strategy_manager = StrategyManager(repository=strategy_repository)
+        self.bark_service = BarkService(
+            settings_repository, strategy_lookup=self._bark_strategy_gate
+        )
         self._register_order_state_callback()
         print(f"\n授权Token: {self.token}\n")
 
@@ -201,7 +207,17 @@ class QMTServer:
                     )
                     thread.start()
 
+            # 3) Bark 手机推送（非阻塞，内部自行判断开关）
+            self.bark_service.notify_terminal(order)
+
         self.order_tracker.on_state_change(on_state_change)
+
+    def _bark_strategy_gate(self, strategy_id: Optional[str]) -> bool:
+        """Bark 策略级开关：无策略订单只看全局开关；策略已删除默认放行。"""
+        if not strategy_id:
+            return True
+        strategy = self.strategy_manager.get(strategy_id)
+        return strategy.bark_notify_enabled if strategy is not None else True
 
     def _track_and_apply_order(self, order_result: dict, strategy_id: Optional[str],
                                strategy_name: str, stock_name: str = "") -> Optional[TrackedOrder]:
@@ -241,7 +257,10 @@ class QMTServer:
             source_platform_webhook=source_platform_webhook,
             source_platform=source_platform,
         )
-        return self.order_tracker.get_order(str(order_id))
+        tracked = self.order_tracker.get_order(str(order_id))
+        if tracked is not None:
+            self.bark_service.notify_placed(tracked)
+        return tracked
 
     async def _poll_orders_loop(self):
         """后台轮询 pending 订单状态，补偿漏掉的回调。仅在 QMT 连接正常时执行。"""
@@ -256,6 +275,9 @@ class QMTServer:
                     ):
                         await self.order_tracker.poll_and_reconcile(
                             self.trader, self.account
+                        )
+                        self.bark_service.check_stale_orders(
+                            self.order_tracker.get_pending_orders()
                         )
                 except Exception:
                     # 轮询失败不应影响主服务
@@ -1120,6 +1142,23 @@ class QMTServer:
                 _current_server.trader, _current_server.account
             )
             return {'success': True, 'data': _enrich_order_count(strategies)}
+
+        @app.get('/api/bark-config')
+        async def get_bark_config(token: str = Depends(_verify_token)):
+            return {'success': True, 'data': _current_server.bark_service.get_config().model_dump()}
+
+        @app.put('/api/bark-config')
+        async def update_bark_config(data: BarkConfig, token: str = Depends(_verify_token)):
+            saved = _current_server.bark_service.update_config(data)
+            return {'success': True, 'data': saved.model_dump()}
+
+        @app.post('/api/bark-config/test')
+        async def test_bark_config(data: BarkConfig = None, token: str = Depends(_verify_token)):
+            """发送一条测试推送验证绑定；body 可选，可用表单未保存的值先试。"""
+            ok = await asyncio.to_thread(_current_server.bark_service.send_test, data)
+            if not ok:
+                raise HTTPException(status_code=502, detail="推送失败，请检查 Key 与服务器地址")
+            return {'success': True, 'data': {'message': '测试推送已发送，请查看手机'}}
 
     def init_and_setup(self, target_app=None):
         """同步兼容入口，实际委托给 init_and_setup_async。"""

@@ -148,6 +148,30 @@ class APIClient {
         });
     }
 
+    // --- Bark 推送配置 ---
+
+    async getBarkConfig(token) {
+        return this.request('api/bark-config', {
+            headers: { 'X-Token': token },
+        });
+    }
+
+    async updateBarkConfig(data, token) {
+        return this.request('api/bark-config', {
+            method: 'PUT',
+            headers: { 'X-Token': token },
+            body: JSON.stringify(data),
+        });
+    }
+
+    async testBarkConfig(data, token) {
+        return this.request('api/bark-config/test', {
+            method: 'POST',
+            headers: { 'X-Token': token },
+            body: JSON.stringify(data),
+        });
+    }
+
     async getOrders(token, filters = {}) {
         const params = new URLSearchParams();
         if (filters.status) params.append('status', filters.status);

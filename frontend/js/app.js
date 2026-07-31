@@ -1,7 +1,7 @@
 import { UI } from './ui.js';
 import { api } from './api.js';
 import { getState, setState, getStoredToken } from './state.js';
-import { initConfigPanel } from './config-panel.js';
+import { initConfigPanel, refreshBarkConfig } from './config-panel.js';
 import { initMonitor, fetchOrders, fetchSignalLogs, startStatusCheck, stopStatusCheck, applyOrderFilters } from './monitor.js';
 import { initDashboard, refreshDashboard } from './dashboard.js';
 import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
@@ -97,6 +97,7 @@ async function handleTokenConnect() {
         await refreshDashboard();
         await loadStrategies();
         populateStrategyDropdown();
+        refreshBarkConfig();
 
         tokenInput.value = '';
         Toast.success('连接成功！');
@@ -131,6 +132,7 @@ async function checkServerStatus() {
                     await refreshDashboard();
                     await loadStrategies();
                     populateStrategyDropdown();
+                    refreshBarkConfig();
                     UI.switchTab('account');
                 } else {
                     UI.switchTab('account');

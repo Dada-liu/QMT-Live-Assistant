@@ -161,6 +161,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             allocated_funds=float(row.allocated_funds),
             available_cash=float(row.available_cash),
             insufficient_funds_policy=row.insufficient_funds_policy or INSUFFICIENT_FUNDS_REJECT,
+            bark_notify_enabled=bool(row.bark_notify_enabled) if row.bark_notify_enabled is not None else True,
             total_asset=float(row.available_cash) + sum(
                 p["avg_cost"] * p["quantity"] for p in positions
             ),
@@ -183,6 +184,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             allocated_funds=strategy.allocated_funds,
             available_cash=strategy.available_cash,
             insufficient_funds_policy=strategy.insufficient_funds_policy,
+            bark_notify_enabled=strategy.bark_notify_enabled,
             trading_records=list(strategy.trading_records or []),
         )
         model.positions = self._positions_to_models(strategy)
@@ -196,6 +198,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
         model.allocated_funds = strategy.allocated_funds
         model.available_cash = strategy.available_cash
         model.insufficient_funds_policy = strategy.insufficient_funds_policy
+        model.bark_notify_enabled = strategy.bark_notify_enabled
         model.last_rollover_date = strategy.last_rollover_date
         model.trading_records = list(strategy.trading_records or [])
         model.updated_at = datetime.now(timezone.utc)

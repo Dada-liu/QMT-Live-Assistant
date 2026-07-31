@@ -189,7 +189,10 @@ export const UI = {
             if (status === 'pending') statusBadge = '<span class="badge badge-info">待成交</span>';
             else if (status === 'partial') statusBadge = '<span class="badge badge-warning">部分成交</span>';
             else if (status === 'filled') statusBadge = '<span class="badge badge-success">已成交</span>';
-            else if (status === 'failed') statusBadge = '<span class="badge badge-error">失败</span>';
+            else if (status === 'failed') {
+                const errorTip = o.error_msg ? ` data-tooltip="${escapeHtml(o.error_msg)}"` : '';
+                statusBadge = `<span class="badge badge-error"${errorTip}>失败</span>`;
+            }
             else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
             let actionCell = '<span></span>';

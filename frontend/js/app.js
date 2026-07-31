@@ -7,9 +7,11 @@ import { initDashboard, refreshDashboard } from './dashboard.js';
 import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
 import { Docs } from './docs.js';
+import { Tooltip } from './tooltip.js';
 
 async function initApp() {
     UI.initTheme();
+    try { Tooltip.init(); } catch (e) { console.error('[init] Tooltip.init failed:', e); }
 
     try { initConfigPanel(); } catch (e) { console.error('[init] initConfigPanel failed:', e); }
     try { initMonitor(); } catch (e) { console.error('[init] initMonitor failed:', e); }

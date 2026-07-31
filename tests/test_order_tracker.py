@@ -490,6 +490,44 @@ class TestOrderTrackerPoll:
         assert "QMT 调用异常" in caplog.text
         assert "查询失败" in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_poll_single_order_query_failure_marks_failed(self, tracker):
+        """query_stock_order 查询单票失败时，应将该订单标记为 FAILED。"""
+        called = []
+
+        def on_change(order):
+            called.append(order.order_id)
+
+        tracker.on_state_change(on_change)
+        tracker.track_order(
+            order_id="100001",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc123",
+            strategy_name="测试策略",
+            price=10.0,
+            optimistic_position_applied=True,
+        )
+
+        class EmptyBatchFailingSingleTrader:
+            def query_stock_orders(self, account, cancelable_only=False):
+                return []
+
+            def query_stock_order(self, account, order_id):
+                raise RuntimeError("单票查询失败")
+
+        resolved = await tracker.poll_and_reconcile(EmptyBatchFailingSingleTrader(), None)
+
+        assert len(resolved) == 1
+        assert resolved[0].status == OrderState.FAILED
+        assert "查询订单状态失败" in resolved[0].error_msg
+        assert "单票查询失败" in resolved[0].error_msg
+        assert tracker.get_order("100001").status == OrderState.FAILED
+        assert "100001" in called
+
 
 class TestOrderTrackerLoadHistory:
     def test_loads_filled_orders_on_init(self):

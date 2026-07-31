@@ -330,8 +330,12 @@ class OrderTracker:
                 oid = str(getattr(o, 'order_id', ''))
                 if oid:
                     order_map[oid] = o
-        except Exception:
-            order_map = {}
+        except Exception as exc:
+            logger.error(
+                f"{YELLOW}【批量订单查询失败】{RESET} "
+                f"跳过本次轮询，等待下次重试: {exc}"
+            )
+            return []
 
         for order in pending:
             o = order_map.get(order.order_id)
@@ -344,8 +348,17 @@ class OrderTracker:
                         int(order.order_id),
                         context={"order_id": order.order_id, "account_id": getattr(account, 'account_id', account)},
                     )
-                except Exception:
-                    o = None
+                except Exception as exc:
+                    logger.warning(
+                        f"{YELLOW}【订单查询失败】{RESET} "
+                        f"订单ID:{order.order_id} 查询失败，标记为失败: {exc}"
+                    )
+                    updated = self.update_from_error(
+                        order.order_id, f"查询订单状态失败: {exc}"
+                    )
+                    if updated:
+                        resolved.append(updated)
+                    continue
 
             if not o:
                 continue

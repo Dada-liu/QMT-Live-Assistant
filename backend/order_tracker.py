@@ -274,7 +274,7 @@ class OrderTracker:
             trader,
             "cancel_order_stock",
             account,
-            order.order_id,
+            int(order.order_id),
             context={"order_id": order.order_id, "account_id": getattr(account, 'account_id', account)},
         )
 
@@ -341,7 +341,7 @@ class OrderTracker:
                         trader,
                         "query_stock_order",
                         account,
-                        order.order_id,
+                        int(order.order_id),
                         context={"order_id": order.order_id, "account_id": getattr(account, 'account_id', account)},
                     )
                 except Exception:

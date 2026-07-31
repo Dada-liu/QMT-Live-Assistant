@@ -342,6 +342,21 @@ class TestOrderTrackerCancel:
         with pytest.raises(QMTInteractionError, match="返回 -1"):
             tracker.cancel_order(MockTrader(), None, "100001")
 
+    def test_cancel_passes_order_id_as_int_to_trader(self, tracker):
+        """tracker 内部保存字符串 order_id，但调用 xtquant 撤单时必须传 int。"""
+        self._track_sample(tracker)
+        received_ids = []
+
+        class MockTrader:
+            def cancel_order_stock(self, account, order_id):
+                received_ids.append(order_id)
+                return 0
+
+        tracker.cancel_order(MockTrader(), None, "100001")
+        assert len(received_ids) == 1
+        assert isinstance(received_ids[0], int)
+        assert received_ids[0] == 100001
+
 
 class TestOrderTrackerLogging:
     @pytest.fixture

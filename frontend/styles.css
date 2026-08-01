@@ -1437,6 +1437,39 @@ a:hover { text-decoration: underline; }
   margin-bottom: 0;
 }
 
+/* 策略弹窗：中间表单区固定高度可滚动，头部与底部按钮固定 */
+#strategy-modal .modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+}
+
+#strategy-modal .modal-header,
+#strategy-modal .btn-group {
+  flex-shrink: 0;
+}
+
+#strategy-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.modal-form-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--spacing-xs);
+}
+
+/* 弹窗表单区统一由 .modal-form-body 滚动，持仓表格不再保留自己的嵌套滚动区，
+   避免弹窗内出现双重滚动条；表头继续吸顶（相对 .modal-form-body） */
+#strategy-modal .position-assign-table-wrapper {
+  max-height: none;
+  overflow: visible;
+}
+
 /* --- Required Label --- */
 .required-label::after {
   content: ' *';

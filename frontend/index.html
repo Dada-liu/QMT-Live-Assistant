@@ -394,6 +394,7 @@
 	      </div>
       <form id="strategy-form" novalidate>
         <input type="hidden" id="strategy-edit-id">
+        <div class="modal-form-body">
         <div class="form-group">
           <label class="form-label required-label" for="strategy-name">策略名称</label>
           <input class="form-input" type="text" id="strategy-name" placeholder="例如：动量策略v1" required>
@@ -443,6 +444,7 @@
           <label class="form-label">
             <input type="checkbox" id="strategy-bark-notify" checked> 开启订单消息推送（Bark）
           </label>
+        </div>
         </div>
         <div id="strategy-token-result" class="connection-result success hidden" style="margin-bottom:var(--spacing-base);"></div>
         <div class="btn-group">

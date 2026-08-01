@@ -578,7 +578,7 @@ export const UI = {
     },
 
     switchTab(tabName) {
-        const sections = ['account-empty', 'config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter','docs'];
+        const sections = ['account-empty', 'config', 'msg-config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter','docs'];
 
         sections.forEach(id => this.hideSection(id));
 
@@ -606,6 +606,7 @@ export const UI = {
                 if (getState('serverRunning')) {
                     this.showSection('server-info');
                     if (getStoredToken()) {
+                        this.showSection('msg-config');
                         this.showSection('strategy-management');
                     }
                 }

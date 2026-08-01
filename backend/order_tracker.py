@@ -15,7 +15,7 @@ from backend.qmt_xtconstant import (
 )
 from backend.logger import logger
 from backend.constants import GREEN, YELLOW, BLUE, RESET
-from backend.utils import qmt_call
+from backend.utils import qmt_call, price_type_name
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.models.order import TrackedOrder, OrderState
 
@@ -70,6 +70,7 @@ class OrderTracker:
         notify_source: bool = False,
         source_platform_webhook: Optional[str] = None,
         source_platform: Optional[str] = None,
+        price_type: Optional[int] = None,
     ) -> TrackedOrder:
         """注册一笔新订单。"""
         order = TrackedOrder(
@@ -83,6 +84,7 @@ class OrderTracker:
             strategy_id=str(strategy_id) if strategy_id else None,
             strategy_name=str(strategy_name) if strategy_name else "",
             price=price,
+            price_type=price_type,
             optimistic_position_applied=optimistic_position_applied,
             optimistic_snapshot=optimistic_snapshot,
             notify_source=notify_source,
@@ -92,11 +94,15 @@ class OrderTracker:
         self._orders[order.order_id] = order
         self._repo.save(order)
         self._record_event(order, "placed", None, "manual")
+        if price > 0:
+            price_label = f"{price:.2f}"
+        else:
+            price_label = price_type_name(price_type) if price_type is not None else "市价"
         logger.info(
             f"{BLUE}【新订单】{RESET} "
             f"订单ID:{order.order_id} 股票:{jq_code or stock_code} "
             f"方向:{'买入' if direction == 'buy' else '卖出'} 数量:{quantity} "
-            f"价格:{price if price > 0 else '市价'} 策略:{strategy_name or '无'}"
+            f"价格:{price_label} 策略:{strategy_name or '无'}"
         )
         return order
 

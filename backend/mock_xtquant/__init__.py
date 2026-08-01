@@ -36,6 +36,7 @@ class MockOrder:
         self.stock_code = "000001.SZ"
         self.order_type = 23
         self.price = 12.50
+        self.price_type = 11
         self.order_volume = 100
         self.order_remark = "平安银行"
         self.order_status = 56
@@ -124,6 +125,7 @@ class MockTrader:
         order.stock_code = stock_code
         order.order_type = order_type
         order.price = price if price > 0 else 12.50
+        order.price_type = price_type
         order.order_volume = order_volume
         order.order_remark = order_remark or ""
         order.order_status = 50

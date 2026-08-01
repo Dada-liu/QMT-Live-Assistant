@@ -8,7 +8,14 @@ from backend.jukuan_orders import (
     JukuanOrderHandler, _is_future, _lot_size, _round_down_to_lot,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
-from backend.qmt_xtconstant import FIX_PRICE, LATEST_PRICE
+from backend.qmt_xtconstant import (
+    FIX_PRICE,
+    LATEST_PRICE,
+    MARKET_SH_CONVERT_5_CANCEL,
+    MARKET_PEER_PRICE_FIRST,
+    MARKET_MINE_PRICE_FIRST,
+    MARKET_SZ_INSTBUSI_RESTCANCEL,
+)
 from backend.utils import QMTInteractionError
 
 
@@ -631,3 +638,155 @@ class TestInsufficientFundsPolicy:
         handler.strategy_manager.apply_optimistic_position.assert_called_once_with(
             "strat-1", "000001.SZ", "sell", 300, 12.0
         )
+
+
+class TestStrategyMarketPriceType:
+    """策略默认市价下单方式（default_market_price_type）与市价报价类型校验。"""
+
+    @pytest.fixture
+    def make_handler(self):
+        def _make(default_market_price_type=MARKET_PEER_PRICE_FIRST):
+            trader = MagicMock()
+            trader.order_stock.return_value = 200001
+            account = MagicMock()
+
+            strategy = MagicMock()
+            strategy.available_cash = 50000.0
+            strategy.positions = []
+            strategy.default_market_price_type = default_market_price_type
+            strategy_manager = MagicMock()
+            strategy_manager.get.return_value = strategy
+            strategy_manager.apply_optimistic_position.return_value = {
+                "stock_code": "000001.SZ", "delta_cash": -1255.0,
+            }
+
+            handler = JukuanOrderHandler(trader=trader, account=account)
+            handler.strategy_manager = strategy_manager
+            return handler
+        return _make
+
+    def test_strategy_default_applied_for_market_order(self, make_handler):
+        """price=0 且未显式传 price_type 时，按策略默认的对手方最优(44)下单。"""
+        handler = make_handler(MARKET_PEER_PRICE_FIRST)
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0, strategy_id="strat-1"
+            )
+        assert result["price_type"] == MARKET_PEER_PRICE_FIRST
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == MARKET_PEER_PRICE_FIRST
+        assert call.kwargs["price"] == 0
+
+    def test_explicit_price_type_overrides_strategy_default(self, make_handler):
+        """显式传 price_type=45 时优先于策略默认的 44。"""
+        handler = make_handler(MARKET_PEER_PRICE_FIRST)
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0,
+                price_type=MARKET_MINE_PRICE_FIRST, strategy_id="strat-1",
+            )
+        assert result["price_type"] == MARKET_MINE_PRICE_FIRST
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == MARKET_MINE_PRICE_FIRST
+        assert call.kwargs["price"] == 0
+
+    def test_limit_price_unaffected_by_strategy_default(self, make_handler):
+        """price>0 时按限价下单，不受策略默认市价方式影响。"""
+        handler = make_handler(MARKET_PEER_PRICE_FIRST)
+        result = handler.generic_order(
+            "000001.SZ", 100, direction="buy", price=12.5, strategy_id="strat-1"
+        )
+        assert result["price_type"] == FIX_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.5
+
+    def test_strategy_not_found_falls_back_to_latest_price(self, make_handler):
+        """策略不存在时回退最新价(5)。"""
+        handler = make_handler()
+        handler.strategy_manager.get.return_value = None
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0, strategy_id="strat-1"
+            )
+        assert result["price_type"] == LATEST_PRICE
+
+    def test_invalid_strategy_default_falls_back_to_latest_price(self, make_handler):
+        """策略配置了集合之外的值时回退最新价(5)。"""
+        handler = make_handler(default_market_price_type=42)
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0, strategy_id="strat-1"
+            )
+        assert result["price_type"] == LATEST_PRICE
+
+    def test_no_strategy_falls_back_to_latest_price(self):
+        """无 strategy_id 时市价单使用最新价(5)。"""
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+        handler = JukuanOrderHandler(trader=trader, account=MagicMock())
+        result = handler.generic_order("000001.SZ", 100, direction="buy", price=0)
+        assert result["price_type"] == LATEST_PRICE
+
+    def test_sh_specific_market_type_on_sh_stock(self, make_handler):
+        """上交所股票可用最优五档即时成交剩余撤销(42)，委托价置 0。"""
+        handler = make_handler()
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"600000.SH": 10.0}):
+            result = handler.generic_order(
+                "600000.SH", 100, direction="buy", price=0,
+                price_type=MARKET_SH_CONVERT_5_CANCEL, strategy_id="strat-1",
+            )
+        assert result["price_type"] == MARKET_SH_CONVERT_5_CANCEL
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == MARKET_SH_CONVERT_5_CANCEL
+        assert call.kwargs["price"] == 0
+
+    def test_sh_specific_market_type_rejected_on_sz_stock(self, make_handler):
+        """深交所股票使用上交所专属报价类型时报中文错误。"""
+        handler = make_handler()
+        with pytest.raises(ValueError, match="不支持深交所"):
+            handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0,
+                price_type=MARKET_SH_CONVERT_5_CANCEL, strategy_id="strat-1",
+            )
+        handler.trader.order_stock.assert_not_called()
+
+    def test_sz_specific_market_type_rejected_on_sh_stock(self, make_handler):
+        """上交所股票使用深交所专属报价类型时报中文错误。"""
+        handler = make_handler()
+        with pytest.raises(ValueError, match="不支持上交所"):
+            handler.generic_order(
+                "600000.SH", 100, direction="buy", price=0,
+                price_type=MARKET_SZ_INSTBUSI_RESTCANCEL, strategy_id="strat-1",
+            )
+        handler.trader.order_stock.assert_not_called()
+
+    def test_explicit_latest_price_ignores_price(self, make_handler):
+        """显式指定最新价(5)时即使带了 price，委托价也置 0。"""
+        handler = make_handler()
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.55}):
+            result = handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=12.55,
+                price_type=LATEST_PRICE, strategy_id="strat-1",
+            )
+        assert result["price_type"] == LATEST_PRICE
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0
+
+    def test_unknown_price_type_rejected(self, make_handler):
+        """集合之外的 price_type 直接拒绝，且不触发资金冻结。"""
+        handler = make_handler()
+        with pytest.raises(ValueError, match="不支持的 price_type"):
+            handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=0,
+                price_type=999, strategy_id="strat-1",
+            )
+        handler.trader.order_stock.assert_not_called()
+        handler.strategy_manager.apply_optimistic_position.assert_not_called()

@@ -407,6 +407,14 @@
             <option value="max_buyable">按最大可买数量下单</option>
           </select>
         </div>
+        <div class="form-group">
+          <label class="form-label" for="strategy-market-price-type">市价单下单方式</label>
+          <select class="form-input" id="strategy-market-price-type">
+            <option value="5">最新价</option>
+            <option value="44">对手方最优</option>
+            <option value="45">本方最优</option>
+          </select>
+        </div>
         <div class="form-group" id="strategy-positions-group" style="display:none;">
           <label class="form-label">添加持仓（可选）</label>
           <div class="position-assign-hint">选择账户现有持仓并分配数量到该策略</div>
@@ -463,8 +471,10 @@
         <div class="form-group">
           <label class="form-label required-label" for="resend-price-type">价格类型</label>
           <select class="form-input" id="resend-price-type">
-            <option value="market">市价</option>
-            <option value="limit">限价</option>
+            <option value="5">市价单（最新价）</option>
+            <option value="11">限价单</option>
+            <option value="44">市价单（对手方最优）</option>
+            <option value="45">市价单（我方最优）</option>
           </select>
         </div>
         <div class="form-group" id="resend-price-group" style="display:none;">
@@ -503,8 +513,10 @@
         <div class="form-group">
           <label class="form-label required-label" for="order-price-type">价格类型</label>
           <select class="form-input" id="order-price-type">
-            <option value="market">市价</option>
-            <option value="limit">限价</option>
+            <option value="5">市价单（最新价）</option>
+            <option value="11">限价单</option>
+            <option value="44">市价单（对手方最优）</option>
+            <option value="45">市价单（我方最优）</option>
           </select>
         </div>
         <div class="form-group" id="order-price-group" style="display:none;">

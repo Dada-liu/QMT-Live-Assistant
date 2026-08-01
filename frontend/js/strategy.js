@@ -173,6 +173,7 @@ async function showStrategyModal(strategy = null) {
     const descInput = document.getElementById('strategy-desc');
     const fundsInput = document.getElementById('strategy-funds');
     const fundsPolicyInput = document.getElementById('strategy-funds-policy');
+    const marketPriceTypeInput = document.getElementById('strategy-market-price-type');
     const barkNotifyInput = document.getElementById('strategy-bark-notify');
     const tokenResult = document.getElementById('strategy-token-result');
 
@@ -183,6 +184,7 @@ async function showStrategyModal(strategy = null) {
         if (descInput) descInput.value = strategy.description || '';
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
         if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
+        if (marketPriceTypeInput) marketPriceTypeInput.value = String(strategy.default_market_price_type ?? 5);
         if (barkNotifyInput) barkNotifyInput.checked = strategy.bark_notify_enabled !== false;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = JSON.stringify(strategy.positions || []);
@@ -193,6 +195,7 @@ async function showStrategyModal(strategy = null) {
         if (descInput) descInput.value = '';
         if (fundsInput) fundsInput.value = '';
         if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
+        if (marketPriceTypeInput) marketPriceTypeInput.value = '5';
         if (barkNotifyInput) barkNotifyInput.checked = true;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = null;
@@ -348,6 +351,8 @@ export function initStrategyPanel() {
         const fundsStr = fundsEl ? fundsEl.value.trim() : '';
         const allocated_funds = parseFloat(fundsStr) || 0;
         const insufficient_funds_policy = fundsPolicyEl ? fundsPolicyEl.value : 'reject';
+        const marketPriceTypeEl = document.getElementById('strategy-market-price-type');
+        const default_market_price_type = marketPriceTypeEl ? Number(marketPriceTypeEl.value) : 5;
         const barkNotifyEl = document.getElementById('strategy-bark-notify');
         const bark_notify_enabled = barkNotifyEl ? barkNotifyEl.checked : true;
 
@@ -396,7 +401,7 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, insufficient_funds_policy, bark_notify_enabled };
+        const data = { name, description, allocated_funds, insufficient_funds_policy, default_market_price_type, bark_notify_enabled };
         const positionsChanged = editId
             ? (JSON.stringify(positions) !== _originalStrategyPositions)
             : (positions.length > 0);
@@ -547,7 +552,8 @@ function openStrategyOrderModal(direction) {
     const quantityInput = document.getElementById('order-quantity');
     quantityInput.min = isBuy ? 100 : 0;
     quantityInput.value = '';
-    document.getElementById('order-price-type').value = 'market';
+    // 报价方式预选策略配置的默认市价方式（5 最新价 / 44 对手方最优 / 45 本方最优）
+    document.getElementById('order-price-type').value = String(strategy.default_market_price_type ?? 5);
     document.getElementById('order-price-group').style.display = 'none';
     document.getElementById('order-price').value = '';
     // 重置字段后再预填选中持仓的限价与可用提示
@@ -597,7 +603,7 @@ function initStrategyOrderModal() {
     document.getElementById('btn-order-modal-close').addEventListener('click', hideStrategyOrderModal);
     document.getElementById('btn-order-cancel').addEventListener('click', hideStrategyOrderModal);
     priceType.addEventListener('change', () => {
-        priceGroup.style.display = priceType.value === 'limit' ? '' : 'none';
+        priceGroup.style.display = priceType.value === '11' ? '' : 'none';
     });
     stockSelect.addEventListener('change', _onOrderStockChange);
 
@@ -646,7 +652,7 @@ function initStrategyOrderModal() {
         }
 
         let price = 0;
-        if (priceType.value === 'limit') {
+        if (priceType.value === '11') {
             const priceStr = priceInput.value.trim();
             price = parseFloat(priceStr);
             if (!priceStr || !(price > 0)) {
@@ -664,7 +670,7 @@ function initStrategyOrderModal() {
         try {
             await api.placeStrategyOrder(
                 strategyId,
-                { stock_code: stockCode, direction, quantity, price },
+                { stock_code: stockCode, direction, quantity, price, price_type: Number(priceType.value) },
                 token
             );
             Toast.success('下单成功');

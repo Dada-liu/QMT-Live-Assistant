@@ -60,6 +60,7 @@ class StrategyManager:
             enabled=data.enabled,
             insufficient_funds_policy=data.insufficient_funds_policy,
             bark_notify_enabled=data.bark_notify_enabled,
+            default_market_price_type=data.default_market_price_type,
         )
         if data.positions:
             codes = [pa.stock_code for pa in data.positions]

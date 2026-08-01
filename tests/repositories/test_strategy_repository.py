@@ -146,6 +146,24 @@ class TestSQLAlchemyStrategyRepository:
         found = repo.get_by_id(saved.id)
         assert found.insufficient_funds_policy == "reject"
 
+    def test_default_market_price_type_defaults_to_5(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="市价默认", allocated_funds=10000))
+        found = repo.get_by_id(saved.id)
+        assert found.default_market_price_type == 5
+
+    def test_save_and_update_market_price_type(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="对手方最优", allocated_funds=10000,
+                                   default_market_price_type=44))
+        found = repo.get_by_id(saved.id)
+        assert found.default_market_price_type == 44
+
+        updated = saved.model_copy(update={"default_market_price_type": 45})
+        repo.save(updated)
+        found = repo.get_by_id(saved.id)
+        assert found.default_market_price_type == 45
+
 
 class TestInMemoryStrategyRepository:
     def test_save_and_get_by_token(self):

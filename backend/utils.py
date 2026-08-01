@@ -4,8 +4,21 @@
 以及基于 xtquant 的前收盘价、开盘价、最新价和合约名称获取函数。
 """
 from datetime import datetime, time, timedelta
+from typing import Optional
 from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
 from backend.logger import logger
+from backend.qmt_xtconstant import (
+    LATEST_PRICE,
+    FIX_PRICE,
+    MARKET_SH_CONVERT_5_CANCEL,
+    MARKET_SH_CONVERT_5_LIMIT,
+    MARKET_PEER_PRICE_FIRST,
+    MARKET_MINE_PRICE_FIRST,
+    MARKET_SZ_INSTBUSI_RESTCANCEL,
+    MARKET_SZ_CONVERT_5_CANCEL,
+    MARKET_SZ_FULL_OR_CANCEL,
+    PRICE_TYPE_SET,
+)
 
 
 def add_stock_suffix(stock_code: str) -> str:
@@ -76,6 +89,87 @@ def normalize_to_qmt(code: str) -> str:
     if code.endswith(('.XSHE', '.XSHG', '.XBJ')):
         return jq_to_qmt(code)
     return code
+
+
+# ---- 报价类型（price_type）辅助 ----
+
+PRICE_TYPE_NAMES = {
+    LATEST_PRICE: "最新价",
+    FIX_PRICE: "限价",
+    MARKET_SH_CONVERT_5_CANCEL: "最优五档即时成交剩余撤销",
+    MARKET_SH_CONVERT_5_LIMIT: "最优五档即时成交剩转限价",
+    MARKET_PEER_PRICE_FIRST: "对手方最优",
+    MARKET_MINE_PRICE_FIRST: "本方最优",
+    MARKET_SZ_INSTBUSI_RESTCANCEL: "即时成交剩余撤销",
+    MARKET_SZ_CONVERT_5_CANCEL: "最优五档即时成交剩余撤销(深)",
+    MARKET_SZ_FULL_OR_CANCEL: "全额成交或撤销",
+}
+
+# 策略可选的市价方式（沪深北三所通用）
+MARKET_PRICE_TYPE_SET = frozenset({
+    LATEST_PRICE, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST,
+})
+
+# 各交易所支持的报价类型集合（参考 xtquant 文档：上交所/北交所一组，深交所一组）
+_EXCHANGE_PRICE_TYPES = {
+    "SH": frozenset({
+        LATEST_PRICE, FIX_PRICE, MARKET_SH_CONVERT_5_CANCEL,
+        MARKET_SH_CONVERT_5_LIMIT, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST,
+    }),
+    "BJ": frozenset({
+        LATEST_PRICE, FIX_PRICE, MARKET_SH_CONVERT_5_CANCEL,
+        MARKET_SH_CONVERT_5_LIMIT, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST,
+    }),
+    "SZ": frozenset({
+        LATEST_PRICE, FIX_PRICE, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST,
+        MARKET_SZ_INSTBUSI_RESTCANCEL, MARKET_SZ_CONVERT_5_CANCEL, MARKET_SZ_FULL_OR_CANCEL,
+    }),
+}
+
+_EXCHANGE_NAMES = {"SH": "上交所", "SZ": "深交所", "BJ": "北交所"}
+
+
+def _market_from_suffix(stock_code: str) -> Optional[str]:
+    """按 QMT 后缀判断交易所，无法识别（期货等）返回 None。"""
+    code = (stock_code or "").strip().upper()
+    for suffix, market in ((".SH", "SH"), (".SZ", "SZ"), (".BJ", "BJ")):
+        if code.endswith(suffix):
+            return market
+    return None
+
+
+def is_market_price_type(price_type: Optional[int]) -> bool:
+    """限价(11)以外的报价类型均为市价类，下单时委托价置 0。"""
+    return price_type is not None and price_type != FIX_PRICE
+
+
+def price_type_name(price_type: Optional[int]) -> str:
+    """返回报价类型中文名，用于日志与展示。"""
+    if price_type is None:
+        return "未知"
+    return PRICE_TYPE_NAMES.get(price_type, f"未知类型({price_type})")
+
+
+def validate_price_type_for_market(stock_code: str, price_type: Optional[int]) -> None:
+    """集中校验报价类型合法性及与证券所属交易所的兼容性。
+
+    - None：放行（调用方自行推导默认值）；
+    - 不在 PRICE_TYPE_SET：ValueError；
+    - 市场可识别但不兼容（如深交所股票用上交所专属类型）：ValueError；
+    - 市场无法识别（期货等）：仅做集合校验，跳过兼容性检查。
+    """
+    if price_type is None:
+        return
+    if price_type not in PRICE_TYPE_SET:
+        raise ValueError(f"不支持的 price_type: {price_type}")
+    market = _market_from_suffix(stock_code)
+    if market is None:
+        return
+    if price_type not in _EXCHANGE_PRICE_TYPES[market]:
+        raise ValueError(
+            f"报价类型 {price_type}（{price_type_name(price_type)}）"
+            f"不支持{_EXCHANGE_NAMES[market]}证券: {stock_code}"
+        )
 
 
 def seconds_until_market_open(target_hour: int = 9, target_minute: int = 30) -> float:

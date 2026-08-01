@@ -46,6 +46,26 @@ class TestOrderTracker:
         assert order.stock_name == "平安银行"
         assert tracker.get_order("100001").stock_name == "平安银行"
 
+    def test_track_order_accepts_price_type(self, tracker):
+        order = tracker.track_order(
+            order_id="100002",
+            stock_code="000001.SZ",
+            jq_code="000001.XSHE",
+            direction="buy",
+            quantity=100,
+            order_type=23,
+            strategy_id="abc123",
+            strategy_name="测试策略",
+            price=0.0,
+            price_type=44,
+        )
+        assert order.price_type == 44
+        assert tracker.get_order("100002").price_type == 44
+
+    def test_track_order_price_type_defaults_to_none(self, tracker):
+        order = self._track_sample(tracker)
+        assert order.price_type is None
+
     def test_load_history_preserves_stock_name(self):
         repo = InMemoryOrderRepository()
         repo.save(TrackedOrder(

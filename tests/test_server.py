@@ -2390,3 +2390,176 @@ class TestBarkConfigApi:
                     except asyncio.CancelledError:
                         pass
         mock_check.assert_called()
+
+
+class TestPriceTypeApi:
+    """市价单报价方式（price_type）API 测试：策略默认值、手动下单、重发沿用。"""
+
+    def _create_strategy(self, client, server, **extra):
+        payload = {"name": "报价方式测试策略", "allocated_funds": 100000}
+        payload.update(extra)
+        response = client.post(
+            "/api/strategies",
+            json=payload,
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def test_strategy_default_market_price_type_defaults_to_5(self, client, server):
+        strategy = self._create_strategy(client, server)
+        assert strategy["default_market_price_type"] == 5
+
+    def test_strategy_update_market_price_type(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.put(
+            f"/api/strategies/{strategy['id']}",
+            json={"default_market_price_type": 44},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["default_market_price_type"] == 44
+
+        get_resp = client.get("/api/strategies", headers={"X-Token": server.token})
+        found = [s for s in get_resp.json()["data"] if s["id"] == strategy["id"]]
+        assert found[0]["default_market_price_type"] == 44
+
+    def test_strategy_create_with_invalid_market_price_type_returns_422(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "非法报价方式", "allocated_funds": 100000,
+                  "default_market_price_type": 42},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 422
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_with_peer_price_first(self, mock_fetch_names, client, server):
+        """手动下单显式传 price_type=44（对手方最优），委托价置 0 并持久化。"""
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100,
+                  "price": 0, "price_type": 44},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["price_type"] == 44
+        assert data["price"] == 0.0
+
+        # mock  trader 收到的委托 price_type 也是 44
+        assert server.trader._orders[str(data["order_id"])].price_type == 44
+
+        orders_resp = client.get("/api/orders", headers={"X-Token": server.token})
+        order = [o for o in orders_resp.json()["data"] if o["order_id"] == data["order_id"]][0]
+        assert order["price_type"] == 44
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_uses_strategy_default_market_price_type(
+        self, mock_fetch_names, client, server
+    ):
+        """策略默认本方最优(45)：手动下单市价场景不传 price_type 时按策略默认下单。"""
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server, default_market_price_type=45)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100, "price": 0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["price_type"] == 45
+        assert server.trader._orders[str(data["order_id"])].price_type == 45
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_with_unknown_price_type_returns_400(
+        self, mock_fetch_names, client, server
+    ):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100,
+                  "price": 0, "price_type": 999},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "不支持的 price_type" in response.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_with_sz_only_type_on_sh_stock_returns_400(
+        self, mock_fetch_names, client, server
+    ):
+        mock_fetch_names.return_value = {"600000.SH": "浦发银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "600000.SH", "direction": "buy", "quantity": 100,
+                  "price": 0, "price_type": 46},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "不支持上交所" in response.json()["detail"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_preserves_original_price_type(self, mock_fetch_names, client, server):
+        """空请求体重发沿用原订单的报价方式(44)。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100,
+                  "price": 0, "price_type": 44},
+            headers={"X-Token": server.token},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["price_type"] == 44
+        assert data["price"] == 0.0
+        assert data["retried_from_order_id"] == str(order_id)
+        assert server.trader._orders[str(data["order_id"])].price_type == 44
+
+        original = server.order_tracker.get_order(order_id)
+        assert original.retried_as_order_id == str(data["order_id"])
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_resend_with_price_only_derives_fix_price(self, mock_fetch_names, client, server):
+        """重发仅传 price 时保持按价推导的旧行为：推导为限价(11)。"""
+        from backend.qmt_xtconstant import ORDER_CANCELED
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        strategy = self._create_strategy(client, server)
+
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "000001.SZ", "direction": "buy", "quantity": 100,
+                  "price": 0, "price_type": 44},
+            headers={"X-Token": server.token},
+        )
+        order_id = response.json()["data"]["order_id"]
+        server.order_tracker.update_from_callback(order_id, ORDER_CANCELED, 0, 0.0)
+
+        resend_resp = client.post(
+            f"/api/orders/{order_id}/resend",
+            json={"price": 13.5},
+            headers={"X-Token": server.token},
+        )
+        assert resend_resp.status_code == 200
+        data = resend_resp.json()["data"]
+        assert data["price_type"] == 11
+        assert data["price"] == 13.5
+        assert server.trader._orders[str(data["order_id"])].price_type == 11

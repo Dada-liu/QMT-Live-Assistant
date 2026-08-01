@@ -24,6 +24,7 @@ class Strategy(BaseModel):
     daily_pnl: float = 0.0
     insufficient_funds_policy: str = INSUFFICIENT_FUNDS_REJECT
     bark_notify_enabled: bool = True
+    default_market_price_type: Literal[5, 44, 45] = 5
     last_rollover_date: Optional[str] = None
     positions: list = []
     trading_records: list = []
@@ -48,6 +49,7 @@ class StrategyCreate(BaseModel):
     enabled: bool = True
     insufficient_funds_policy: Literal["reject", "max_buyable"] = INSUFFICIENT_FUNDS_REJECT
     bark_notify_enabled: bool = True
+    default_market_price_type: Literal[5, 44, 45] = 5
     positions: List[PositionAssignment] = []
 
 
@@ -59,4 +61,5 @@ class StrategyUpdate(BaseModel):
     enabled: Optional[bool] = None
     insufficient_funds_policy: Optional[Literal["reject", "max_buyable"]] = None
     bark_notify_enabled: Optional[bool] = None
+    default_market_price_type: Optional[Literal[5, 44, 45]] = None
     positions: Optional[List[PositionAssignment]] = None

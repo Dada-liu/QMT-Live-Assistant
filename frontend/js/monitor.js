@@ -177,12 +177,13 @@ function openResendModal(order) {
     const priceType = document.getElementById('resend-price-type');
     const priceGroup = document.getElementById('resend-price-group');
     const priceInput = document.getElementById('resend-price');
-    if (order.price > 0) {
-        priceType.value = 'limit';
+    // 默认沿用原订单的报价方式；历史订单无 price_type 时按价格推导
+    const originalPriceType = order.price_type ?? (order.price > 0 ? 11 : 5);
+    priceType.value = String(originalPriceType);
+    if (originalPriceType === 11 && order.price > 0) {
         priceInput.value = order.price;
         priceGroup.style.display = '';
     } else {
-        priceType.value = 'market';
         priceInput.value = '';
         priceGroup.style.display = 'none';
     }
@@ -208,7 +209,7 @@ function initResendModal() {
     document.getElementById('btn-resend-modal-close').addEventListener('click', hideResendModal);
     document.getElementById('btn-resend-cancel').addEventListener('click', hideResendModal);
     priceType.addEventListener('change', () => {
-        priceGroup.style.display = priceType.value === 'limit' ? '' : 'none';
+        priceGroup.style.display = priceType.value === '11' ? '' : 'none';
     });
 
     form.addEventListener('submit', async (e) => {
@@ -233,7 +234,7 @@ function initResendModal() {
         }
 
         let price = 0;
-        if (priceType.value === 'limit') {
+        if (priceType.value === '11') {
             const priceStr = priceInput.value.trim();
             price = parseFloat(priceStr);
             if (!priceStr || !(price > 0)) {
@@ -249,7 +250,7 @@ function initResendModal() {
 
         submitBtn.disabled = true;
         try {
-            await api.resendOrder(orderId, { quantity, price }, token);
+            await api.resendOrder(orderId, { quantity, price, price_type: Number(priceType.value) }, token);
             Toast.success('重发成功');
             hideResendModal();
             fetchOrders();

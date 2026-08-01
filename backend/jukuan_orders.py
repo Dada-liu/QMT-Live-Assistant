@@ -4,7 +4,15 @@
 支持证券代码自动转换、按手数取整、期货空头处理，以及无持仓时行情取价。
 """
 from typing import Optional
-from backend.utils import fetch_latest_prices_from_xtdata, qmt_to_jq, qmt_call
+from backend.utils import (
+    fetch_latest_prices_from_xtdata,
+    qmt_to_jq,
+    qmt_call,
+    is_market_price_type,
+    price_type_name,
+    validate_price_type_for_market,
+    MARKET_PRICE_TYPE_SET,
+)
 from backend.qmt_client import create_trader
 from backend.logger import logger
 from backend.constants import (
@@ -216,10 +224,22 @@ class JukuanOrderHandler:
         """
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
-        # 市价买入单（price=0）没有委托价可冻结，用最新价估算成本做校验与冻结；
+        # 报价类型校验与派生先于资金冻结，fail-fast；
+        # 市价场景（price<=0 且未显式指定）使用策略配置的默认市价方式
+        validate_price_type_for_market(stock_code, price_type)
+        if price_type is not None:
+            final_price_type = price_type
+        elif price > 0:
+            final_price_type = FIX_PRICE
+        else:
+            final_price_type = self._get_strategy_market_price_type(strategy_id)
+
+        # 市价买入单（price=0 或市价报价类型）没有委托价可冻结，用最新价估算成本做校验与冻结；
         # 行情取价失败时 freeze_price=0，成本为 0 视为跳过校验，由 QMT 实盘兜底
         freeze_price = price
-        if direction == 'buy' and price <= 0 and strategy_id and self.strategy_manager is not None:
+        if (direction == 'buy'
+                and (price <= 0 or is_market_price_type(final_price_type))
+                and strategy_id and self.strategy_manager is not None):
             freeze_price = fetch_latest_prices_from_xtdata([stock_code]).get(stock_code, 0.0)
 
         # 策略配置为 max_buyable 时，买入数量先按可用资金封顶；封顶为 0 说明一手都买不起，订单取消
@@ -240,6 +260,7 @@ class JukuanOrderHandler:
                 'order_id': None,
                 'optimistic_snapshot': None,
                 'quantity': 0,
+                'price_type': None,
                 'cancelled': True,
                 'message': msg,
                 'requested_quantity': requested_quantity,
@@ -265,17 +286,7 @@ class JukuanOrderHandler:
                         f"策略可用持仓不足: {stock_code} 可用 {available} 股, 需要卖出 {quantity} 股"
                     )
 
-        if price_type is not None:
-            final_price_type = price_type
-        elif price > 0:
-            final_price_type = FIX_PRICE
-        else:
-            final_price_type = LATEST_PRICE
-
-        if final_price_type == LATEST_PRICE:
-            order_price = 0
-        else:
-            order_price = price
+        order_price = price if final_price_type == FIX_PRICE else 0
 
         jq_code = qmt_to_jq(stock_code)
         actual_remark = order_remark if order_remark is not None else jq_code
@@ -317,7 +328,7 @@ class JukuanOrderHandler:
             f"股票:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
             f"数量:{quantity} "
-            f"价格类型:{'限价' if final_price_type == FIX_PRICE else '市价'} "
+            f"价格类型:{price_type_name(final_price_type)} "
             f"价格:{order_price:.2f} "
             f"订单编号:{order_id}"
         )
@@ -325,9 +336,22 @@ class JukuanOrderHandler:
             'order_id': order_id,
             'optimistic_snapshot': optimistic_snapshot,
             'quantity': quantity,
+            'price_type': final_price_type,
             'requested_quantity': requested_quantity,
             'funds_cap_note': funds_cap_note,
         }
+
+    def _get_strategy_market_price_type(self, strategy_id: Optional[str]) -> int:
+        """读取策略配置的默认市价下单方式；未配置或策略不存在时回退最新价。"""
+        if not strategy_id or self.strategy_manager is None:
+            return LATEST_PRICE
+        strategy = self.strategy_manager.get(strategy_id)
+        if strategy is None:
+            return LATEST_PRICE
+        value = getattr(strategy, 'default_market_price_type', None)
+        if value in MARKET_PRICE_TYPE_SET:
+            return value
+        return LATEST_PRICE
 
     # ---- (1) jukuan_order ----
 
@@ -404,6 +428,7 @@ class JukuanOrderHandler:
                 'direction': direction,
                 'quantity': actual_quantity,
                 'price': price,
+                'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
                 'funds_cap_note': submit_result['funds_cap_note'],
@@ -508,6 +533,7 @@ class JukuanOrderHandler:
                 'direction': direction,
                 'quantity': actual_quantity,
                 'price': price,
+                'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
                 'funds_cap_note': submit_result['funds_cap_note'],
@@ -552,6 +578,7 @@ class JukuanOrderHandler:
                 'direction': 'none',
                 'quantity': 0,
                 'price': price,
+                'price_type': None,
                 'order_type': None,
                 'message': msg,
             }
@@ -593,6 +620,7 @@ class JukuanOrderHandler:
                 'direction': direction,
                 'quantity': actual_quantity,
                 'price': price,
+                'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
                 'funds_cap_note': submit_result['funds_cap_note'],
@@ -642,6 +670,7 @@ class JukuanOrderHandler:
                 'direction': 'none',
                 'quantity': 0,
                 'price': price,
+                'price_type': None,
                 'order_type': None,
                 'message': msg,
             }
@@ -733,10 +762,7 @@ class JukuanOrderHandler:
                 'message': submit_result['message'],
             }
 
-        final_price_type = (
-            price_type if price_type is not None
-            else (FIX_PRICE if price > 0 else LATEST_PRICE)
-        )
+        final_price_type = submit_result['price_type']
 
         actual_quantity = submit_result['quantity']
         msg = f"通用下单: {direction} {stock_code} {actual_quantity}股"

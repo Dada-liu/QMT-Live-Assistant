@@ -24,6 +24,7 @@ class TrackedOrder:
     strategy_id: Optional[str]
     strategy_name: str
     price: float             # 委托价格，市价单为 0
+    price_type: Optional[int] = None  # 报价类型：5=最新价，11=限价，44=对手方最优，45=本方最优
     stock_name: str = ""     # 股票名称，从 xtdata 获取
     status: str = OrderState.PENDING
     xtquant_status: Optional[int] = None
@@ -44,6 +45,10 @@ class OrderResendRequest(BaseModel):
     """重发订单请求体，可选覆盖原下单参数。"""
     quantity: Optional[int] = Field(default=None, gt=0)
     price: Optional[float] = Field(default=None, ge=0)
+    price_type: Optional[int] = Field(
+        default=None,
+        description="报价类型：5=最新价，11=限价，44=对手方最优，45=本方最优；默认沿用原订单报价方式",
+    )
 
 
 class ManualOrderRequest(BaseModel):
@@ -52,6 +57,10 @@ class ManualOrderRequest(BaseModel):
     direction: str = Field(min_length=1)      # 'buy' | 'sell'，端点内手动校验 → 400
     quantity: int = Field(gt=0)
     price: float = Field(default=0.0, ge=0)   # 0 表示市价
+    price_type: Optional[int] = Field(
+        default=None,
+        description="报价类型：5=最新价，11=限价，44=对手方最优，45=本方最优；默认由 price 与策略配置推导",
+    )
     notify_source: bool = Field(
         default=False,
         description="是否在订单状态变更时通知源平台",
@@ -78,7 +87,7 @@ class GenericOrderRequest(BaseModel):
     price: float = Field(default=0.0, ge=0, description="委托价格，0 表示市价/最新价")
     price_type: Optional[int] = Field(
         default=None,
-        description="报价类型：5=最新价，11=限价；默认由 price 推导",
+        description="报价类型：5=最新价，11=限价，44=对手方最优，45=本方最优，42-48=交易所市价（仅实盘生效）；默认由 price 与策略配置推导",
     )
     order_type: Optional[int] = Field(
         default=None,

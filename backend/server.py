@@ -25,7 +25,7 @@ from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.account import AccountRepository, InMemoryAccountRepository
 from backend.db.models.account import AccountModel
 from backend.constants import STOCK_BUY, STOCK_SELL
-from backend.qmt_xtconstant import ORDER_TYPE_SET, PRICE_TYPE_SET
+from backend.qmt_xtconstant import ORDER_TYPE_SET, PRICE_TYPE_SET, FIX_PRICE, LATEST_PRICE
 from backend.source_platform_notifier import (
     notify_source_platform,
     resolve_webhook_url,
@@ -251,6 +251,7 @@ class QMTServer:
             strategy_id=strategy_id,
             strategy_name=strategy_name,
             price=price,
+            price_type=order_result.get('price_type') or (FIX_PRICE if price > 0 else LATEST_PRICE),
             optimistic_position_applied=optimistic_applied,
             optimistic_snapshot=snapshot,
             notify_source=notify_source,
@@ -492,6 +493,7 @@ class QMTServer:
                     "filled_quantity": o.filled_quantity,
                     "filled_price": o.filled_price,
                     "price": o.price,
+                    "price_type": o.price_type,
                     "status": o.status,
                     "order_type": o.order_type,
                     "strategy_id": o.strategy_id,
@@ -551,6 +553,13 @@ class QMTServer:
             # 合并可选的覆盖参数；price=0 是合法的市价显式值，必须用 is not None 判断
             new_quantity = data.quantity if data and data.quantity is not None else order.quantity
             new_price = data.price if data and data.price is not None else order.price
+            # 报价方式：显式传入优先；仅传 price 时保持按价推导的旧行为；空请求体沿用原单报价方式
+            if data and data.price_type is not None:
+                new_price_type = data.price_type
+            elif data and data.price is not None:
+                new_price_type = None
+            else:
+                new_price_type = order.price_type
 
             # 人工重发时买入须为整手（期货除外）；卖出允许零股，故不校验
             if (order.direction == 'buy'
@@ -565,6 +574,7 @@ class QMTServer:
                     order.order_type,
                     new_quantity,
                     price=new_price,
+                    price_type=new_price_type,
                     strategy_name=order.strategy_name,
                     strategy_id=order.strategy_id,
                 )
@@ -579,6 +589,7 @@ class QMTServer:
                 'direction': order.direction,
                 'quantity': new_quantity,
                 'price': new_price,
+                'price_type': result.get('price_type'),
                 'order_type': order.order_type,
                 'optimistic_snapshot': result['optimistic_snapshot'],
             }
@@ -597,6 +608,7 @@ class QMTServer:
                 "direction": new_order.direction,
                 "quantity": new_order.quantity,
                 "price": new_order.price,
+                "price_type": new_order.price_type,
                 "status": new_order.status,
                 "retried_from_order_id": order.order_id,
             }}
@@ -1079,6 +1091,7 @@ class QMTServer:
                     order_type,
                     data.quantity,
                     price=data.price,
+                    price_type=data.price_type,
                     strategy_name=strategy.name,
                     strategy_id=strategy.id,
                 )
@@ -1101,6 +1114,7 @@ class QMTServer:
                 'direction': data.direction,
                 'quantity': actual_quantity,
                 'price': data.price,
+                'price_type': result.get('price_type'),
                 'order_type': order_type,
                 'optimistic_snapshot': result['optimistic_snapshot'],
                 'notify_source': data.notify_source,
@@ -1131,6 +1145,7 @@ class QMTServer:
                 "direction": new_order.direction,
                 "quantity": new_order.quantity,
                 "price": new_order.price,
+                "price_type": new_order.price_type,
                 "status": new_order.status,
                 "strategy_id": strategy.id,
                 "strategy_name": strategy.name,

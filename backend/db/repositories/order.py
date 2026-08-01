@@ -196,6 +196,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             strategy_id=row.strategy_id,
             strategy_name=row.strategy_name or "",
             price=float(row.price),
+            price_type=row.price_type,
             status=row.status,
             stock_name=row.stock_name or "",
             xtquant_status=None,
@@ -225,6 +226,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
             direction=order.direction,
             order_type=order.order_type,
             price=order.price,
+            price_type=order.price_type,
             quantity=order.quantity,
             filled_quantity=order.filled_quantity,
             filled_price=order.filled_price,
@@ -248,6 +250,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
         model.direction = order.direction
         model.order_type = order.order_type
         model.price = order.price
+        model.price_type = order.price_type
         model.quantity = order.quantity
         model.filled_quantity = order.filled_quantity
         model.filled_price = order.filled_price

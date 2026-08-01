@@ -15,8 +15,21 @@ from backend.utils import (
     qmt_call,
     QMTInteractionError,
     build_server_url,
+    is_market_price_type,
+    price_type_name,
+    validate_price_type_for_market,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
+from backend.qmt_xtconstant import (
+    FIX_PRICE,
+    LATEST_PRICE,
+    MARKET_SH_CONVERT_5_CANCEL,
+    MARKET_SH_CONVERT_5_LIMIT,
+    MARKET_PEER_PRICE_FIRST,
+    MARKET_MINE_PRICE_FIRST,
+    MARKET_SZ_INSTBUSI_RESTCANCEL,
+    MARKET_SZ_FULL_OR_CANCEL,
+)
 
 
 class TestTimestampToDatetimeString:
@@ -219,3 +232,68 @@ class TestBuildServerUrl:
 
     def test_empty_root_path(self):
         assert build_server_url("127.0.0.1", 8000, "") == "http://127.0.0.1:8000"
+
+
+class TestIsMarketPriceType:
+    def test_market_types(self):
+        assert is_market_price_type(LATEST_PRICE) is True
+        assert is_market_price_type(MARKET_PEER_PRICE_FIRST) is True
+        assert is_market_price_type(MARKET_SZ_FULL_OR_CANCEL) is True
+
+    def test_fix_price_is_not_market(self):
+        assert is_market_price_type(FIX_PRICE) is False
+
+    def test_none_is_not_market(self):
+        assert is_market_price_type(None) is False
+
+
+class TestPriceTypeName:
+    def test_known_types(self):
+        assert price_type_name(LATEST_PRICE) == "最新价"
+        assert price_type_name(FIX_PRICE) == "限价"
+        assert price_type_name(MARKET_PEER_PRICE_FIRST) == "对手方最优"
+        assert price_type_name(MARKET_MINE_PRICE_FIRST) == "本方最优"
+
+    def test_none(self):
+        assert price_type_name(None) == "未知"
+
+    def test_unknown_type(self):
+        assert price_type_name(999) == "未知类型(999)"
+
+
+class TestValidatePriceTypeForMarket:
+    def test_none_passes(self):
+        validate_price_type_for_market("000001.SZ", None)
+
+    def test_unknown_price_type_raises(self):
+        with pytest.raises(ValueError, match="不支持的 price_type: 999"):
+            validate_price_type_for_market("000001.SZ", 999)
+
+    def test_sh_only_type_rejected_on_sz(self):
+        with pytest.raises(ValueError, match="不支持深交所"):
+            validate_price_type_for_market("000001.SZ", MARKET_SH_CONVERT_5_CANCEL)
+
+    def test_sz_only_type_rejected_on_sh(self):
+        with pytest.raises(ValueError, match="不支持上交所"):
+            validate_price_type_for_market("600000.SH", MARKET_SZ_FULL_OR_CANCEL)
+
+    def test_sz_only_type_rejected_on_bj(self):
+        with pytest.raises(ValueError, match="不支持北交所"):
+            validate_price_type_for_market("830799.BJ", MARKET_SZ_INSTBUSI_RESTCANCEL)
+
+    def test_universal_types_pass_on_all_exchanges(self):
+        for code in ("600000.SH", "000001.SZ", "830799.BJ"):
+            for price_type in (LATEST_PRICE, FIX_PRICE,
+                               MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST):
+                validate_price_type_for_market(code, price_type)
+
+    def test_sh_only_types_pass_on_sh_and_bj(self):
+        for code in ("600000.SH", "830799.BJ"):
+            validate_price_type_for_market(code, MARKET_SH_CONVERT_5_CANCEL)
+            validate_price_type_for_market(code, MARKET_SH_CONVERT_5_LIMIT)
+
+    def test_unrecognized_market_only_set_validated(self):
+        # 期货代码无法识别交易所，只做集合校验：合法类型放行
+        validate_price_type_for_market("RB8888.XSGE", MARKET_SH_CONVERT_5_CANCEL)
+        with pytest.raises(ValueError, match="不支持的 price_type"):
+            validate_price_type_for_market("RB8888.XSGE", 999)

@@ -282,6 +282,50 @@ class TestSQLAlchemyOrderRepository:
         assert found is not None
         assert found.stock_name == "平安银行"
 
+    def test_save_and_get_by_id_preserves_price_type(self, db_session):
+        """price_type=44（对手方最优）应随订单持久化并能读回。"""
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001", stock_code="000001.SZ", jq_code="000001.XSHE",
+            direction="buy", quantity=100, order_type=23,
+            strategy_id="abc", strategy_name="测试策略",
+            price=0.0, price_type=44,
+        )
+        repo.save(order)
+        found = repo.get_by_id("100001")
+        assert found.price_type == 44
+
+    def test_update_preserves_price_type(self, db_session):
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001", stock_code="000001.SZ", jq_code="000001.XSHE",
+            direction="buy", quantity=100, order_type=23,
+            strategy_id="abc", strategy_name="测试策略",
+            price=0.0, price_type=45,
+        )
+        repo.save(order)
+
+        order.status = OrderState.FILLED
+        order.filled_quantity = 100
+        order.filled_price = 10.0
+        repo.save(order)
+
+        found = repo.get_by_id("100001")
+        assert found.status == OrderState.FILLED
+        assert found.price_type == 45
+
+    def test_price_type_defaults_to_none(self, db_session):
+        """历史订单没有 price_type，读回应为 None。"""
+        repo = SQLAlchemyOrderRepository(db_session)
+        order = TrackedOrder(
+            order_id="100001", stock_code="000001.SZ", jq_code="000001.XSHE",
+            direction="buy", quantity=100, order_type=23,
+            strategy_id="abc", strategy_name="测试策略", price=10.0,
+        )
+        repo.save(order)
+        found = repo.get_by_id("100001")
+        assert found.price_type is None
+
 
 class TestInMemoryOrderRepository:
     def test_save_and_list_pending(self):
@@ -306,3 +350,14 @@ class TestInMemoryOrderRepository:
         all_orders = repo.list_all()
         assert len(all_orders) == 1
         assert all_orders[0].status == OrderState.FILLED
+
+    def test_save_and_get_by_id_preserves_price_type(self):
+        repo = InMemoryOrderRepository()
+        repo.save(TrackedOrder(
+            order_id="100001", stock_code="000001.SZ", jq_code="000001.XSHE",
+            direction="buy", quantity=100, order_type=23,
+            strategy_id="abc", strategy_name="测试策略",
+            price=0.0, price_type=44,
+        ))
+        found = repo.get_by_id("100001")
+        assert found.price_type == 44

@@ -9,11 +9,18 @@
 """
 import asyncio
 import random
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Optional
 
 from backend.qmt_client import create_trader, MyXtQuantTraderCallback
 from backend.logger import logger
+
+# watchdog 专用线程池：QMT 假死时，超时的 connect/健康检查线程无法强杀会泄漏，
+# 用独立小池隔离，避免耗尽 asyncio 默认池饿死其他使用者（如 Bark 测试推送）。
+_WATCHDOG_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="qmt-watchdog"
+)
 
 
 class ConnectionState(Enum):
@@ -52,6 +59,8 @@ class QMTConnectionWatchdog:
         health_check_interval: float = 5.0,
         health_check_timeout: float = 5.0,
         max_backoff: float = 60.0,
+        connect_timeout: float = 30.0,
+        stop_timeout: float = 10.0,
     ):
         self._account_id = account_id
         self._qmt_path = qmt_path
@@ -59,6 +68,8 @@ class QMTConnectionWatchdog:
         self._health_check_interval = health_check_interval
         self._health_check_timeout = health_check_timeout
         self._max_backoff = max_backoff
+        self._connect_timeout = connect_timeout
+        self._stop_timeout = stop_timeout
 
         self._state = ConnectionState.DISCONNECTED
         self._reconnect_failures = 0
@@ -185,9 +196,16 @@ class QMTConnectionWatchdog:
 
             self._set_state(ConnectionState.CONNECTING)
             try:
-                trader, account, callback = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    self._create_trader_sync,
+                # 加超时：xtquant 的 start/connect 可能永久 hang，
+                # 之前无超时时 watchdog 会永远停在 CONNECTING 且不再重试。
+                # 注意：超时后底层线程无法强杀，若其最终连上会产生一个
+                # 无人管理的僵尸连接，结果直接被丢弃，随进程退出回收。
+                trader, account, callback = await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(
+                        _WATCHDOG_EXECUTOR,
+                        self._create_trader_sync,
+                    ),
+                    timeout=self._connect_timeout,
                 )
                 self._trader = trader
                 self._account = account
@@ -207,6 +225,13 @@ class QMTConnectionWatchdog:
                 self._last_error = None
                 self._set_state(ConnectionState.CONNECTED)
                 logger.info(f"【QMT 已连接】路径: {self._qmt_path}")
+            except asyncio.TimeoutError:
+                self._reconnect_failures += 1
+                self._last_error = f"连接建立超时（{self._connect_timeout}s），miniQMT 可能无响应"
+                self._set_state(ConnectionState.RECONNECTING)
+                logger.warning(
+                    f"【QMT 连接失败】第 {self._reconnect_failures} 次尝试: {self._last_error}"
+                )
             except Exception as e:
                 self._reconnect_failures += 1
                 self._last_error = str(e)
@@ -235,7 +260,7 @@ class QMTConnectionWatchdog:
         try:
             await asyncio.wait_for(
                 asyncio.get_running_loop().run_in_executor(
-                    None,
+                    _WATCHDOG_EXECUTOR,
                     self._trader.query_stock_asset,
                     self._account,
                 ),
@@ -269,10 +294,19 @@ class QMTConnectionWatchdog:
             self._account = None
             self._callback = None
             if old_trader is not None and hasattr(old_trader, "stop"):
-                await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    old_trader.stop,
+                # 加超时：trader.stop 可能 hang，之前无超时时
+                # /api/stop-server 与 lifespan 关停会永久挂起
+                await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(
+                        _WATCHDOG_EXECUTOR,
+                        old_trader.stop,
+                    ),
+                    timeout=self._stop_timeout,
                 )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"停止旧 trader 超时（{self._stop_timeout}s），放弃等待继续清理"
+            )
         except Exception as e:
             logger.warning(f"停止旧 trader 时出错: {e}")
 

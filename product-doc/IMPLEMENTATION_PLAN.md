@@ -361,7 +361,7 @@ graph LR
 ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托类型、价格类型（FIX_PRICE / LATEST_PRICE）、订单状态（ORDER_CANCELED / ORDER_SUCCEEDED 等）映射。
 
 ### `backend/logger.py` — 日志
-控制台 + 按日文件轮转（logs/YYYY-MM-DD.log）；可选企业微信 webhook 推送（`WeChatHandler`）。
+控制台 + 按日文件轮转（logs/YYYY-MM-DD.log）。
 
 ### `backend/utils.py` — 工具函数
 - **代码转换**：`add_stock_suffix` / `jq_to_qmt` / `qmt_to_jq` / `normalize_to_qmt`（系统边界统一归一化为 QMT 格式 .SZ/.SH/.BJ）

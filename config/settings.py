@@ -15,7 +15,6 @@ class Settings:
     ACCOUNT_ID: str = os.getenv("ACCOUNT_ID", "")
     SECRET_KEY: str = os.getenv("SECRET_KEY", "default-secret-key-change-in-production")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-    WECHAT_WEBHOOK_URL: str = os.getenv("WECHAT_WEBHOOK_URL", "")
     SOURCE_PLATFORM_WEBHOOKS: dict = json.loads(
         os.getenv("SOURCE_PLATFORM_WEBHOOKS", "{}")
     )

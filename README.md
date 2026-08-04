@@ -325,7 +325,6 @@ CORS_ALLOW_ORIGINS=https://example.com
 | `MINI_QMT_PATH` | `` | miniQMT 路径 |
 | `ACCOUNT_ID` | `` | 券商账户ID |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
-| `WECHAT_WEBHOOK_URL` | `` | 企业微信通知 |
 | `SOURCE_PLATFORM_WEBHOOKS` | `{}` | 源平台 webhook 映射，JSON 字符串，如 `{"joinquant":"https://...","guoren":"https://..."}` |
 | `PERSISTENCE_MODE` | `sqlite` | 数据持久化模式：sqlite / memory |
 | `DATABASE_URL` | `sqlite:///./data/qmt_live_assistant.db` | SQLAlchemy 数据库 URL |
@@ -346,7 +345,7 @@ QMT-live-assistant/
 │   ├── models/              # 领域模型（strategy.py / order.py）
 │   ├── db/                  # 数据库层（models / repositories / migrations）
 │   ├── utils.py             # 工具函数（代码转换、行情获取、时间工具）
-│   ├── logger.py            # 日志系统（控制台 + 按日轮转 + 企业微信）
+│   ├── logger.py            # 日志系统（控制台 + 按日轮转）
 │   ├── constants.py         # 常量定义
 │   ├── qmt_xtconstant.py    # QMT 常量映射
 │   ├── window.py / tray.py  # 桌面窗口 / 系统托盘

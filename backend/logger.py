@@ -1,10 +1,8 @@
 """日志系统。
 
-提供控制台与文件日志处理器，支持按日轮转，
-并可选通过企业微信 Webhook 推送日志。
+提供控制台与文件日志处理器，支持按日轮转。
 """
 import logging
-import requests
 import os
 import re
 from datetime import date
@@ -43,35 +41,6 @@ def create_logger(name="qmt-"):
     logger.addHandler(file_handler)
 
     return logger
-
-
-class WeChatHandler(logging.Handler):
-    def __init__(self, webhook_url):
-        super().__init__()
-        self.webhook_url = webhook_url
-
-    def emit(self, record):
-        log_entry = self.format(record)
-        payload = {
-            "msgtype": "text",
-            "text": {
-                "content": log_entry
-            }
-        }
-        try:
-            response = requests.post(self.webhook_url, json=payload)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to send log to WeChat: {e}")
-
-
-def add_wechat_handler(logger, level, wechat_webhook_url):
-    if wechat_webhook_url is not None:
-        wechat_handler = WeChatHandler(wechat_webhook_url)
-        wechat_handler.setLevel(level or logging.INFO)
-        wechat_handler.setFormatter(formatter)
-        wechat_handler.addFilter(RemoveAnsiEscapeCodes())
-        logger.addHandler(wechat_handler)
 
 
 logger = create_logger()

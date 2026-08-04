@@ -9,6 +9,7 @@ from backend.models.strategy import Strategy
 from backend.db.models.strategy import StrategyModel
 from backend.db.models.position import PositionModel
 from backend.db.models.strategy_token import StrategyTokenModel
+from backend.db.base import synchronized
 
 
 def _token_prefix(token: str) -> str:
@@ -83,12 +84,14 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
     def __init__(self, session: Session):
         self._session = session
 
+    @synchronized
     def get_by_id(self, strategy_id: str) -> Optional[Strategy]:
         row = self._session.get(StrategyModel, strategy_id)
         if row is None or row.deleted_at is not None:
             return None
         return self._to_domain(row)
 
+    @synchronized
     def get_by_token(self, token: str) -> Optional[Strategy]:
         token_row = (
             self._session.query(StrategyTokenModel)
@@ -100,6 +103,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             return None
         return self.get_by_id(token_row.strategy_id)
 
+    @synchronized
     def list_all(self, include_disabled: bool = False, include_deleted: bool = False) -> List[Strategy]:
         query = self._session.query(StrategyModel)
         if not include_deleted:
@@ -108,6 +112,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             query = query.filter(StrategyModel.enabled.is_(True))
         return [self._to_domain(row) for row in query.all()]
 
+    @synchronized
     def save(self, strategy: Strategy) -> Strategy:
         try:
             existing = self._session.get(StrategyModel, strategy.id)
@@ -128,6 +133,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             self._session.rollback()
             raise
 
+    @synchronized
     def delete(self, strategy_id: str) -> bool:
         row = self._session.get(StrategyModel, strategy_id)
         if row is None or row.deleted_at is not None:

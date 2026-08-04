@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from backend.db.models.account import AccountModel
 from backend.db.repositories.base import Repository, InMemoryRepository
+from backend.db.base import synchronized
 
 
 class AccountRepository(Repository[AccountModel]):
@@ -27,15 +28,22 @@ class SQLAlchemyAccountRepository(AccountRepository):
     def __init__(self, session: Session):
         self._session = session
 
+    @synchronized
     def add(self, entity: AccountModel) -> AccountModel:
-        self._session.add(entity)
-        self._session.commit()
-        self._session.refresh(entity)
-        return entity
+        try:
+            self._session.add(entity)
+            self._session.commit()
+            self._session.refresh(entity)
+            return entity
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def get(self, id: str) -> Optional[AccountModel]:
         return self._session.get(AccountModel, id)
 
+    @synchronized
     def get_by_account_id(self, account_id: str) -> Optional[AccountModel]:
         return (
             self._session.query(AccountModel)
@@ -43,19 +51,30 @@ class SQLAlchemyAccountRepository(AccountRepository):
             .first()
         )
 
+    @synchronized
     def update(self, entity: AccountModel) -> AccountModel:
-        self._session.commit()
-        self._session.refresh(entity)
-        return entity
+        try:
+            self._session.commit()
+            self._session.refresh(entity)
+            return entity
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def delete(self, id: str) -> bool:
         obj = self.get(id)
         if obj is None:
             return False
-        self._session.delete(obj)
-        self._session.commit()
-        return True
+        try:
+            self._session.delete(obj)
+            self._session.commit()
+            return True
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def list_all(self, **filters) -> List[AccountModel]:
         query = self._session.query(AccountModel)
         for key, value in filters.items():

@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from sqlalchemy.orm import Session
 from backend.db.models.settings import AppSettingsModel
+from backend.db.base import synchronized
 
 
 class SettingsRepository(ABC):
@@ -34,10 +35,12 @@ class SQLAlchemySettingsRepository(SettingsRepository):
     def __init__(self, session: Session):
         self._session = session
 
+    @synchronized
     def get(self, key: str) -> Optional[str]:
         row = self._session.get(AppSettingsModel, key)
         return row.value if row is not None else None
 
+    @synchronized
     def set(self, key: str, value: str) -> None:
         try:
             row = self._session.get(AppSettingsModel, key)

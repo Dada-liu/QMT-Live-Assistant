@@ -4,6 +4,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from backend.db.models.signal_log import SignalLogModel
 from backend.db.repositories.base import Repository, InMemoryRepository
+from backend.db.base import synchronized
 
 
 class SignalLogRepository(Repository[SignalLogModel]):
@@ -41,29 +42,46 @@ class SQLAlchemySignalLogRepository(SignalLogRepository):
     def __init__(self, session: Session):
         self._session = session
 
+    @synchronized
     def add(self, entity: SignalLogModel) -> SignalLogModel:
-        self._session.add(entity)
-        self._session.commit()
-        self._session.refresh(entity)
-        return self._attach_tz(entity)
+        try:
+            self._session.add(entity)
+            self._session.commit()
+            self._session.refresh(entity)
+            return self._attach_tz(entity)
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def get(self, id: str) -> Optional[SignalLogModel]:
         entity = self._session.get(SignalLogModel, id)
         return self._attach_tz(entity) if entity else None
 
+    @synchronized
     def update(self, entity: SignalLogModel) -> SignalLogModel:
-        self._session.commit()
-        self._session.refresh(entity)
-        return self._attach_tz(entity)
+        try:
+            self._session.commit()
+            self._session.refresh(entity)
+            return self._attach_tz(entity)
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def delete(self, id: str) -> bool:
         obj = self.get(id)
         if obj is None:
             return False
-        self._session.delete(obj)
-        self._session.commit()
-        return True
+        try:
+            self._session.delete(obj)
+            self._session.commit()
+            return True
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def list_all(self, **filters) -> List[SignalLogModel]:
         query = self._session.query(SignalLogModel)
         for key, value in filters.items():
@@ -71,17 +89,27 @@ class SQLAlchemySignalLogRepository(SignalLogRepository):
                 query = query.filter(getattr(SignalLogModel, key) == value)
         return [self._attach_tz(entity) for entity in query.all()]
 
+    @synchronized
     def update_processed_order(self, signal_log_id: str, order_id: Optional[str]) -> None:
         log = self.get(id=signal_log_id)
         if log is not None:
-            log.processed_order_id = order_id
-            self._session.commit()
+            try:
+                log.processed_order_id = order_id
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                raise
 
+    @synchronized
     def update_error(self, signal_log_id: str, error_msg: str) -> None:
         log = self.get(id=signal_log_id)
         if log is not None:
-            log.error_msg = error_msg
-            self._session.commit()
+            try:
+                log.error_msg = error_msg
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                raise
 
     @staticmethod
     def _attach_tz(entity: SignalLogModel) -> SignalLogModel:

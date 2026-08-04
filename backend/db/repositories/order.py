@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from backend.models.order import TrackedOrder, OrderState
 from backend.db.models.order import OrderModel
 from backend.db.models.order_event import OrderEventModel
-from backend.db.base import uuid4_str
+from backend.db.base import uuid4_str, synchronized
 
 
 class OrderRepository(ABC):
@@ -111,6 +111,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
     def __init__(self, session: Session):
         self._session = session
 
+    @synchronized
     def get_by_id(self, order_id: str) -> Optional[TrackedOrder]:
         row = (
             self._session.query(OrderModel)
@@ -119,6 +120,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
         )
         return self._to_domain(row) if row else None
 
+    @synchronized
     def list_pending(self) -> List[TrackedOrder]:
         rows = (
             self._session.query(OrderModel)
@@ -127,6 +129,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
         )
         return [self._to_domain(row) for row in rows]
 
+    @synchronized
     def list_by_strategy(self, strategy_id: str) -> List[TrackedOrder]:
         rows = (
             self._session.query(OrderModel)
@@ -136,6 +139,7 @@ class SQLAlchemyOrderRepository(OrderRepository):
         )
         return [self._to_domain(row) for row in rows]
 
+    @synchronized
     def list_all(self, limit: Optional[int] = None) -> List[TrackedOrder]:
         query = (
             self._session.query(OrderModel)
@@ -145,26 +149,32 @@ class SQLAlchemyOrderRepository(OrderRepository):
             query = query.limit(limit)
         return [self._to_domain(row) for row in query.all()]
 
+    @synchronized
     def save(self, order: TrackedOrder) -> TrackedOrder:
-        existing = (
-            self._session.query(OrderModel)
-            .filter_by(external_order_id=order.order_id)
-            .first()
-        )
-        if existing is None:
-            model = self._to_model(order)
-            self._session.add(model)
-            self._session.flush()
-            self._session.refresh(model)
-            saved_row = model
-        else:
-            self._update_model(existing, order)
-            self._session.flush()
-            self._session.refresh(existing)
-            saved_row = existing
-        self._session.commit()
-        return self._to_domain(saved_row)
+        try:
+            existing = (
+                self._session.query(OrderModel)
+                .filter_by(external_order_id=order.order_id)
+                .first()
+            )
+            if existing is None:
+                model = self._to_model(order)
+                self._session.add(model)
+                self._session.flush()
+                self._session.refresh(model)
+                saved_row = model
+            else:
+                self._update_model(existing, order)
+                self._session.flush()
+                self._session.refresh(existing)
+                saved_row = existing
+            self._session.commit()
+            return self._to_domain(saved_row)
+        except Exception:
+            self._session.rollback()
+            raise
 
+    @synchronized
     def record_event(
         self,
         order_id: str,
@@ -174,16 +184,20 @@ class SQLAlchemyOrderRepository(OrderRepository):
         payload: Optional[dict],
         source: str,
     ) -> None:
-        event = OrderEventModel(
-            order_id=self._resolve_internal_id(order_id),
-            event_type=event_type,
-            from_status=from_status,
-            to_status=to_status,
-            payload=deepcopy(payload),
-            source=source,
-        )
-        self._session.add(event)
-        self._session.commit()
+        try:
+            event = OrderEventModel(
+                order_id=self._resolve_internal_id(order_id),
+                event_type=event_type,
+                from_status=from_status,
+                to_status=to_status,
+                payload=deepcopy(payload),
+                source=source,
+            )
+            self._session.add(event)
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
 
     def _to_domain(self, row: OrderModel) -> TrackedOrder:
         order = TrackedOrder(

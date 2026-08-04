@@ -466,8 +466,7 @@ class TestOrderTrackerPoll:
 
         return MockTrader()
 
-    @pytest.mark.asyncio
-    async def test_poll_resolves_pending(self, tracker, mock_trader):
+    def test_poll_resolves_pending(self, tracker, mock_trader):
         oid = mock_trader.order_stock()
         tracker.track_order(
             order_id=oid,
@@ -480,13 +479,12 @@ class TestOrderTrackerPoll:
             strategy_name="",
             price=10.0,
         )
-        resolved = await tracker.poll_and_reconcile(mock_trader, None)
+        resolved = tracker.poll_and_reconcile(mock_trader, None)
         assert len(resolved) == 1
         assert resolved[0].status == OrderState.FILLED
         assert tracker.get_order(str(oid)).status == OrderState.FILLED
 
-    @pytest.mark.asyncio
-    async def test_poll_query_failure_logs_error(self, tracker, caplog):
+    def test_poll_query_failure_logs_error(self, tracker, caplog):
         class FailingTrader:
             def query_stock_orders(self, account, cancelable_only=False):
                 raise RuntimeError("查询失败")
@@ -504,14 +502,13 @@ class TestOrderTrackerPoll:
         )
 
         with caplog.at_level("ERROR"):
-            resolved = await tracker.poll_and_reconcile(FailingTrader(), None)
+            resolved = tracker.poll_and_reconcile(FailingTrader(), None)
 
         assert resolved == []
         assert "QMT 调用异常" in caplog.text
         assert "查询失败" in caplog.text
 
-    @pytest.mark.asyncio
-    async def test_poll_single_order_query_failure_marks_failed(self, tracker):
+    def test_poll_single_order_query_failure_marks_failed(self, tracker):
         """query_stock_order 查询单票失败时，应将该订单标记为 FAILED。"""
         called = []
 
@@ -539,7 +536,7 @@ class TestOrderTrackerPoll:
             def query_stock_order(self, account, order_id):
                 raise RuntimeError("单票查询失败")
 
-        resolved = await tracker.poll_and_reconcile(EmptyBatchFailingSingleTrader(), None)
+        resolved = tracker.poll_and_reconcile(EmptyBatchFailingSingleTrader(), None)
 
         assert len(resolved) == 1
         assert resolved[0].status == OrderState.FAILED

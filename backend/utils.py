@@ -3,6 +3,9 @@
 提供时间格式化、订单类型解析、股票后缀补全等通用工具，
 以及基于 xtquant 的前收盘价、开盘价、最新价和合约名称获取函数。
 """
+import asyncio
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from typing import Optional
 from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
@@ -400,6 +403,56 @@ def qmt_call(trader, method_name: str, *args, context: dict = None, **kwargs):
         raise QMTInteractionError(reason)
 
     return result
+
+
+BLOCKING_CALL_TIMEOUT = 10.0
+"""普通阻塞调用（QMT 下单/撤单/查询）的默认超时秒数。"""
+
+BLOCKING_CALL_TIMEOUT_LONG = 30.0
+"""含 xtdata 历史数据下载或批量逐单查询等慢路径的超时秒数。"""
+
+# 专用线程池：与 watchdog 健康检查使用的默认 executor 隔离，
+# 避免 QMT hang 时占满默认池导致健康检查/重连一起饿死。
+_BLOCKING_EXECUTOR = ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="blocking-io"
+)
+
+
+async def run_blocking(func, *args, timeout: Optional[float] = None, **kwargs):
+    """把同步阻塞调用（QMT/xtdata）卸载到专用线程池执行，并加超时保护。
+
+    FastAPI 的 async 端点直接在事件循环线程上运行，若在体内同步调用
+    可能无响应的 QMT/行情接口，会冻结整个服务。本函数将调用移出事件循环，
+    超时后抛出 QMTInteractionError，调用方走既有异常处理返回错误响应。
+
+    Args:
+        func: 同步可调用对象（如 qmt_call、trader 方法、业务函数）。
+        timeout: 超时秒数；None 时读取模块常量 BLOCKING_CALL_TIMEOUT
+            （运行时读取，便于测试 monkeypatch）。
+
+    Raises:
+        QMTInteractionError: 超时或底层调用失败。
+
+    注意：超时只让协程恢复，Python 无法强杀线程，底层线程会泄漏到
+    对端恢复后自行结束；专用池 max_workers=16 可吸收短时间内的泄漏。
+    """
+    effective_timeout = timeout if timeout is not None else BLOCKING_CALL_TIMEOUT
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    func_name = getattr(func, "__name__", repr(func))
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(_BLOCKING_EXECUTOR, call),
+            timeout=effective_timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.error(
+            f"【阻塞调用超时】{func_name} 超过 {effective_timeout}s 未返回，"
+            f"QMT/行情可能无响应"
+        )
+        raise QMTInteractionError(
+            f"{func_name} 执行超时（{effective_timeout}s），QMT/行情可能无响应"
+        ) from exc
 
 
 def build_server_url(host: str, port: int, root_path: str = "") -> str:

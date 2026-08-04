@@ -2,7 +2,10 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import asyncio
 import re
+import threading
+import time
 from unittest.mock import patch
 import pytest
 from backend.utils import (
@@ -18,6 +21,7 @@ from backend.utils import (
     is_market_price_type,
     price_type_name,
     validate_price_type_for_market,
+    run_blocking,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import (
@@ -212,6 +216,72 @@ class TestQmtCall:
                 )
 
         assert "000001.SZ" in caplog.text
+
+
+class TestRunBlocking:
+    async def test_returns_result(self):
+        def add(a, b):
+            return a + b
+
+        result = await run_blocking(add, 1, 2)
+        assert result == 3
+
+    async def test_passes_kwargs(self):
+        def greet(name, greeting="你好"):
+            return f"{greeting}, {name}"
+
+        result = await run_blocking(greet, "QMT", greeting="hello")
+        assert result == "hello, QMT"
+
+    async def test_runs_off_event_loop_thread(self):
+        def current_thread_name():
+            return threading.current_thread().name
+
+        name = await run_blocking(current_thread_name)
+        assert name.startswith("blocking-io")
+
+    async def test_underlying_exception_propagates(self):
+        def boom():
+            raise ValueError("bad")
+
+        with pytest.raises(ValueError, match="bad"):
+            await run_blocking(boom)
+
+    async def test_timeout_raises_qmt_interaction_error(self, monkeypatch):
+        monkeypatch.setattr("backend.utils.BLOCKING_CALL_TIMEOUT", 0.1)
+
+        def hang():
+            time.sleep(2)
+
+        with pytest.raises(QMTInteractionError, match="超时"):
+            await run_blocking(hang)
+
+    async def test_explicit_timeout_overrides_default(self):
+        def hang():
+            time.sleep(2)
+
+        with pytest.raises(QMTInteractionError, match="超时"):
+            await run_blocking(hang, timeout=0.1)
+
+    async def test_timeout_does_not_block_event_loop(self, monkeypatch):
+        """hang 的调用超时返回后，事件循环上的其他协程不应被拖住。"""
+        monkeypatch.setattr("backend.utils.BLOCKING_CALL_TIMEOUT", 0.2)
+
+        async def fast_coro():
+            await asyncio.sleep(0.05)
+            return "fast"
+
+        started = time.monotonic()
+        results = await asyncio.gather(
+            run_blocking(lambda: time.sleep(2)),
+            fast_coro(),
+            return_exceptions=True,
+        )
+        elapsed = time.monotonic() - started
+
+        assert isinstance(results[0], QMTInteractionError)
+        assert results[1] == "fast"
+        assert elapsed < 1.5
 
 
 class TestBuildServerUrl:

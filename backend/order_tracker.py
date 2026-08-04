@@ -308,7 +308,7 @@ class OrderTracker:
         for order in self._repo.list_all():
             self._orders[order.order_id] = order
 
-    async def poll_and_reconcile(
+    def poll_and_reconcile(
         self,
         trader,
         account,
@@ -316,6 +316,9 @@ class OrderTracker:
         """主动查询 QMT 最新订单状态，修正漏掉的回调。
 
         返回本次被更新为终态的订单列表。
+
+        注意：本方法内部是同步阻塞的 QMT 调用，调用方若在事件循环线程
+        （如后台轮询协程），必须通过 run_blocking 卸载到线程池执行。
         """
         pending = self.get_pending_orders()
         if not pending:

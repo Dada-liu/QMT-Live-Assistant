@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, BLOCKING_CALL_TIMEOUT_LONG
 from backend.jukuan_orders import JukuanOrderHandler, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -274,8 +274,12 @@ class QMTServer:
                         and self.trader is not None
                         and self.account is not None
                     ):
-                        await self.order_tracker.poll_and_reconcile(
-                            self.trader, self.account
+                        # 同步 QMT 查询必须卸载到线程池并加超时，
+                        # 否则 QMT 无响应时会冻结整个事件循环
+                        await run_blocking(
+                            self.order_tracker.poll_and_reconcile,
+                            self.trader, self.account,
+                            timeout=BLOCKING_CALL_TIMEOUT_LONG,
                         )
                         self.bark_service.check_stale_orders(
                             self.order_tracker.get_pending_orders()
@@ -303,7 +307,11 @@ class QMTServer:
                 ):
                     continue
                 try:
-                    await self.order_tracker.poll_and_reconcile(self.trader, self.account)
+                    await run_blocking(
+                        self.order_tracker.poll_and_reconcile,
+                        self.trader, self.account,
+                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    )
                 except Exception as e:
                     # 开盘轮询失败不应影响主服务
                     pass
@@ -395,7 +403,8 @@ class QMTServer:
                 params = request.dict(exclude_unset=True)
                 if 'account' in param_names:
                     params['account'] = _current_server.account
-                result = qmt_call(
+                result = await run_blocking(
+                    qmt_call,
                     _current_server.trader,
                     method_name,
                     context={"endpoint": f"/api/{method_name}", "params": params},
@@ -461,7 +470,8 @@ class QMTServer:
         @app.get('/api/test-connection')
         async def test_connection(token: str = Depends(_require_qmt_connected)):
             try:
-                result = qmt_call(
+                result = await run_blocking(
+                    qmt_call,
                     _current_server.trader,
                     "query_stock_asset",
                     _current_server.account,
@@ -522,8 +532,9 @@ class QMTServer:
             token: str = Depends(_require_qmt_connected),
         ):
             try:
-                order = _current_server.order_tracker.cancel_order(
-                    _current_server.trader, _current_server.account, order_id
+                order = await run_blocking(
+                    _current_server.order_tracker.cancel_order,
+                    _current_server.trader, _current_server.account, order_id,
                 )
                 return {'success': True, 'data': {
                     "order_id": order.order_id,
@@ -569,7 +580,8 @@ class QMTServer:
 
             handler = _get_jukuan_handler()
             try:
-                result = handler._submit_order(
+                result = await run_blocking(
+                    handler._submit_order,
                     order.stock_code,
                     order.order_type,
                     new_quantity,
@@ -577,6 +589,7 @@ class QMTServer:
                     price_type=new_price_type,
                     strategy_name=order.strategy_name,
                     strategy_id=order.strategy_id,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
@@ -672,7 +685,8 @@ class QMTServer:
         @app.get('/api/account-asset')
         async def account_asset(token: str = Depends(_require_qmt_connected)):
             try:
-                result = qmt_call(
+                result = await run_blocking(
+                    qmt_call,
                     _current_server.trader,
                     "query_stock_asset",
                     _current_server.account,
@@ -680,7 +694,10 @@ class QMTServer:
                 )
                 converted_result = _current_server.convert_to_dict(result)
 
-                positions = _current_server._query_account_positions()
+                positions = await run_blocking(
+                    _current_server._query_account_positions,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 daily_profit = round(sum(p.get('daily_pnl', 0) for p in positions), 2)
 
                 converted_result['daily_profit'] = daily_profit
@@ -692,7 +709,10 @@ class QMTServer:
         @app.get('/api/account-positions')
         async def account_positions(token: str = Depends(_require_qmt_connected)):
             try:
-                positions = _current_server._query_account_positions()
+                positions = await run_blocking(
+                    _current_server._query_account_positions,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 return {'success': True, 'data': positions}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
@@ -777,7 +797,10 @@ class QMTServer:
             try:
                 qmt_code = normalize_to_qmt(security)
 
-                name_map = fetch_stock_names_from_xtdata({qmt_code})
+                name_map = await run_blocking(
+                    fetch_stock_names_from_xtdata, {qmt_code},
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 stock_name = name_map.get(qmt_code) or ""
 
                 amount = request.get('amount', 0)
@@ -786,9 +809,17 @@ class QMTServer:
 
                 method = getattr(handler, method_name)
                 if method_name in ('jukuan_order', 'jukuan_order_target'):
-                    result = method(qmt_code, amount, side=side, strategy_id=strategy_id)
+                    result = await run_blocking(
+                        method, qmt_code, amount,
+                        side=side, strategy_id=strategy_id,
+                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    )
                 else:
-                    result = method(qmt_code, value, side=side, strategy_id=strategy_id)
+                    result = await run_blocking(
+                        method, qmt_code, value,
+                        side=side, strategy_id=strategy_id,
+                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    )
 
                 # 保留原始聚宽代码便于返回和日志
                 result['jq_code'] = security
@@ -909,11 +940,15 @@ class QMTServer:
                 if data.price_type is not None and data.price_type not in PRICE_TYPE_SET:
                     raise ValueError(f"不支持的 price_type: {data.price_type}")
 
-                name_map = fetch_stock_names_from_xtdata({qmt_code})
+                name_map = await run_blocking(
+                    fetch_stock_names_from_xtdata, {qmt_code},
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 stock_name = name_map.get(qmt_code) or ""
 
                 handler = _get_jukuan_handler()
-                result = handler.generic_order(
+                result = await run_blocking(
+                    handler.generic_order,
                     stock_code=qmt_code,
                     quantity=data.quantity,
                     direction=data.direction,
@@ -923,6 +958,7 @@ class QMTServer:
                     strategy_name=strategy_name or data.strategy_name,
                     strategy_id=strategy_id,
                     order_remark=data.order_remark,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
                 )
 
                 # 注册订单到跟踪器，并对策略持仓进行乐观更新
@@ -988,8 +1024,10 @@ class QMTServer:
 
         @app.get('/api/strategies')
         async def list_strategies(token: str = Depends(_verify_token)):
-            strategies = _current_server.strategy_manager.list_all_enriched(
-                _current_server.trader, _current_server.account
+            strategies = await run_blocking(
+                _current_server.strategy_manager.list_all_enriched,
+                _current_server.trader, _current_server.account,
+                timeout=BLOCKING_CALL_TIMEOUT_LONG,
             )
             return {'success': True, 'data': _enrich_order_count(strategies)}
 
@@ -1007,7 +1045,10 @@ class QMTServer:
                         for p in data.positions
                     ]
                     data = data.model_copy(update={'positions': normalized_positions})
-                strategy = _current_server.strategy_manager.create(data)
+                strategy = await run_blocking(
+                    _current_server.strategy_manager.create, data,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 return {'success': True, 'data': strategy.model_dump()}
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
@@ -1030,7 +1071,10 @@ class QMTServer:
                         for p in data.positions
                     ]
                     data = data.model_copy(update={'positions': normalized_positions})
-                strategy = _current_server.strategy_manager.update(strategy_id, data)
+                strategy = await run_blocking(
+                    _current_server.strategy_manager.update, strategy_id, data,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
                 if not strategy:
                     raise HTTPException(status_code=404, detail="策略不存在")
                 return {'success': True, 'data': strategy.model_dump()}
@@ -1042,7 +1086,10 @@ class QMTServer:
             strategy_id: str = Path(...),
             token: str = Depends(_verify_token),
         ):
-            if not _current_server.strategy_manager.delete(strategy_id):
+            deleted = await run_blocking(
+                _current_server.strategy_manager.delete, strategy_id
+            )
+            if not deleted:
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': {'message': '策略已删除'}}
 
@@ -1051,7 +1098,9 @@ class QMTServer:
             strategy_id: str = Path(...),
             token: str = Depends(_verify_token),
         ):
-            strategy = _current_server.strategy_manager.toggle(strategy_id)
+            strategy = await run_blocking(
+                _current_server.strategy_manager.toggle, strategy_id
+            )
             if not strategy:
                 raise HTTPException(status_code=404, detail="策略不存在")
             return {'success': True, 'data': strategy.model_dump()}
@@ -1081,12 +1130,16 @@ class QMTServer:
                     and data.quantity % 100 != 0):
                 raise HTTPException(status_code=400, detail="买入数量须为100的整数倍")
 
-            stock_name = fetch_stock_names_from_xtdata({qmt_code}).get(qmt_code) or ""
+            stock_name = (await run_blocking(
+                fetch_stock_names_from_xtdata, {qmt_code},
+                timeout=BLOCKING_CALL_TIMEOUT_LONG,
+            )).get(qmt_code) or ""
             order_type = STOCK_BUY if data.direction == 'buy' else STOCK_SELL
 
             handler = _get_jukuan_handler()
             try:
-                result = handler._submit_order(
+                result = await run_blocking(
+                    handler._submit_order,
                     qmt_code,
                     order_type,
                     data.quantity,
@@ -1094,6 +1147,7 @@ class QMTServer:
                     price_type=data.price_type,
                     strategy_name=strategy.name,
                     strategy_id=strategy.id,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
@@ -1153,8 +1207,10 @@ class QMTServer:
 
         @app.post('/api/strategies/refresh')
         async def refresh_strategies(token: str = Depends(_require_qmt_connected)):
-            strategies = _current_server.strategy_manager.list_all_enriched(
-                _current_server.trader, _current_server.account
+            strategies = await run_blocking(
+                _current_server.strategy_manager.list_all_enriched,
+                _current_server.trader, _current_server.account,
+                timeout=BLOCKING_CALL_TIMEOUT_LONG,
             )
             return {'success': True, 'data': _enrich_order_count(strategies)}
 

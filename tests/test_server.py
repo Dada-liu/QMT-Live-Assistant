@@ -920,8 +920,7 @@ class TestOrderTrackingIntegration:
         )
         order_id = response.json()["data"]["order_id"]
 
-        import asyncio
-        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
 
         tracked = server.order_tracker.get_order(order_id)
         assert tracked.status == "filled"
@@ -1609,8 +1608,7 @@ class TestOrderCancelResendApi:
         )
         assert buy_resp.status_code == 200
 
-        import asyncio
-        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
 
         # 卖出 100 股并置为失败
         sell_resp = client.post(
@@ -1690,8 +1688,7 @@ class TestOrderCancelResendApi:
         )
         assert buy_resp.status_code == 200
 
-        import asyncio
-        asyncio.run(server.order_tracker.poll_and_reconcile(server.trader, server.account))
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
 
         # 卖出 100 股并置为失败
         sell_resp = client.post(
@@ -1824,7 +1821,7 @@ class TestServerLifecycle:
 
     @pytest.mark.asyncio
     async def test_market_open_poll_loop_triggers_reconcile(self):
-        from unittest.mock import AsyncMock, patch as local_patch
+        from unittest.mock import MagicMock, patch as local_patch
         srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8007)
         srv.running = True
 
@@ -1836,7 +1833,7 @@ class TestServerLifecycle:
         srv._watchdog = FakeWatchdog()
 
         with local_patch("backend.server.seconds_until_market_open", return_value=0.001):
-            with local_patch.object(srv.order_tracker, "poll_and_reconcile", new=AsyncMock()):
+            with local_patch.object(srv.order_tracker, "poll_and_reconcile", new=MagicMock(return_value=[])):
                 task = asyncio.create_task(srv._market_open_poll_loop())
                 await asyncio.sleep(0.01)
                 task.cancel()
@@ -2363,7 +2360,7 @@ class TestBarkConfigApi:
         assert server._bark_strategy_gate(sid) is False
 
     async def test_poll_orders_loop_invokes_stale_check(self):
-        from unittest.mock import AsyncMock, patch as local_patch
+        from unittest.mock import MagicMock, patch as local_patch
 
         srv = create_server("test_account", "/tmp/mock_qmt", "127.0.0.1", 8009)
         srv.running = True
@@ -2380,7 +2377,7 @@ class TestBarkConfigApi:
             await real_sleep(0.001)
 
         with local_patch("backend.server.asyncio.sleep", new=fast_sleep):
-            with local_patch.object(srv.order_tracker, "poll_and_reconcile", new=AsyncMock()):
+            with local_patch.object(srv.order_tracker, "poll_and_reconcile", new=MagicMock(return_value=[])):
                 with local_patch.object(srv.bark_service, "check_stale_orders") as mock_check:
                     task = asyncio.create_task(srv._poll_orders_loop())
                     await real_sleep(0.05)
@@ -2563,3 +2560,59 @@ class TestPriceTypeApi:
         assert data["price_type"] == 11
         assert data["price"] == 13.5
         assert server.trader._orders[str(data["order_id"])].price_type == 11
+
+
+class TestBlockingCallTimeout:
+    """QMT 调用 hang（无响应不抛异常）时，端点应在超时后返回错误，
+    且整个服务的其他端点保持响应，而不是一起冻结。"""
+
+    def _create_strategy(self, client, server):
+        response = client.post(
+            "/api/strategies",
+            json={"name": "超时测试策略", "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    @patch("backend.server.fetch_stock_names_from_xtdata")
+    def test_manual_order_hang_times_out_and_service_stays_responsive(
+        self, mock_fetch_names, client, server, monkeypatch
+    ):
+        mock_fetch_names.return_value = {"000001.SZ": "平安银行"}
+        # 下单链路使用 server.py 导入的 LONG 档位超时，缩小以便快速触发
+        monkeypatch.setattr("backend.server.BLOCKING_CALL_TIMEOUT_LONG", 0.2)
+
+        def hang_order_stock(*args, **kwargs):
+            time.sleep(2)
+            return -1
+
+        strategy = self._create_strategy(client, server)
+        result_holder = {}
+
+        def call_order():
+            result_holder["response"] = client.post(
+                f"/api/strategies/{strategy['id']}/order",
+                json={"stock_code": "000001.SZ", "direction": "buy",
+                      "quantity": 100, "price": 12.55},
+                headers={"X-Token": server.token},
+            )
+
+        with patch.object(server.trader, "order_stock", hang_order_stock):
+            started = time.monotonic()
+            thread = threading.Thread(target=call_order)
+            thread.start()
+            time.sleep(0.1)  # 让下单请求先进入 hang
+
+            # hang 中的下单不应冻结服务：其他端点照常响应
+            status_resp = client.get("/api/server-status")
+
+            thread.join(timeout=5)
+            elapsed = time.monotonic() - started
+
+        assert status_resp.status_code == 200
+        assert not thread.is_alive(), "下单请求未在超时后返回"
+        response = result_holder["response"]
+        assert response.status_code == 500
+        assert "超时" in response.json()["detail"]
+        assert elapsed < 1.5

@@ -740,7 +740,7 @@ export const UI = {
                 this._showStrategyPositionLoading();
                 try {
                     const { loadStrategies } = await import('./strategy.js');
-                    await loadStrategies();
+                    await loadStrategies({ force: true });
                 } catch (error) {
                     this._renderStrategyPositionLoadError();
                 }

@@ -106,10 +106,10 @@ export function initConfigPanel() {
             setState('token', data.token);
 
             Toast.success('服务器启动成功！');
-            await loadStrategies();
+            await loadStrategies({ force: true });
             populateStrategyDropdown();
             UI.switchTab('account');
-            refreshDashboard();
+            refreshDashboard({ force: true });
             refreshBarkConfig();
         } catch (error) {
             Toast.error(`启动失败: ${error.message}`);

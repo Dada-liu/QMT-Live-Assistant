@@ -15,21 +15,40 @@ export function getStrategyById(id) {
     return _strategies.find(s => s.id === id) || null;
 }
 
-export async function loadStrategies() {
+let _loadInFlight = null;
+let _lastLoadAt = 0;
+// 略大于 monitor.js 的 5s 状态轮询间隔，保证轮询的重复触发落在冷却窗口内
+const LOAD_COOLDOWN_MS = 6000;
+
+export async function loadStrategies({ force = false } = {}) {
     const token = getState('token');
     if (!token) return;
 
-    try {
-        const result = await api.getStrategies(token);
-        if (result.success) {
-            _strategies = result.data || [];
-            renderStrategyList();
-            UI.renderStrategyOverview(_strategies);
-            _updateStrategyOrderButtons();
-            populateStrategyDropdown();
+    // 并发重复调用合并为同一请求；冷却期内跳过重复加载
+    // （连接处理器与状态轮询会同时触发首次加载，此处统一去重）
+    if (_loadInFlight) return _loadInFlight;
+    if (!force && Date.now() - _lastLoadAt < LOAD_COOLDOWN_MS) return;
+
+    _loadInFlight = (async () => {
+        try {
+            const result = await api.getStrategies(token);
+            if (result.success) {
+                _strategies = result.data || [];
+                renderStrategyList();
+                UI.renderStrategyOverview(_strategies);
+                _updateStrategyOrderButtons();
+                populateStrategyDropdown();
+            }
+        } catch (error) {
+            // Silently ignore
         }
-    } catch (error) {
-        // Silently ignore
+    })();
+
+    try {
+        await _loadInFlight;
+    } finally {
+        _loadInFlight = null;
+        _lastLoadAt = Date.now();
     }
 }
 
@@ -104,7 +123,7 @@ function renderStrategyList() {
             try {
                 const result = await api.toggleStrategy(id, getState('token'));
                 if (result.success) {
-                    await loadStrategies();
+                    await loadStrategies({ force: true });
                     Toast.info(`策略已${result.data.enabled ? '启用' : '禁用'}`);
                 }
             } catch (error) {
@@ -118,7 +137,7 @@ function renderStrategyList() {
         btn.addEventListener('click', async () => {
             const id = btn.dataset.id;
             try {
-                await loadStrategies();
+                await loadStrategies({ force: true });
             } catch (error) {
                 // 继续尝试使用本地已缓存数据
             }
@@ -135,7 +154,7 @@ function renderStrategyList() {
             try {
                 await api.deleteStrategy(id, getState('token'));
                 Toast.success('策略已删除');
-                await loadStrategies();
+                await loadStrategies({ force: true });
             } catch (error) {
                 Toast.error(`删除失败: ${error.message}`);
             }
@@ -415,7 +434,7 @@ export function initStrategyPanel() {
                 await api.updateStrategy(editId, data, token);
                 Toast.success('策略已更新');
                 hideStrategyModal();
-                await loadStrategies();
+                await loadStrategies({ force: true });
             } else {
                 const result = await api.createStrategy(data, token);
                 if (result.success && result.data) {
@@ -427,7 +446,7 @@ export function initStrategyPanel() {
                     }
                     Toast.success('策略已创建，请复制并保存 Token');
                     hideStrategyModal();
-                    await loadStrategies();
+                    await loadStrategies({ force: true });
                 }
             }
         } catch (error) {
@@ -675,7 +694,7 @@ function initStrategyOrderModal() {
             );
             Toast.success('下单成功');
             hideStrategyOrderModal();
-            await loadStrategies();
+            await loadStrategies({ force: true });
             fetchOrders();
         } catch (error) {
             Toast.error(error.message || '下单失败');

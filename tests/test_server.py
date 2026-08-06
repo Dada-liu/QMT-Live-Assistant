@@ -2616,3 +2616,79 @@ class TestBlockingCallTimeout:
         assert response.status_code == 500
         assert "超时" in response.json()["detail"]
         assert elapsed < 1.5
+
+
+class TestStrategyInfo:
+    """外部服务通过策略 Token 查询策略基本信息与资金汇总（/api/strategy_info）。"""
+
+    def _create_strategy(self, client, server, name="信息查询策略", allocated_funds=88800):
+        response = client.post(
+            "/api/strategies",
+            json={"name": name, "description": "外部查询", "allocated_funds": allocated_funds},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def test_strategy_token_returns_info(self, client, server):
+        strategy = self._create_strategy(client, server)
+        response = client.get(
+            "/api/strategy_info",
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert set(data.keys()) == {
+            "id", "name", "description", "enabled",
+            "allocated_funds", "available_cash", "total_asset", "daily_pnl",
+        }
+        assert data["id"] == strategy["id"]
+        assert data["name"] == "信息查询策略"
+        assert data["allocated_funds"] == 88800
+        # 白名单之外：不暴露 token / 持仓 / 交易记录
+        assert "token" not in data
+        assert "positions" not in data
+        assert "trading_records" not in data
+
+    def test_invalid_token_returns_401(self, client):
+        response = client.get(
+            "/api/strategy_info",
+            headers={"X-Token": "invalid-token"},
+        )
+        assert response.status_code == 401
+
+    def test_master_token_returns_401(self, client, server):
+        response = client.get(
+            "/api/strategy_info",
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 401
+
+    def test_disabled_strategy_returns_401(self, client, server):
+        strategy = self._create_strategy(client, server)
+        toggle_resp = client.post(
+            f"/api/strategies/{strategy['id']}/toggle",
+            headers={"X-Token": server.token},
+        )
+        assert toggle_resp.status_code == 200
+
+        response = client.get(
+            "/api/strategy_info",
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 401
+
+    def test_qmt_disconnected_returns_503(self, client, server):
+        strategy = self._create_strategy(client, server)
+        server._watchdog._state = ConnectionState.RECONNECTING
+        try:
+            response = client.get(
+                "/api/strategy_info",
+                headers={"X-Token": strategy["token"]},
+            )
+            assert response.status_code == 503
+            assert "QMT 连接断开" in response.json()["detail"]
+        finally:
+            server._watchdog._state = ConnectionState.CONNECTED

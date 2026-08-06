@@ -70,6 +70,23 @@ async def _verify_any_token(x_token: str = Header(...)):
     raise HTTPException(status_code=401, detail="无效的Token")
 
 
+async def _verify_strategy_token(x_token: str = Header(...)):
+    """仅策略 Token 可用，校验通过后返回对应策略；QMT 未连接时 503。"""
+    if _current_server is None:
+        raise HTTPException(status_code=401, detail="服务器未运行")
+    strategy = _current_server.strategy_manager.find_by_token(x_token)
+    if strategy is None or not strategy.enabled:
+        raise HTTPException(status_code=401, detail="无效的Token")
+    if not _current_server.running:
+        raise HTTPException(status_code=503, detail="服务未启动")
+    if not _current_server.qmt_connected:
+        detail = "QMT 连接断开，正在重连"
+        if _current_server.last_connection_error:
+            detail += f": {_current_server.last_connection_error}"
+        raise HTTPException(status_code=503, detail=detail)
+    return strategy
+
+
 async def _require_qmt_connected(x_token: str = Header(...)):
     await _verify_token(x_token)
     if _current_server is None or not _current_server.running:
@@ -1004,6 +1021,29 @@ class QMTServer:
                 if signal_log is not None and _current_server._signal_log_repository is not None:
                     _current_server._signal_log_repository.update_error(signal_log.id, str(e))
                 raise HTTPException(status_code=500, detail=f"下单失败: {e}")
+
+        @app.get('/api/strategy_info')
+        async def strategy_info(strategy=Depends(_verify_strategy_token)):
+            """外部服务用策略 Token 查询本策略的基本信息与资金汇总。"""
+            enriched = await run_blocking(
+                _current_server.strategy_manager.list_all_enriched,
+                _current_server.trader, _current_server.account,
+                timeout=BLOCKING_CALL_TIMEOUT_LONG,
+            )
+            data = next((s for s in enriched if s['id'] == strategy.id), None)
+            if data is None:
+                raise HTTPException(status_code=404, detail="策略不存在")
+            # 白名单返回，不暴露 token、持仓明细、交易记录等内部字段
+            return {'success': True, 'data': {
+                'id': data['id'],
+                'name': data['name'],
+                'description': data['description'],
+                'enabled': data['enabled'],
+                'allocated_funds': data['allocated_funds'],
+                'available_cash': data['available_cash'],
+                'total_asset': data['total_asset'],
+                'daily_pnl': data['daily_pnl'],
+            }}
 
         # --- 策略管理 API ---
 

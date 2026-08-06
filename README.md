@@ -13,6 +13,7 @@
 **交易与下单**
 - 聚宽风格下单：`/api/jukuan_order*` 四个接口（按数量/目标仓位/按金额/目标市值），仅接受策略 Token，自动关联策略并更新持仓；无持仓时自动从行情获取最新价
 - 通用下单：`/api/order`（策略 Token），支持 `direction`、`quantity`、`price`、`price_type`、`order_type`、`source_platform`、`notify_source`、`source_platform_webhook` 等完整业务参数，适用于聚宽、果仁等任意外部信号源
+- 策略信息查询：`/api/strategy_info`（策略 Token），外部服务可获取本策略的基本信息与资金汇总（分配资金/可用资金/总资产/当日盈亏），用于下单前的资金自查
 - 手动下单：展开策略持仓明细即可点击买入/卖出，弹窗中选股票（买入自由输入、卖出从持仓选择）、数量（100 整数倍步进）、价格（市价/限价），复用策略级校验与冻结链路
 - 策略级校验：卖出不超可用持仓；**所有买入路径均校验可用资金**（市价单按最新价估算成本）；超资处理可按策略配置——默认"放弃本次下单"，也可选"按最大可买数量下单"
 - 源平台状态通知：下单时传入 `notify_source=true` 与 `source_platform_webhook`，订单成交/失败/撤销后服务端主动向该 webhook POST 结构化状态信息
@@ -198,6 +199,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 | POST | `/api/jukuan_order_value` | 策略 Token | 聚宽风格按金额下单 |
 | POST | `/api/jukuan_order_target_value` | 策略 Token | 聚宽风格目标市值下单 |
 | POST | `/api/order` | 策略 Token | 通用下单接口，参数最全，支持 `notify_source` / `source_platform_webhook` / `source_platform` |
+| GET | `/api/strategy_info` | 策略 Token | 查询本策略基本信息与资金汇总（`allocated_funds` / `available_cash` / `total_asset` / `daily_pnl`），QMT 断开时返回 503 |
 
 ### 源平台状态通知
 

@@ -203,6 +203,60 @@ jukuan_order_target_value('000001.XSHE', 0)      # 全部平仓
 
 ---
 
+## 策略信息查询：`GET /api/strategy_info`
+
+**用途：** 外部服务用策略 Token 查询**本策略**的基本信息与资金汇总，用于下单前的资金自查/风控。
+
+**Token：** 仅策略 Token（策略需处于启用状态；主 Token 调用返回 401）
+
+**可用性：** 总资产/当日盈亏依赖 QMT 实时行情计算，**QMT 断开时返回 503**（`detail` 含重连提示），调用方应做重试
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "a1b2c3d4e5f6",
+    "name": "我的聚宽策略",
+    "description": "",
+    "enabled": true,
+    "allocated_funds": 100000.0,
+    "available_cash": 62500.0,
+    "total_asset": 101250.0,
+    "daily_pnl": 1250.0
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `allocated_funds` | 分配给策略的资金 |
+| `available_cash` | 策略可用资金（买入冻结、成交扣减、失败解冻） |
+| `total_asset` | 策略总资产 = 可用资金 + 持仓市值（实时行情） |
+| `daily_pnl` | 当日盈亏（实时行情） |
+
+**错误码：** 401（Token 无效/策略已禁用）、503（QMT 断开）、404（策略已被删除）
+
+```python
+import requests
+
+resp = requests.get(
+    "http://127.0.0.1:8000/api/strategy_info",
+    headers={"X-Token": STRATEGY_TOKEN},
+    timeout=10,
+)
+info = resp.json()["data"]
+print(info["available_cash"], info["total_asset"], info["daily_pnl"])
+```
+
+**代码位置：**
+- 路由：`backend/server.py`（`/api/strategy_info`）
+- 鉴权：`backend/server.py` `_verify_strategy_token`
+- 资金计算：`backend/strategy_manager.py` `list_all_enriched`
+
+---
+
 ## 前端
 
 前端**不提供手动下单 UI**。前端功能为：

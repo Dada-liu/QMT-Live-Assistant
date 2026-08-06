@@ -328,6 +328,7 @@ graph LR
 
     subgraph "通用下单路由 (server.py)"
         GO["POST /api/order<br/>(策略Token，参数最全)"]
+        SI["GET /api/strategy_info<br/>(策略Token，资金汇总)"]
     end
 
     subgraph "转换 API"
@@ -388,6 +389,7 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - **策略 CRUD**：`/api/strategies*`；返回前注入 `order_count` 与 pending 买入单的 `frozen_cash`，并将 `frozen_cash` 加回 `total_asset`
 - **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg；max_buyable 封顶/取消时记 error_msg 部分下单详情并保留订单关联）；支持 `notify_source` / `source_platform_webhook` / `source_platform` 透传到订单跟踪器
 - **通用下单**：`POST /api/order`（策略 Token）使用 `GenericOrderRequest` Pydantic 模型，支持 `direction` / `order_type` / `price_type` / `source_platform` / `notify_source` / `source_platform_webhook` 等全参数，复用 `_submit_order` 冻结链路
+- **策略信息查询**：`GET /api/strategy_info`（仅策略 Token，禁用/主 Token 401，QMT 断开 503）复用 `list_all_enriched` 按策略 id 过滤，白名单返回基本信息与资金汇总（`allocated_funds` / `available_cash` / `total_asset` / `daily_pnl`），不暴露 token / 持仓明细 / 交易记录
 - **订单**：`GET /api/orders`（状态/策略/日期筛选）；`POST /api/orders/{id}/cancel`（撤 pending/partial）；`POST /api/orders/{id}/resend`（重发 failed 且未重发过的订单，可选请求体 `OrderResendRequest{quantity, price}` 覆盖原参数，买入非整手 400，资金/持仓不足 400）
 - **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录，支持 `notify_source` / `source_platform_webhook` / `source_platform`）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
 - **账户/工具**：account-asset、account-positions、代码转换、文档 API、动态端点（trader 方法自动映射）
@@ -502,6 +504,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 17：策略手动下单与 Mock 订单号冲突修复** ✅ — 持仓明细新增买入/卖出按钮与下单弹窗（买入自由输入代码、卖出持仓下拉、数量 100 整数倍步进）；新增 `POST /api/strategies/{id}/order` 主 Token 手动下单端点，复用冻结/校验/跟踪链路并写 `manual_order` 交易记录；修复 MockTrader 订单号计数器每进程重置、与历史持久化订单冲突导致新单覆盖旧单（order_count 不增长、DB 行被改写）的问题——启动时将计数器抬升到历史最大订单号之上
 - **Phase 18：QMT 接口错误处理统一化** ✅ — 按 `reference-document/qmt_xtquant_api.md` 将撤单方法修正为 `cancel_order_stock`；新增 `QMTInteractionError` 与 `qmt_call` 统一封装所有 xtquant 同步调用，捕获异常并按文档检查返回值（`order_stock/-1`、`cancel_order_stock/-1`、`query_*/None`）；扩展 `on_order_error` / `on_cancel_error` 结构化日志与有界去重；`create_trader` 统一检查 `connect()` / `subscribe()` 返回值；行情获取函数异常时记录日志；全部测试覆盖新增错误场景
 - **Phase 19：策略资金不足处理策略配置** ✅ — 策略新增 `insufficient_funds_policy` 配置项（`reject` 默认"放弃本次下单" / `max_buyable`"按最大可买数量下单"），统一约束全部 6 条买入路径：`_submit_order` 冻结前按可用资金将买入数量封顶到最大整手数，不足一手取消下单（聚宽/通用接口返回"订单取消"，手动下单返回 400）；删除 `jukuan_order_value` 原有无条件静默封顶（**行为变化**：默认 reject 下金额类接口超资拒单）；strategies 表新列 + Alembic 迁移（历史 NULL 归一 reject）；前端策略表单新增下拉配置；响应与记账均以实际委托数量为准；封顶/取消的信号在 signal_logs 记为异常（`error_msg` 注明请求股数与实际下单股数或取消原因，`processed_order_id` 保留订单关联）
+- **Phase 20：防卡死改造与策略信息查询接口** ✅ — QMT/xtdata 阻塞调用全部经 `run_blocking` 移出事件循环并加超时（专用线程池 16 workers，普通 10s / 含行情 30s）；DB 加固（sqlite busy timeout + WAL、commit 失败回滚、共享 session RLock 串行化）；watchdog connect/stop 加超时；新增 `GET /api/strategy_info`（仅策略 Token，QMT 断开 503），外部服务可查询本策略基本信息与资金汇总用于下单前资金自查；前端修复填 token 连接与页面加载时 dashboard/strategies 重复请求（in-flight 合并 + 冷却守卫）
 
 ---
 

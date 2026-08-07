@@ -24,6 +24,11 @@ from backend.db.repositories.settings import (
     InMemorySettingsRepository,
     SQLAlchemySettingsRepository,
 )
+from backend.db.repositories.pending_buy import (
+    PendingBuyRepository,
+    InMemoryPendingBuyRepository,
+    SQLAlchemyPendingBuyRepository,
+)
 
 __all__ = [
     "Repository",
@@ -43,4 +48,7 @@ __all__ = [
     "SettingsRepository",
     "InMemorySettingsRepository",
     "SQLAlchemySettingsRepository",
+    "PendingBuyRepository",
+    "InMemoryPendingBuyRepository",
+    "SQLAlchemyPendingBuyRepository",
 ]

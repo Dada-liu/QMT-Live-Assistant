@@ -22,6 +22,8 @@ class Settings:
     LOG_FILE: str = os.getenv("LOG_FILE", "")
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
     PERSISTENCE_MODE: str = os.getenv("PERSISTENCE_MODE", "sqlite")
+    # 挂起买单（调仓资金不足时延迟买入）等待卖单回款的最长分钟数
+    PENDING_BUY_EXPIRE_MINUTES: int = int(os.getenv("PENDING_BUY_EXPIRE_MINUTES", "30"))
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
         "sqlite:///./data/qmt_live_assistant.db"

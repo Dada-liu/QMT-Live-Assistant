@@ -17,6 +17,7 @@ class StrategyModel(Base):
     allocated_funds: Mapped[float] = mapped_column(Numeric(19, 4), default=0)
     available_cash: Mapped[float] = mapped_column(Numeric(19, 4), default=0)
     insufficient_funds_policy: Mapped[Optional[str]] = mapped_column(String(32), default=None)
+    defer_buy_on_insufficient_funds: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     bark_notify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     default_market_price_type: Mapped[int] = mapped_column(Integer, default=5)
     last_rollover_date: Mapped[Optional[str]] = mapped_column(String(8), default=None)

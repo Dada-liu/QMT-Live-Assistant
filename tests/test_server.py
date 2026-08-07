@@ -2853,3 +2853,32 @@ class TestPendingBuy:
         pb = server.pending_buy_manager._repo.get(pending_buy_id)
         assert pb.status == "expired"
         assert pb.resolved_at is not None
+
+    def test_retry_still_cancelled_keeps_waiting(self, client, server):
+        """挂起后重试仍因资金不足一手被取消时，保持 waiting 而不是 failed。"""
+        # 初始：现金 0，持仓 800 股@10；卖出后回款 8000，但买不起一手 300750（8510）
+        strategy = self._create_strategy(
+            client, server, defer=True, policy="max_buyable",
+            allocated_funds=8000, quantity=800, price=10.0,
+        )
+        sell_order_id = self._sell_all(client, strategy, quantity=800)
+
+        # 买单因资金不足被挂起
+        response = self._buy(client, strategy, amount=100)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deferred"] is True
+        pending_buy_id = data["pending_buy_id"]
+
+        # 卖单成交：回款 8000，现金 8000 < 8510 → 重试仍买不起一手，必须保持 waiting
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "waiting", f"期望保持 waiting，实际 {pb.status}, reason={pb.reason}"
+
+        # 确保 signal_log 没有被误标为挂起买单 failed（此前 bug 会写入 failed 原因）
+        if server._signal_log_repository is not None and pb.signal_log_id:
+            log = server._signal_log_repository.get(pb.signal_log_id)
+            assert log is not None
+            assert "挂起买单failed" not in (log.error_msg or ""), f"signal_log 被误标: {log.error_msg}"
+

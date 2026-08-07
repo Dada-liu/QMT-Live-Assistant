@@ -141,11 +141,16 @@ class PendingBuyManager:
             # 资金仍不足，等下一笔卖单回款
             return
 
-        if result.get("cancelled"):
-            # max_buyable 策略仍买不起一手，继续等待
+        # 资金不足一手被取消（max_buyable 策略）：继续等待。
+        # jukuan_* handler 在取消时不一定透传 cancelled 字段，但一定会有 funds_cap_note，
+        # 因此兼容两种识别方式，与 server 端点的判断保持一致。
+        order_id = result.get("order_id")
+        is_cancelled = result.get("cancelled") or (
+            not order_id and result.get("funds_cap_note")
+        )
+        if is_cancelled:
             return
 
-        order_id = result.get("order_id")
         if not order_id:
             self._resolve(pb, PENDING_BUY_FAILED, result.get("message") or "重试未产生订单")
             return

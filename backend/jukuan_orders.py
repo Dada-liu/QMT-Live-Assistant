@@ -423,6 +423,7 @@ class JukuanOrderHandler:
                     'order_type': None,
                     'requested_quantity': submit_result['requested_quantity'],
                     'funds_cap_note': submit_result['funds_cap_note'],
+                    'cancelled': True,
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -528,6 +529,7 @@ class JukuanOrderHandler:
                     'order_type': None,
                     'requested_quantity': submit_result['requested_quantity'],
                     'funds_cap_note': submit_result['funds_cap_note'],
+                    'cancelled': True,
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -614,6 +616,7 @@ class JukuanOrderHandler:
                     'order_type': None,
                     'requested_quantity': submit_result['requested_quantity'],
                     'funds_cap_note': submit_result['funds_cap_note'],
+                    'cancelled': True,
                     'message': submit_result['message'],
                 }
             order_id = submit_result['order_id']
@@ -765,6 +768,7 @@ class JukuanOrderHandler:
                 'order_type': None,
                 'requested_quantity': submit_result['requested_quantity'],
                 'funds_cap_note': submit_result['funds_cap_note'],
+                'cancelled': True,
                 'optimistic_snapshot': None,
                 'strategy_name': strategy_name,
                 'message': submit_result['message'],

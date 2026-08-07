@@ -27,6 +27,7 @@ graph TB
         subgraph 核心层["核心层"]
             SVR[server.py<br/>QMTServer<br/>动态端点生成]
             ORD[order_tracker.py<br/>OrderTracker<br/>订单状态跟踪]
+            PBM[pending_buy_manager.py<br/>PendingBuyManager<br/>调仓延迟买单]
             CLIENT[qmt_client.py<br/>QMT 连接]
             STRAT[strategy_manager.py<br/>StrategyManager<br/>策略CRUD + 持仓跟踪]
             JK[jukuan_orders.py<br/>JukuanOrderHandler<br/>聚宽风格下单]
@@ -93,8 +94,11 @@ graph TB
     STRAT -->|"xtdata.get_market_data<br/>获取preClose/open计算成本与当日盈亏"| XT
 
     ORD <-->|"订单状态同步 + 持仓修正"| STRAT
-    SVR <-->|"订单日志"| ORD
-    SVR <-->|"源平台通知"| SP
+    SVR <-->|"延迟买单重试触发"| PBM
+    PBM -->|"重建 handler 调用"| JK
+    PBM -->|"注册新订单跟踪"| ORD
+    PBM -->|"写入 pending_buy_orders"| DB
+    STRAT -->|"卖单增量入账 settle_partial_sell"| ORD
     ORD -->|"订单终态"| SP
     STRAT <-->|"持仓/资金数据"| SVR
     STRAT <-->|"QMT行情刷新"| CLIENT
@@ -222,6 +226,40 @@ sequenceDiagram
         Note right of SP: 通知失败仅记录日志<br/>不影响状态机与持仓修正
     end
     Svr->>Strat: reconcile_position() / rollback_position()
+
+    Note over Remote,Strat: === 调仓延迟买单流程 ===
+    Remote->>Main: 同时 POST /api/jukuan_order* sell + buy
+    Main->>Svr: 校验策略 Token
+    Svr->>JK: sell 调用 → trader.order_stock()
+    Svr->>Ord: track_order(sell)
+    Svr->>JK: buy 调用 → apply_optimistic_position 资金不足
+    JK-->>Svr: 抛出 InsufficientFundsError
+    alt 策略开启 defer_buy_on_insufficient_funds 且存在在途 sell 单
+        Svr->>PBM: defer(strategy_id, method, payload, ...)
+        PBM->>DB: 写入 pending_buy_orders (status=waiting)
+        Svr-->>Remote: {success: true, data: {deferred: true, pending_buy_id: ..., message: ...}}
+    else 开关关闭或无在途卖单
+        Svr-->>Remote: 500/400 资金不足错误
+    end
+    QMT-->>Client: on_stock_order / on_stock_trade sell 部分成交
+    Client->>Ord: update_from_callback / update_from_trade
+    Ord->>Strat: on_fill_progress → settle_partial_sell(delta_qty, delta_price)
+    Strat-->>Ord: 增量回款入账、扣减持仓、更新 settled_quantity
+    Svr->>Svr: _poll_orders_loop 每 5s
+    Svr->>Ord: poll_and_reconcile()
+    Ord->>Strat: reconcile_position()
+    Svr->>PBM: process_all(trader, account)
+    PBM->>DB: 清理过期 waiting → expired
+    PBM->>JK: 重试 waiting buy（target 类按当时持仓重算 delta）
+    alt 资金仍不足
+        PBM-->>PBM: 保持 waiting，等待下轮
+    else 资金足够
+        JK->>Client: trader.order_stock()
+        PBM->>Ord: track_order(buy)
+        PBM->>DB: 更新 status=submitted + submitted_order_id
+        PBM->>Svr: add_trading_record + signal_log update_processed_order_id
+    end
+
     Remote->>Main: POST /api/jukuan_order* {security, amount}
     Main->>Svr: 校验策略 Token 并执行下单
     alt Token 为主 Token
@@ -379,26 +417,27 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 ### `backend/strategy_manager.py` — 策略管理器
 - 模型位于 `backend/models/strategy.py`：`Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`
 - CRUD + toggle + 软删除（`deleted_at`）；写操作通过 `model_copy(update=...)` 保持领域模型不可变；`StrategyRepository` 构造函数注入，缺省降级 InMemory 实现
-- **`apply_optimistic_position`**（下单前原子冻结）：买入仅冻结资金、不建持仓行，**成本超可用资金返回 None**；卖出校验可用持仓充足后冻结数量，不足返回 None。返回增量快照（delta_cash / delta_frozen_quantity 等）
-- **`rollback_position` / `reconcile_position`**：订单失败按快照增量解冻；成交时先回滚快照、再按真实成交数量与价格记账（因此冻结可用估算价，不影响最终账务）
+- **`apply_optimistic_position`**（下单前原子冻结）：买入仅冻结资金、不建持仓行，**成本超可用资金返回 None**；卖出校验可用持仓充足后冻结数量，不足返回 None。返回增量快照（delta_cash / delta_frozen_quantity 等），快照新增 `settled_quantity` 字段跟踪已结算成交量
+- **`rollback_position` / `reconcile_position`**：订单失败按快照增量解冻；成交时先回滚快照、再按真实成交数量与价格记账（因此冻结可用估算价，不影响最终账务）；**改补差模式**：终态时只处理未结算部分（`unsettled_filled = filled_qty - settled`、`unsettled_frozen = quantity - settled`），避免部分成交已增量入账后的重复入账或误扣冻结
+- **`settle_partial_sell`**：卖单部分成交时按增量（delta_qty, delta_price）入账回款、扣减持仓、减少冻结量并累加 `settled_quantity`，保证 `available = quantity - frozen` 不变式
 - **`list_all_enriched`**：用 QMT 实时行情富化策略——按持仓占比分摊市值、计算现价；当日盈亏拆分「昨日持仓（现价−昨收）+ 今日买入（现价−买入成本）」；每日首次调用自动跨日合并（今日买入 → 昨日持仓，以 preClose 为新成本基准）
 - 持仓以 QMT 格式持久化（代码/名称/数量/avg_cost/今昨拆分字段），行情字段不落库
 
 ### `backend/server.py` — 核心服务器
 `QMTServer` 集中注册全部路由：
 - **策略 CRUD**：`/api/strategies*`；返回前注入 `order_count` 与 pending 买入单的 `frozen_cash`，并将 `frozen_cash` 加回 `total_asset`
-- **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg；max_buyable 封顶/取消时记 error_msg 部分下单详情并保留订单关联）；支持 `notify_source` / `source_platform_webhook` / `source_platform` 透传到订单跟踪器
+- **聚宽下单**：`/api/jukuan_order{,_target,_value,_target_value}` 统一走 `_jukuan_endpoint`：仅策略 Token（主 Token 403）→ 代码归一化 → 调 handler → 注册订单 → 写 signal_logs（成功记 processed_order_id，异常记 error_msg；max_buyable 封顶/取消时记 error_msg 部分下单详情并保留订单关联；**资金不足且策略开启 `defer_buy_on_insufficient_funds`、同策略存在在途卖单时挂起到 `pending_buy_manager`**）；支持 `notify_source` / `source_platform_webhook` / `source_platform` 透传到订单跟踪器
 - **通用下单**：`POST /api/order`（策略 Token）使用 `GenericOrderRequest` Pydantic 模型，支持 `direction` / `order_type` / `price_type` / `source_platform` / `notify_source` / `source_platform_webhook` 等全参数，复用 `_submit_order` 冻结链路
 - **策略信息查询**：`GET /api/strategy_info`（仅策略 Token，禁用/主 Token 401，QMT 断开 503）复用 `list_all_enriched` 按策略 id 过滤，白名单返回基本信息与资金汇总（`allocated_funds` / `available_cash` / `total_asset` / `daily_pnl`），不暴露 token / 持仓明细 / 交易记录
 - **订单**：`GET /api/orders`（状态/策略/日期筛选）；`POST /api/orders/{id}/cancel`（撤 pending/partial）；`POST /api/orders/{id}/resend`（重发 failed 且未重发过的订单，可选请求体 `OrderResendRequest{quantity, price}` 覆盖原参数，买入非整手 400，资金/持仓不足 400）
 - **手动下单**：`POST /api/strategies/{id}/order`（Web UI 主 Token：策略存在/启用校验、代码归一化、买入整手校验，复用 `_submit_order` 冻结链路，写 `manual_order` 交易记录，支持 `notify_source` / `source_platform_webhook` / `source_platform`）；启动时 `_bump_mock_order_counter()` 将 MockTrader 订单号计数器抬升到历史最大订单号之上，避免与已持久化订单冲突覆盖
 - **账户/工具**：account-asset、account-positions、代码转换、文档 API、动态端点（trader 方法自动映射）
 - **源平台状态通知**：`_register_order_state_callback` 在订单 filled/failed 终态时，若 `notify_source=true` 则解析 webhook URL 并启动 daemon 线程 POST 结构化 payload；通知失败仅记录日志，不影响状态机
-- **Bark 推送**：`GET/PUT /api/bark-config`、`POST /api/bark-config/test`（主 Token，可用未保存的配置先试）；`BarkService` 分别挂到 `_track_and_apply_order`（发起订单）、`_register_order_state_callback`（终态）、`_poll_orders_loop`（未成交检查，位于 QMT 连接守卫内）
-- 横切：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照与通知参数；`_poll_orders_loop`（5 秒）与 `_market_open_poll_loop`（每日 09:30）两个后台轮询
+- **Bark 推送**：`GET/PUT /api/bark-config`、`POST /api/bark-config/test`（主 Token，可用未保存的配置先试）；`BarkService` 分别挂到 `_track_and_apply_order`（发起订单）、`_register_order_state_callback`（终态）、`_poll_orders_loop`（未成交检查，位于 QMT 连接守卫内）；新增 `notify_strategy_event` 通用策略事件推送，用于挂起买单过期/失败通知
+- **横切**：`verify_token` / `verify_any_token` 鉴权；`_require_qmt_connected` 依赖（断线 503）；`_track_and_apply_order` 注册订单并随单持久化冻结快照与通知参数；`_poll_orders_loop`（5 秒）先执行 `poll_and_reconcile` 再调用 `pending_buy_manager.process_all` 重试挂起买单；`_market_open_poll_loop`（每日 09:30）开盘轮询
 
 ### `backend/order_tracker.py` — 订单状态跟踪
-状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 通过 `qmt_call` 轮询 QMT 修正状态；`cancel_order` 调用 `cancel_order_stock` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计。
+状态机 pending / partial / filled / failed。启动时从 Repository 恢复 pending 订单；`poll_and_reconcile` 通过 `qmt_call` 轮询 QMT 修正状态；`cancel_order` 调用 `cancel_order_stock` 手动撤销后置 failed；终态触发回调调用 StrategyManager 对账/回滚；`track_order` 携带 `notify_source` / `source_platform_webhook` / `source_platform` 供通知使用；每次状态变更持久化并写 `order_events` 审计；**新增 `on_fill_progress` 回调**：卖单部分成交时向 StrategyManager 触发 `settle_partial_sell` 增量入账（先回调后持久化，终态订单忽略迟来回调，避免 mock/实盘双回调重复入账）。
 
 - **成交量处理**：`on_stock_order` 与 `query_stock_orders` 返回的 `traded_volume` 是**累计成交量**；`update_from_callback` 仅在 reported 累计量大于当前已记录量时才更新 `filled_quantity`，避免部分成交多次回调时被重复累加。`on_stock_trade` 返回单笔成交，`update_from_trade` 保持增量累加并计算加权成交均价。
 
@@ -422,7 +461,8 @@ ANSI 颜色码、买卖方向（STOCK_BUY=23 / STOCK_SELL=24）；xtquant 委托
 - 策略级取数：`_get_price`（优先策略持仓 avg_cost → 账户持仓 → 行情最新价）、`_get_volume`（优先策略持仓）
 - `jukuan_order`（按数量）/ `jukuan_order_target`（目标仓位差额）/ `jukuan_order_value`（按金额）/ `jukuan_order_target_value`（目标市值，委托给 order_value）
 - `generic_order`（通用下单）：按 `direction` 或显式 `order_type` 确定委托类型，支持显式 `price_type` 与 `order_remark`，股票买入整手校验，返回含 `price_type` / `order_type` 的统一结果
-- **`_submit_order` 原子校验与冻结**：买入先按策略 `insufficient_funds_policy` 处理资金不足——`max_buyable` 时 `_cap_quantity_by_funds_policy` 将数量封顶到可用资金可负担的最大整手数（不足一手返回"订单取消"结果），`reject`（默认）保持原数量；再 `apply_optimistic_position` 冻结（资金/持仓不足抛 ValueError，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级；支持显式 `price_type` 与 `order_remark`；返回实际委托 `quantity` 与 `requested_quantity` / `funds_cap_note` 供调用方响应记账、端点标记异常信号日志
+- **`_submit_order` 原子校验与冻结**：买入先按策略 `insufficient_funds_policy` 处理资金不足——`max_buyable` 时 `_cap_quantity_by_funds_policy` 将数量封顶到可用资金可负担的最大整手数（不足一手返回"订单取消"结果），`reject`（默认）保持原数量；再 `apply_optimistic_position` 冻结（资金/持仓不足抛 `InsufficientFundsError`，不发往 QMT）→ `trader.order_stock` → QMT 失败立即 rollback；**市价买入单（price=0）用 `fetch_latest_prices_from_xtdata` 估算成本做校验与冻结**，QMT 仍按市价提交，行情不可用时跳过校验优雅降级；支持显式 `price_type` 与 `order_remark`；返回实际委托 `quantity` 与 `requested_quantity` / `funds_cap_note` 供调用方响应记账、端点标记异常信号日志
+- **新增 `InsufficientFundsError(ValueError)`**：资金不足 reject 路径抛出该子类异常，server 端点捕获后判断是否应挂起到 `pending_buy_manager`；未开启挂起时仍保持原 400/500 错误语义不变
 - 数量按手数向下取整（股票 100、期货 1）；期货支持 `side='short'`；返回 QMT/聚宽双格式代码与 `optimistic_snapshot`
 
 ### `backend/window.py` / `backend/tray.py` — 桌面壳
@@ -434,12 +474,18 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 ### `backend/mock_xtquant/` — Mock 层
 非 Windows 开发与测试用：MockTrader（连接、下单、资产/持仓查询）、MockData（内置 3 只股票的 K 线与 get_full_tick 行情，lastPrice=close）、模拟断线/重连（供看门狗测试）。MockTrader 订单号计数器为类属性（每进程从 100000 重计），提供 `bump_order_counter()` 供服务器启动时抬升，避免与已持久化的历史订单号冲突。
 
+### `backend/pending_buy_manager.py` — 调仓延迟买单管理器
+单例管理器，由 `QMTServer` 在构造时注入 `strategy_manager`、`order_tracker`、`pending_buy_repository`、`signal_log_repository`、`bark_service`、handler 工厂与订单跟踪回调：
+- **`defer`**：当策略开启 `defer_buy_on_insufficient_funds` 且存在在途卖单时，将买单请求登记为 `waiting` 状态，写入 `pending_buy_orders` 表，关联原 `signal_log_id`
+- **`process_all`**：由 `_poll_orders_loop` 每 5 秒在 `poll_and_reconcile` 之后调用；先清理超时 waiting 行（→ `expired` 并 Bark 通知），再按策略 FIFO 重试 waiting 买单：重建 handler 调用（target/value 类按当时持仓重新计算 delta）、资金仍不足则保持 waiting、成功则 `submitted` 并走 `_track_and_apply_order` 注册订单与 `add_trading_record`、其他异常或策略已禁用/删除则 `failed`
+- **过期/失败通知**：通过 `bark_service.notify_strategy_event` 推送策略级事件，不阻塞轮询
+
 ### `backend/db/` — 数据库层
-8 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs、app_settings）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；strategies 表新增 `insufficient_funds_policy` 列（历史 NULL 行归一为 reject）与 `bark_notify_enabled` 列（存量默认开启）；app_settings 为键值表，存放 Bark 等全局配置；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
+9 张表（accounts、strategies、positions、orders、strategy_tokens、order_events、signal_logs、app_settings、**pending_buy_orders**）；orders 表新增 `notify_source_platform`、`source_platform_webhook` 列；strategies 表新增 `insufficient_funds_policy` 列（历史 NULL 行归一为 reject）、`bark_notify_enabled` 列（存量默认开启）、**`defer_buy_on_insufficient_funds` 列（存量默认 False）**；`pending_buy_orders` 记录挂起买单（strategy_id / method_name / request_payload / status / signal_log_id / submitted_order_id / reason / created_at / expire_at / resolved_at）；Repository 抽象基类 + SQLAlchemy / InMemory 双实现，负责领域模型 ↔ 数据库模型映射；Alembic 管理迁移。
 
 ### `backend/models/` — 领域模型
-- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`；`insufficient_funds_policy`（reject / max_buyable）在 API 边界用 Literal 校验；`bark_notify_enabled` 控制该策略是否发送 Bark 推送（默认开启）
-- `order.py`：`TrackedOrder`（dataclass，新增 `notify_source` / `source_platform_webhook` / `source_platform`）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）、`GenericOrderRequest` / `ManualOrderRequest`（新增通知相关字段）
+- `strategy.py`：Pydantic 模型 `Strategy` / `StrategyCreate` / `StrategyUpdate` / `PositionAssignment`；`insufficient_funds_policy`（reject / max_buyable）在 API 边界用 Literal 校验；`bark_notify_enabled` 控制该策略是否发送 Bark 推送（默认开启）；**`defer_buy_on_insufficient_funds` 控制调仓时是否挂起资金不足买单等待卖出成交（默认关闭）**
+- `order.py`：`TrackedOrder`（dataclass，新增 `notify_source` / `source_platform_webhook` / `source_platform`）、`OrderState` 状态常量、`OrderResendRequest`（Pydantic，重发改参请求体）、`GenericOrderRequest` / `ManualOrderRequest`（新增通知相关字段）；`optimistic_snapshot` 新增 `settled_quantity` 跟踪已结算成交量
 - 解耦业务层与数据库层，消除 Repository 与业务层循环依赖
 
 ---
@@ -505,6 +551,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 18：QMT 接口错误处理统一化** ✅ — 按 `reference-document/qmt_xtquant_api.md` 将撤单方法修正为 `cancel_order_stock`；新增 `QMTInteractionError` 与 `qmt_call` 统一封装所有 xtquant 同步调用，捕获异常并按文档检查返回值（`order_stock/-1`、`cancel_order_stock/-1`、`query_*/None`）；扩展 `on_order_error` / `on_cancel_error` 结构化日志与有界去重；`create_trader` 统一检查 `connect()` / `subscribe()` 返回值；行情获取函数异常时记录日志；全部测试覆盖新增错误场景
 - **Phase 19：策略资金不足处理策略配置** ✅ — 策略新增 `insufficient_funds_policy` 配置项（`reject` 默认"放弃本次下单" / `max_buyable`"按最大可买数量下单"），统一约束全部 6 条买入路径：`_submit_order` 冻结前按可用资金将买入数量封顶到最大整手数，不足一手取消下单（聚宽/通用接口返回"订单取消"，手动下单返回 400）；删除 `jukuan_order_value` 原有无条件静默封顶（**行为变化**：默认 reject 下金额类接口超资拒单）；strategies 表新列 + Alembic 迁移（历史 NULL 归一 reject）；前端策略表单新增下拉配置；响应与记账均以实际委托数量为准；封顶/取消的信号在 signal_logs 记为异常（`error_msg` 注明请求股数与实际下单股数或取消原因，`processed_order_id` 保留订单关联）
 - **Phase 20：防卡死改造与策略信息查询接口** ✅ — QMT/xtdata 阻塞调用全部经 `run_blocking` 移出事件循环并加超时（专用线程池 16 workers，普通 10s / 含行情 30s）；DB 加固（sqlite busy timeout + WAL、commit 失败回滚、共享 session RLock 串行化）；watchdog connect/stop 加超时；新增 `GET /api/strategy_info`（仅策略 Token，QMT 断开 503），外部服务可查询本策略基本信息与资金汇总用于下单前资金自查；前端修复填 token 连接与页面加载时 dashboard/strategies 重复请求（in-flight 合并 + 冷却守卫）
+- **Phase 21：调仓资金不足延迟买入（卖单成交驱动 + 部分成交增量入账）** ✅ — 解决聚宽等外部策略同时发出"卖 A、买 B"信号时，卖单冻结持仓导致买单资金不足的调仓失败问题。新增策略级开关 `defer_buy_on_insufficient_funds`（默认关，向后兼容）；触发条件为开关开启且同策略存在在途卖单（pending/partial）时，买单资金不足被挂起到 `pending_buy_orders` 表，5 秒轮询在 `poll_and_reconcile` 之后自动重试；卖单部分/全部成交时通过 `OrderTracker.on_fill_progress` 回调驱动 `StrategyManager.settle_partial_sell` 增量入账回款，`reconcile_position`/`rollback_position` 改补差模式避免重复入账或误扣冻结；target/value 类挂起单重试时按当时持仓重算 delta；超时（默认 30 分钟，可配 `PENDING_BUY_EXPIRE_MINUTES`）未成交标记 `expired` 并 Bark 通知；新增 Alembic 迁移、9 张数据表、`tests/repositories/test_pending_buy.py` 与 server/strategy_manager 集成测试
 
 ---
 
@@ -646,3 +693,5 @@ CORS_ALLOW_ORIGINS=https://example.com
 21. 模拟 QMT `order_stock` / `cancel_order_stock` 返回 `-1` 或 `query_stock_asset` 返回 `None` → 服务端记录结构化错误日志并返回 HTTP 500，策略乐观持仓正确回滚
 22. `POST /api/orders/{order_id}/cancel` 正常撤单 → 订单状态变 failed，Mock 内部走 `cancel_order_stock`，冻结资金释放
 23. 策略配置"按最大可买数量下单"→ 各买入路径（按数量/目标仓位/按金额/目标市值/通用下单/手动下单）超资按最大整手数成交、冻结金额与订单数量以封顶后为准；不足一手时聚宽/通用接口返回"订单取消"、手动下单返回 400；改回默认"放弃本次下单"后超资拒单；封顶/取消的信号在信号日志中记为异常并注明请求股数与实际下单股数，未封顶信号不标记
+24. 策略开启"资金不足时挂起等待卖出成交"→ 同策略存在在途卖单时买单因资金不足返回 `deferred: true` 并写入 `pending_buy_orders`；卖单全部/部分成交后 `process_all` 自动重试买入，target/value 类按当时持仓重算 delta；资金仍不足时保持 waiting；超时后标记 expired 并 Bark 通知；开关关闭或无在途卖单时维持原资金不足错误语义
+25. 卖单部分成交 → `settle_partial_sell` 立即将回款增量入账并扣减持仓，`reconcile_position` 终态时不重复入账；部分成交后手动撤单 → `rollback_position` 只释放未成交部分冻结，账务平

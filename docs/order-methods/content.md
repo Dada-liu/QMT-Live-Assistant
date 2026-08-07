@@ -126,6 +126,44 @@ jukuan_order_target_value('000001.XSHE', 0)      # 全部平仓
 **代码位置：**
 - 路由：`backend/server.py`（setup_routes 中聚宽下单 API 段）
 - 核心逻辑：`backend/jukuan_orders.py`
+- 延迟买单：`backend/pending_buy_manager.py`
+
+---
+
+## 调仓场景：延迟买入
+
+当外部策略在同一时刻发出"卖出 A、买入 B"两个信号时，卖出订单会先**冻结 A 的持仓**（资金尚未释放），如果此时 B 的买入资金超过策略可用资金，系统提供两种处理方式：
+
+1. **默认行为（开关关闭）**：按策略的 `insufficient_funds_policy` 处理——`reject` 直接报错，`max_buyable` 按最大可买数量下单（不足一手则取消）。
+2. **延迟买入（策略开启 `defer_buy_on_insufficient_funds`）**：若同策略存在在途卖单（`pending`/`partial`），买入请求会被**挂起**，返回如下响应：
+
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": null,
+    "deferred": true,
+    "pending_buy_id": "pb_xxx",
+    "message": "资金不足，已挂起等待卖出成交后自动重试买入"
+  }
+}
+```
+
+**触发条件：**
+- 策略开启「资金不足时挂起等待卖出成交」开关
+- 发起请求时，该策略在 `OrderTracker` 中至少存在一笔在途卖出订单
+- 本次买入因资金不足被拒绝（`reject` 策略）或被 `max_buyable` 封顶为 0 股取消
+
+**自动重试：**
+- 卖单每笔成交后，成交回款会**立即增量入账**到策略可用资金
+- 每 5 秒轮询在订单对账后调用 `process_all`，按策略 FIFO 重试挂起的买单
+- `target` / `target_value` 类请求重试时会按当时的最新持仓重新计算 `delta`，避免持仓变化后超买
+
+**超时与通知：**
+- 默认 30 分钟（可通过环境变量 `PENDING_BUY_EXPIRE_MINUTES` 调整）未成交，挂起买单标记为 `expired`
+- 过期时通过 Bark 推送策略级事件通知，并更新原信号日志 `error_msg`
+
+**手动下单（Web UI）不进入延迟买入**：用户在界面点击买入时若资金不足即时提示，可修改数量或等待卖单成交后手动重试。
 
 ---
 

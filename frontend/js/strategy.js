@@ -193,6 +193,7 @@ async function showStrategyModal(strategy = null) {
     const fundsInput = document.getElementById('strategy-funds');
     const fundsPolicyInput = document.getElementById('strategy-funds-policy');
     const marketPriceTypeInput = document.getElementById('strategy-market-price-type');
+    const deferBuyInput = document.getElementById('strategy-defer-buy');
     const barkNotifyInput = document.getElementById('strategy-bark-notify');
     const tokenResult = document.getElementById('strategy-token-result');
 
@@ -204,6 +205,7 @@ async function showStrategyModal(strategy = null) {
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
         if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
         if (marketPriceTypeInput) marketPriceTypeInput.value = String(strategy.default_market_price_type ?? 5);
+        if (deferBuyInput) deferBuyInput.checked = strategy.defer_buy_on_insufficient_funds === true;
         if (barkNotifyInput) barkNotifyInput.checked = strategy.bark_notify_enabled !== false;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = JSON.stringify(strategy.positions || []);
@@ -215,6 +217,7 @@ async function showStrategyModal(strategy = null) {
         if (fundsInput) fundsInput.value = '';
         if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
         if (marketPriceTypeInput) marketPriceTypeInput.value = '5';
+        if (deferBuyInput) deferBuyInput.checked = false;
         if (barkNotifyInput) barkNotifyInput.checked = true;
         if (tokenResult) tokenResult.classList.add('hidden');
         _originalStrategyPositions = null;
@@ -374,6 +377,8 @@ export function initStrategyPanel() {
         const default_market_price_type = marketPriceTypeEl ? Number(marketPriceTypeEl.value) : 5;
         const barkNotifyEl = document.getElementById('strategy-bark-notify');
         const bark_notify_enabled = barkNotifyEl ? barkNotifyEl.checked : true;
+        const deferBuyEl = document.getElementById('strategy-defer-buy');
+        const defer_buy_on_insufficient_funds = deferBuyEl ? deferBuyEl.checked : false;
 
         if (!name) {
             Toast.warning('请输入策略名称');
@@ -420,7 +425,7 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, insufficient_funds_policy, default_market_price_type, bark_notify_enabled };
+        const data = { name, description, allocated_funds, insufficient_funds_policy, default_market_price_type, bark_notify_enabled, defer_buy_on_insufficient_funds };
         const positionsChanged = editId
             ? (JSON.stringify(positions) !== _originalStrategyPositions)
             : (positions.length > 0);

@@ -1058,3 +1058,104 @@ class TestStrategyManagerFifoAndRollover:
         # today_bought_cost 必须与 avg_cost * quantity 一致
         assert pos["today_bought_cost"] == round(150 * expected_avg_cost, 4)
         assert pos["today_bought_quantity"] == 150
+
+
+class TestSettlePartialSell:
+    """卖单部分成交的增量入账（settle_partial_sell + reconcile/rollback 补差）。"""
+
+    @pytest.fixture
+    def mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="策略1", allocated_funds=100000))
+        return mgr
+
+    def _first_id(self, mgr):
+        return list(mgr._strategies.keys())[0]
+
+    def _make_sell_snapshot(self, mgr, sid, held=300, sell_qty=100):
+        mgr.update_position(sid, "000001.SZ", "buy", held, 10.0)
+        return mgr.apply_optimistic_position(sid, "000001.SZ", "sell", sell_qty, 12.0)
+
+    def test_partial_sell_settles_cash_immediately(self, mgr):
+        """部分成交回款立即入账，冻结同步扣减，可用数量不变。"""
+        sid = self._first_id(mgr)
+        snapshot = self._make_sell_snapshot(mgr, sid)
+        mgr.settle_partial_sell(sid, "000001.SZ", 60, 12.2, snapshot)
+        s = mgr.get(sid)
+        assert s.available_cash == pytest.approx(100000 - 3000 + 60 * 12.2)
+        pos = s.positions[0]
+        assert pos["quantity"] == 240
+        assert pos["frozen_quantity"] == 40
+        assert pos["available_quantity"] == 200
+        assert snapshot["settled_quantity"] == 60
+
+    def test_reconcile_after_full_incremental_no_double_count(self, mgr):
+        """全部成交均走增量后，终态 reconcile 不重复入账、不多扣持仓。"""
+        sid = self._first_id(mgr)
+        snapshot = self._make_sell_snapshot(mgr, sid)
+        mgr.settle_partial_sell(sid, "000001.SZ", 60, 12.0, snapshot)
+        mgr.settle_partial_sell(sid, "000001.SZ", 40, 12.0, snapshot)
+        mgr.reconcile_position(sid, "000001.SZ", "sell", 100, 100, 12.0, snapshot)
+        s = mgr.get(sid)
+        assert s.available_cash == pytest.approx(100000 - 3000 + 100 * 12.0)
+        pos = s.positions[0]
+        assert pos["quantity"] == 200
+        assert pos["frozen_quantity"] == 0
+        assert pos["available_quantity"] == 200
+
+    def test_reconcile_partial_terminal_releases_residual_frozen(self, mgr):
+        """部分成交后终态（成交 60/委托 100）：释放剩余冻结，不重复入账。"""
+        sid = self._first_id(mgr)
+        snapshot = self._make_sell_snapshot(mgr, sid)
+        mgr.settle_partial_sell(sid, "000001.SZ", 60, 12.0, snapshot)
+        mgr.reconcile_position(sid, "000001.SZ", "sell", 100, 60, 12.0, snapshot)
+        s = mgr.get(sid)
+        pos = s.positions[0]
+        assert pos["quantity"] == 240
+        assert pos["frozen_quantity"] == 0
+        assert pos["available_quantity"] == 240
+        assert s.available_cash == pytest.approx(100000 - 3000 + 60 * 12.0)
+
+    def test_rollback_after_incremental_keeps_settled(self, mgr):
+        """增量结算后订单失败（手动撤单走 rollback）：保留已成交入账，释放剩余冻结。"""
+        sid = self._first_id(mgr)
+        snapshot = self._make_sell_snapshot(mgr, sid)
+        mgr.settle_partial_sell(sid, "000001.SZ", 60, 12.0, snapshot)
+        mgr.rollback_position(sid, snapshot)
+        s = mgr.get(sid)
+        pos = s.positions[0]
+        assert pos["quantity"] == 240
+        assert pos["frozen_quantity"] == 0
+        assert pos["available_quantity"] == 240
+        assert s.available_cash == pytest.approx(100000 - 3000 + 60 * 12.0)
+
+    def test_multi_sell_orders_rollback_only_residual(self, mgr):
+        """同股票两笔卖单：一笔增量结算后回滚，不误扣另一笔的冻结。"""
+        sid = self._first_id(mgr)
+        mgr.update_position(sid, "000001.SZ", "buy", 1000, 10.0)
+        snap1 = mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 300, 12.0)
+        mgr.apply_optimistic_position(sid, "000001.SZ", "sell", 200, 12.0)
+        mgr.settle_partial_sell(sid, "000001.SZ", 100, 12.0, snap1)
+        mgr.rollback_position(sid, snap1)
+        pos = mgr.get(sid).positions[0]
+        assert pos["quantity"] == 900
+        assert pos["frozen_quantity"] == 200
+        assert pos["available_quantity"] == 700
+
+    def test_settle_zero_delta_noop(self, mgr):
+        sid = self._first_id(mgr)
+        snapshot = self._make_sell_snapshot(mgr, sid)
+        mgr.settle_partial_sell(sid, "000001.SZ", 0, 12.0, snapshot)
+        mgr.settle_partial_sell(sid, "000001.SZ", 10, 12.0, None)
+        s = mgr.get(sid)
+        assert s.available_cash == 100000 - 3000
+        assert "settled_quantity" not in snapshot
+
+    def test_buy_reconcile_unchanged_without_settled(self, mgr):
+        """买单无增量结算（settled=0）时 reconcile 维持原有行为。"""
+        sid = self._first_id(mgr)
+        snapshot = mgr.apply_optimistic_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.reconcile_position(sid, "000001.SZ", "buy", 100, 60, 10.2, snapshot)
+        s = mgr.get(sid)
+        assert s.positions[0]["quantity"] == 60
+        assert s.available_cash == pytest.approx(100000 - 60 * 10.2)

@@ -104,6 +104,25 @@ class BarkService:
         # 清理已离开 pending 的订单 id，避免集合无限增长
         self._stale_notified.intersection_update(pending_ids)
 
+    def notify_strategy_event(
+        self,
+        strategy_id: Optional[str],
+        title: str,
+        body: str,
+        level: Optional[str] = None,
+        sound: Optional[str] = None,
+    ) -> None:
+        """策略级自定义事件推送（挂起买单等非订单事件），沿用全局+策略级门控。"""
+        config = self._config
+        if not config.enabled or not config.device_key:
+            return
+        try:
+            if not self._strategy_lookup(strategy_id):
+                return
+        except Exception as e:
+            logger.error(f"Bark 策略开关查询失败，默认放行: {e}")
+        self._spawn(title, body, level=level, sound=sound)
+
     def _gate(self, order: TrackedOrder) -> bool:
         """全局开关 + device_key + 策略级开关，三者同时满足才推送。"""
         config = self._config

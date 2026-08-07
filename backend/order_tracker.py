@@ -27,12 +27,35 @@ class OrderTracker:
         self._repo = repository or InMemoryOrderRepository()
         self._orders: Dict[str, TrackedOrder] = {}
         self._state_change_callbacks: List[Callable[[TrackedOrder], None]] = []
+        self._fill_progress_callbacks: List[Callable[[TrackedOrder, int, float], None]] = []
         self.on_state_change(self._log_state_change)
         self._load_orders()
 
     def on_state_change(self, callback: Callable[[TrackedOrder], None]):
         """注册订单状态到达终态时的回调。"""
         self._state_change_callbacks.append(callback)
+
+    def on_fill_progress(self, callback: Callable[[TrackedOrder, int, float], None]):
+        """注册成交量推进回调（部分成交/逐笔成交），参数为 (order, 增量数量, 增量价格)。"""
+        self._fill_progress_callbacks.append(callback)
+
+    def _notify_fill_progress(self, order: TrackedOrder, old_filled: int, price: float) -> None:
+        """成交量创新高时通知订阅者（先回调后持久化，保证快照更新随订单落库）。
+
+        已到终态的订单不再通知：on_stock_order 与 on_stock_trade 可能对同一笔
+        成交各回调一次，终态后的迟来回调必须忽略，避免重复入账。
+        """
+        if order.status in (OrderState.FILLED, OrderState.FAILED):
+            return
+        delta = order.filled_quantity - old_filled
+        if delta <= 0:
+            return
+        for callback in self._fill_progress_callbacks:
+            try:
+                callback(order, delta, price)
+            except Exception:
+                # 回调失败不应影响状态机本身
+                pass
 
     def _log_state_change(self, order: TrackedOrder):
         """统一记录订单状态变化日志。"""
@@ -122,6 +145,7 @@ class OrderTracker:
         order.xtquant_status = xtquant_status
         new_status = self._normalize_status(xtquant_status)
 
+        old_filled = order.filled_quantity
         if traded_volume > 0:
             # on_stock_order / query_stock_orders 返回的是累计成交量，
             # 仅当超过当前已记录成交量时才更新，避免部分成交时被重复累加。
@@ -129,6 +153,7 @@ class OrderTracker:
                 order.filled_quantity = traded_volume
                 if traded_price > 0:
                     order.filled_price = round(traded_price, 4)
+        self._notify_fill_progress(order, old_filled, traded_price)
 
         if new_status == OrderState.FILLED:
             self._resolve(order, OrderState.FILLED, old_status, "callback")
@@ -163,9 +188,11 @@ class OrderTracker:
             return None
 
         old_status = order.status
+        old_filled = order.filled_quantity
         order.filled_quantity, order.filled_price = self._compute_fill(
             order, traded_volume, traded_price
         )
+        self._notify_fill_progress(order, old_filled, traded_price)
 
         if order.filled_quantity >= order.quantity:
             self._resolve(order, OrderState.FILLED, old_status, "trade")

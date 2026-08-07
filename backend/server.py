@@ -14,7 +14,7 @@ from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
 from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, BLOCKING_CALL_TIMEOUT_LONG
-from backend.jukuan_orders import JukuanOrderHandler, _is_future
+from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError, _is_future
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
 from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest, GenericOrderRequest
@@ -31,6 +31,7 @@ from backend.source_platform_notifier import (
     resolve_webhook_url,
 )
 from backend.bark_service import BarkService, BarkConfig
+from backend.pending_buy_manager import PendingBuyManager
 from backend.db.repositories.settings import SettingsRepository
 from config.settings import settings
 import threading
@@ -107,6 +108,7 @@ class QMTServer:
                  signal_log_repository: Optional[SignalLogRepository] = None,
                  account_repository: Optional[AccountRepository] = None,
                  settings_repository: Optional[SettingsRepository] = None,
+                 pending_buy_repository=None,
                  db_session=None):
         global _current_server
         _current_server = self
@@ -128,6 +130,15 @@ class QMTServer:
         self.strategy_manager = StrategyManager(repository=strategy_repository)
         self.bark_service = BarkService(
             settings_repository, strategy_lookup=self._bark_strategy_gate
+        )
+        self.pending_buy_manager = PendingBuyManager(
+            strategy_manager=self.strategy_manager,
+            order_tracker=self.order_tracker,
+            repository=pending_buy_repository,
+            signal_log_repository=signal_log_repository,
+            bark_service=self.bark_service,
+            handler_factory=self._get_jukuan_handler,
+            track_callback=self._track_and_apply_order,
         )
         self._register_order_state_callback()
         print(f"\n授权Token: {self.token}\n")
@@ -191,6 +202,62 @@ class QMTServer:
         else:
             raise RuntimeError("init_trader 为同步兼容方法，请在异步上下文中使用 init_trader_async")
 
+    def _get_jukuan_handler(self):
+        """返回绑定当前 trader/account 的聚宽下单处理器（连接重建后自动刷新）。"""
+        current_trader = self.trader
+        current_account = self.account
+        handler = self._jukuan_handler
+        if (
+            handler is None
+            or handler.trader is not current_trader
+            or handler.account is not current_account
+        ):
+            self._jukuan_handler = JukuanOrderHandler(
+                trader=current_trader,
+                account=current_account,
+                strategy_manager=self.strategy_manager,
+            )
+        return self._jukuan_handler
+
+    def _defer_buy_if_applicable(self, strategy_id, method_name, stock_code,
+                                 payload, signal_log, reason):
+        """买入资金不足时按策略开关挂起买单。
+
+        策略开启 defer_buy_on_insufficient_funds 且存在在途卖单时返回
+        deferred 响应 dict；否则返回 None，调用方维持原有报错路径。
+        """
+        if not strategy_id:
+            return None
+        strategy = self.strategy_manager.get(strategy_id)
+        if strategy is None or not getattr(strategy, 'defer_buy_on_insufficient_funds', False):
+            return None
+        if not self.pending_buy_manager.has_pending_sell_orders(strategy_id):
+            return None
+        pb = self.pending_buy_manager.defer(
+            strategy_id=strategy_id,
+            method_name=method_name,
+            stock_code=stock_code,
+            payload=payload,
+            signal_log_id=signal_log.id if signal_log is not None else None,
+            reason=reason,
+        )
+        if signal_log is not None and self._signal_log_repository is not None:
+            self._signal_log_repository.update_error(
+                signal_log.id, f"资金不足，已挂起等待卖出成交: {reason}"
+            )
+        return {
+            'success': True,
+            'data': {
+                'order_id': None,
+                'deferred': True,
+                'pending_buy_id': pb.id,
+                'message': (
+                    f"资金不足，已挂起等待卖出成交"
+                    f"（{settings.PENDING_BUY_EXPIRE_MINUTES} 分钟内自动重试）"
+                ),
+            },
+        }
+
     def _register_order_state_callback(self):
         """注册订单状态变更回调，用于在终态时修正策略持仓并通知源平台。"""
         webhook_mapping = settings.SOURCE_PLATFORM_WEBHOOKS or {}
@@ -228,6 +295,25 @@ class QMTServer:
             self.bark_service.notify_terminal(order)
 
         self.order_tracker.on_state_change(on_state_change)
+
+        def on_fill_progress(order, delta_qty, delta_price):
+            # 卖单部分成交：该笔回款立即计入策略可用资金（增量结算），
+            # 挂起买单在卖单缓慢成交过程中即可逐步买入
+            if (
+                order.direction == 'sell'
+                and order.strategy_id
+                and order.optimistic_position_applied
+                and order.optimistic_snapshot
+            ):
+                self.strategy_manager.settle_partial_sell(
+                    order.strategy_id,
+                    order.stock_code,
+                    delta_qty,
+                    delta_price,
+                    order.optimistic_snapshot,
+                )
+
+        self.order_tracker.on_fill_progress(on_fill_progress)
 
     def _bark_strategy_gate(self, strategy_id: Optional[str]) -> bool:
         """Bark 策略级开关：无策略订单只看全局开关；策略已删除默认放行。"""
@@ -295,6 +381,12 @@ class QMTServer:
                         # 否则 QMT 无响应时会冻结整个事件循环
                         await run_blocking(
                             self.order_tracker.poll_and_reconcile,
+                            self.trader, self.account,
+                            timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                        )
+                        # 卖单对账入账后重试挂起买单（含过期清理），顺序不能颠倒
+                        await run_blocking(
+                            self.pending_buy_manager.process_all,
                             self.trader, self.account,
                             timeout=BLOCKING_CALL_TIMEOUT_LONG,
                         )
@@ -768,20 +860,7 @@ class QMTServer:
                 raise HTTPException(status_code=503, detail=detail)
 
         def _get_jukuan_handler():
-            current_trader = _current_server.trader
-            current_account = _current_server.account
-            handler = _current_server._jukuan_handler
-            if (
-                handler is None
-                or handler.trader is not current_trader
-                or handler.account is not current_account
-            ):
-                _current_server._jukuan_handler = JukuanOrderHandler(
-                    trader=current_trader,
-                    account=current_account,
-                    strategy_manager=_current_server.strategy_manager,
-                )
-            return _current_server._jukuan_handler
+            return _current_server._get_jukuan_handler()
 
         async def _jukuan_endpoint(request: dict, x_token: str, method_name: str,
                                    raw_request: Optional[Request] = None):
@@ -825,18 +904,36 @@ class QMTServer:
                 side = request.get('side', 'long')
 
                 method = getattr(handler, method_name)
-                if method_name in ('jukuan_order', 'jukuan_order_target'):
-                    result = await run_blocking(
-                        method, qmt_code, amount,
-                        side=side, strategy_id=strategy_id,
-                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                try:
+                    if method_name in ('jukuan_order', 'jukuan_order_target'):
+                        result = await run_blocking(
+                            method, qmt_code, amount,
+                            side=side, strategy_id=strategy_id,
+                            timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                        )
+                    else:
+                        result = await run_blocking(
+                            method, qmt_code, value,
+                            side=side, strategy_id=strategy_id,
+                            timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                        )
+                except InsufficientFundsError as e:
+                    # 策略开启延迟买单且存在在途卖单时，挂起等待卖出成交
+                    deferred = _current_server._defer_buy_if_applicable(
+                        strategy_id, method_name, qmt_code, request, signal_log, str(e)
                     )
-                else:
-                    result = await run_blocking(
-                        method, qmt_code, value,
-                        side=side, strategy_id=strategy_id,
-                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    if deferred is not None:
+                        return deferred
+                    raise
+
+                # max_buyable 策略资金不足一手被取消时，同样可挂起等待卖出成交
+                if not result.get('order_id') and result.get('funds_cap_note'):
+                    deferred = _current_server._defer_buy_if_applicable(
+                        strategy_id, method_name, qmt_code, request, signal_log,
+                        result['funds_cap_note'],
                     )
+                    if deferred is not None:
+                        return deferred
 
                 # 保留原始聚宽代码便于返回和日志
                 result['jq_code'] = security
@@ -964,19 +1061,38 @@ class QMTServer:
                 stock_name = name_map.get(qmt_code) or ""
 
                 handler = _get_jukuan_handler()
-                result = await run_blocking(
-                    handler.generic_order,
-                    stock_code=qmt_code,
-                    quantity=data.quantity,
-                    direction=data.direction,
-                    price=data.price,
-                    price_type=data.price_type,
-                    order_type=data.order_type,
-                    strategy_name=strategy_name or data.strategy_name,
-                    strategy_id=strategy_id,
-                    order_remark=data.order_remark,
-                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
-                )
+                try:
+                    result = await run_blocking(
+                        handler.generic_order,
+                        stock_code=qmt_code,
+                        quantity=data.quantity,
+                        direction=data.direction,
+                        price=data.price,
+                        price_type=data.price_type,
+                        order_type=data.order_type,
+                        strategy_name=strategy_name or data.strategy_name,
+                        strategy_id=strategy_id,
+                        order_remark=data.order_remark,
+                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    )
+                except InsufficientFundsError as e:
+                    # 策略开启延迟买单且存在在途卖单时，挂起等待卖出成交
+                    deferred = _current_server._defer_buy_if_applicable(
+                        strategy_id, 'generic_order', qmt_code,
+                        data.model_dump(), signal_log, str(e),
+                    )
+                    if deferred is not None:
+                        return deferred
+                    raise
+
+                # max_buyable 策略资金不足一手被取消时，同样可挂起等待卖出成交
+                if not result.get('order_id') and result.get('funds_cap_note'):
+                    deferred = _current_server._defer_buy_if_applicable(
+                        strategy_id, 'generic_order', qmt_code,
+                        data.model_dump(), signal_log, result['funds_cap_note'],
+                    )
+                    if deferred is not None:
+                        return deferred
 
                 # 注册订单到跟踪器，并对策略持仓进行乐观更新
                 if result.get('order_id'):

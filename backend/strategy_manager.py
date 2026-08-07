@@ -59,6 +59,7 @@ class StrategyManager:
             total_asset=data.allocated_funds,
             enabled=data.enabled,
             insufficient_funds_policy=data.insufficient_funds_policy,
+            defer_buy_on_insufficient_funds=data.defer_buy_on_insufficient_funds,
             bark_notify_enabled=data.bark_notify_enabled,
             default_market_price_type=data.default_market_price_type,
         )
@@ -304,16 +305,29 @@ class StrategyManager:
         return result
 
     def rollback_position(self, strategy_id: str, snapshot: Optional[dict]):
-        """根据增量快照撤销乐观持仓更新（解冻）。"""
+        """根据增量快照撤销乐观持仓更新（解冻）。
+
+        卖单已增量结算（settled_quantity>0）时，只释放未成交部分的冻结，
+        已成交部分的持仓扣减与回款入账保留。
+        """
         strategy = self._repo.get_by_id(strategy_id)
         if not strategy or not snapshot:
             return
 
+        delta_frozen = snapshot.get("delta_frozen_quantity", 0)
+        delta_available = snapshot.get("delta_available_quantity", 0)
+        settled = int(snapshot.get("settled_quantity", 0) or 0)
+        if settled > 0:
+            # 增量成交时已按成交量扣减冻结，这里只回滚剩余未成交部分
+            residual = max(0, delta_frozen - settled)
+            delta_frozen = residual
+            delta_available = -residual if delta_available < 0 else delta_available
+
         new_positions = self._rollback_position_deltas(
             strategy.positions,
             snapshot["stock_code"],
-            snapshot.get("delta_available_quantity", 0),
-            snapshot.get("delta_frozen_quantity", 0),
+            delta_available,
+            delta_frozen,
         )
         new_cash = strategy.available_cash - snapshot.get("delta_cash", 0.0)
 
@@ -324,11 +338,63 @@ class StrategyManager:
         })
         self._persist(new_strategy)
 
+    def settle_partial_sell(self, strategy_id: str, stock_code: str,
+                            delta_qty: int, delta_price: float,
+                            snapshot: Optional[dict]):
+        """卖单部分成交时把该笔回款立即入账（增量结算）。
+
+        复用 _apply_actual_fill 入账回款并按 FIFO 扣减持仓，再显式扣减冻结量，
+        维持 available = quantity - frozen（增量成交双边同减，可用数量不变）；
+        snapshot 累加 settled_quantity，终态 reconcile / rollback 只补差未结算部分。
+        """
+        if delta_qty <= 0 or snapshot is None:
+            return
+        strategy = self._repo.get_by_id(strategy_id)
+        if not strategy:
+            return
+
+        new_positions, new_cash = self._apply_actual_fill(
+            strategy.positions,
+            strategy.available_cash,
+            stock_code,
+            "sell",
+            delta_qty,
+            delta_price,
+        )
+        # _apply_actual_fill 不动冻结量，这里显式扣减本笔成交占用的冻结
+        adjusted_positions = []
+        for pos in new_positions:
+            if pos["stock_code"] != stock_code:
+                adjusted_positions.append(pos)
+                continue
+            new_pos = dict(pos)
+            new_pos["frozen_quantity"] = max(
+                0, new_pos.get("frozen_quantity", 0) - delta_qty
+            )
+            new_pos["available_quantity"] = max(
+                0, new_pos["quantity"] - new_pos["frozen_quantity"]
+            )
+            adjusted_positions.append(new_pos)
+
+        snapshot["settled_quantity"] = int(snapshot.get("settled_quantity", 0) or 0) + delta_qty
+
+        new_strategy = strategy.model_copy(update={
+            "available_cash": new_cash,
+            "positions": adjusted_positions,
+            "updated_at": _now_iso(),
+        })
+        self._persist(new_strategy)
+
     def reconcile_position(self, strategy_id: str, stock_code: str,
                            direction: str, requested_qty: int,
                            filled_qty: int, filled_price: float,
                            snapshot: Optional[dict]):
-        """实际成交与委托不一致时，先解冻再按实际成交修正持仓。"""
+        """实际成交与委托不一致时，先解冻再按实际成交修正持仓。
+
+        卖单部分成交已增量结算（settled_quantity>0）时走补差模式：
+        rollback 只释放未成交部分的冻结，_apply_actual_fill 只入账
+        未被增量回调覆盖的成交量；买单 settled=0 时退化为原有行为。
+        """
         strategy = self._repo.get_by_id(strategy_id)
         if not strategy:
             return
@@ -337,8 +403,15 @@ class StrategyManager:
             self.rollback_position(strategy_id, snapshot)
             return
 
-        # 先回滚本订单的乐观冻结（仅撤销本订单增量，不影响其他待成交订单）
+        settled = int(snapshot.get("settled_quantity", 0) or 0) if snapshot else 0
+        unsettled_filled = filled_qty - settled if direction == "sell" else filled_qty
+
+        # 先回滚本订单的乐观冻结（rollback 内部已感知 settled，只释放未结算部分）
         self.rollback_position(strategy_id, snapshot)
+
+        if unsettled_filled <= 0:
+            # 卖单成交已全部增量入账，无需重复修正
+            return
 
         # 再按真实成交数量更新持仓
         strategy = self._repo.get_by_id(strategy_id)
@@ -347,7 +420,7 @@ class StrategyManager:
             strategy.available_cash,
             stock_code,
             direction,
-            filled_qty,
+            unsettled_filled,
             filled_price,
         )
         new_strategy = strategy.model_copy(update={

@@ -24,6 +24,14 @@ from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE, ORDER_TYPE_SET, PRIC
 FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
 
 
+class InsufficientFundsError(ValueError):
+    """策略可用资金不足（reject 策略）。
+
+    子类化 ValueError 以保持现有异常处理路径不变；
+    端点可单独捕获它实现"挂起等待卖出成交"的延迟买单逻辑。
+    """
+
+
 def _is_future(code: str) -> bool:
     """判断证券代码是否为期货品种。"""
     for suffix in FUTURE_EXCHANGES:
@@ -277,7 +285,7 @@ class JukuanOrderHandler:
                 if direction == 'buy':
                     available_cash = self._get_strategy_available_cash(strategy_id)
                     cost = quantity * freeze_price
-                    raise ValueError(
+                    raise InsufficientFundsError(
                         f"策略可用资金不足: {stock_code} 需要 {cost:.2f}, 可用 {available_cash:.2f}"
                     )
                 else:

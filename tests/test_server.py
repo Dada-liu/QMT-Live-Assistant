@@ -2692,3 +2692,164 @@ class TestStrategyInfo:
             assert "QMT 连接断开" in response.json()["detail"]
         finally:
             server._watchdog._state = ConnectionState.CONNECTED
+
+
+class TestPendingBuy:
+    """调仓资金不足时的延迟买单（/api/jukuan_order + defer 开关 + process_all 重试）。"""
+
+    def _create_strategy(self, client, server, defer=True, policy="reject",
+                         allocated_funds=100000, quantity=1000, price=10.0):
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": price}):
+            response = client.post(
+                "/api/strategies",
+                json={
+                    "name": "调仓策略",
+                    "allocated_funds": allocated_funds,
+                    "insufficient_funds_policy": policy,
+                    "defer_buy_on_insufficient_funds": defer,
+                    "positions": [{
+                        "stock_code": "000001.XSHE",
+                        "stock_name": "平安银行",
+                        "quantity": quantity,
+                        "current_price": price,
+                    }],
+                },
+                headers={"X-Token": server.token},
+            )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def _sell_all(self, client, strategy, quantity=1000):
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": -quantity},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        order_id = response.json()["data"].get("order_id")
+        assert order_id
+        return str(order_id)
+
+    def _buy(self, client, strategy, amount=1100):
+        return client.post(
+            "/api/jukuan_order",
+            json={"security": "300750.XSHE", "amount": amount},
+            headers={"X-Token": strategy["token"]},
+        )
+
+    def test_defer_disabled_returns_error(self, client, server):
+        """开关关闭（默认）时维持原错误语义。"""
+        strategy = self._create_strategy(client, server, defer=False)
+        self._sell_all(client, strategy)
+        response = self._buy(client, strategy)
+        assert response.status_code == 500
+        assert "资金不足" in response.json()["detail"]
+
+    def test_no_defer_without_pending_sell(self, client, server):
+        """开关开启但无在途卖单时不挂起，维持报错。"""
+        strategy = self._create_strategy(client, server, defer=True)
+        response = self._buy(client, strategy)
+        assert response.status_code == 500
+        assert "资金不足" in response.json()["detail"]
+
+    def test_defer_then_retry_after_sell_filled(self, client, server):
+        """挂起 → 卖单成交回款 → process_all 自动重试买入成功。"""
+        strategy = self._create_strategy(client, server, defer=True)
+        # 初始：现金 90000，持仓 1000 股@10
+        sell_order_id = self._sell_all(client, strategy)
+        assert server.order_tracker.get_order(sell_order_id).status == "pending"
+
+        # 买入 1100 股 300750（85.10）= 93610 > 90000 → 挂起
+        response = self._buy(client, strategy)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deferred"] is True
+        assert data["order_id"] is None
+        pending_buy_id = data["pending_buy_id"]
+
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "waiting"
+
+        # 卖单成交（mock 查询推进）：回款 1000×10.0 = 10000，现金 100000
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "submitted"
+        assert pb.submitted_order_id
+
+        # 买入单成交后：现金 = 100000 - 93610 = 6390
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
+        strategy_after = server.strategy_manager.get(strategy["id"])
+        assert strategy_after.available_cash == pytest.approx(6390.0)
+        assert server.strategy_manager.get_quantity(strategy["id"], "300750.SZ") == 1100
+        assert server.strategy_manager.get_quantity(strategy["id"], "000001.SZ") == 0
+
+    def test_partial_sell_progressively_affords_buy(self, client, server):
+        """卖单分批成交增量入账：第一批仍不足保持等待，全部成交后重试成功且账平。"""
+        strategy = self._create_strategy(client, server, defer=True)
+        sell_order_id = self._sell_all(client, strategy)
+
+        response = self._buy(client, strategy)
+        assert response.json()["data"]["deferred"] is True
+        pending_buy_id = response.json()["data"]["pending_buy_id"]
+
+        # 第一批成交 300 股：回款 3000，现金 93000 < 93610 → 继续等待
+        server.order_tracker.update_from_trade(sell_order_id, 300, 10.0)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        assert server.pending_buy_manager._repo.get(pending_buy_id).status == "waiting"
+        strategy_now = server.strategy_manager.get(strategy["id"])
+        assert strategy_now.available_cash == pytest.approx(93000.0)
+
+        # 第二批成交 700 股：现金 100000 ≥ 93610 → 重试成功
+        server.order_tracker.update_from_trade(sell_order_id, 700, 10.0)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "submitted"
+
+        # 账务核对：无重复入账（总额 = 90000 + 10000 - 93610 = 6390... 买入冻结后）
+        strategy_after = server.strategy_manager.get(strategy["id"])
+        assert strategy_after.available_cash == pytest.approx(100000.0 - 93610.0)
+        # 卖单已全成交：000001 清仓，无残留冻结
+        assert server.strategy_manager.get_quantity(strategy["id"], "000001.SZ") == 0
+
+    def test_max_buyable_cancelled_defers(self, client, server):
+        """max_buyable 策略资金不足一手被取消时，开关开启也可挂起。"""
+        # 现金 1000（10000 - 900×10），买不起一手 300750（8510）
+        strategy = self._create_strategy(
+            client, server, defer=True, policy="max_buyable",
+            allocated_funds=10000, quantity=900,
+        )
+        self._sell_all(client, strategy, quantity=900)
+
+        response = self._buy(client, strategy, amount=100)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deferred"] is True
+        pending_buy_id = data["pending_buy_id"]
+
+        # 卖单成交回款 9000 → 现金 10000 ≥ 8510 → 重试成功
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "submitted"
+
+    def test_expired_pending_buy(self, client, server):
+        """超时未等到回款：process_all 标记 expired。"""
+        from datetime import datetime, timedelta, timezone
+        strategy = self._create_strategy(client, server, defer=True)
+        self._sell_all(client, strategy)
+
+        response = self._buy(client, strategy)
+        pending_buy_id = response.json()["data"]["pending_buy_id"]
+
+        # 卖单一直不成交，把过期时间改到过去
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        pb.expire_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        server.pending_buy_manager._repo.update(pb)
+
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "expired"
+        assert pb.resolved_at is not None

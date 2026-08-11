@@ -165,7 +165,14 @@ export const UI = {
         `;
 
         const rows = orders.map(o => {
-            const time = o.placed_at ? new Date(o.placed_at).toLocaleTimeString() : '--';
+            // 时间列展示完整 年/月/日 时:分:秒，跨天订单可区分日期
+            const time = o.placed_at
+                ? new Date(o.placed_at).toLocaleString('zh-CN', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  })
+                : '--';
             const orderId = o.order_id || '--';
             const direction = o.direction || '--';
             const stockCode = o.stock_code || '--';

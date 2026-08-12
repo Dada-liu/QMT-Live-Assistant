@@ -554,6 +554,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 21：调仓资金不足延迟买入（卖单成交驱动 + 部分成交增量入账）** ✅ — 解决聚宽等外部策略同时发出"卖 A、买 B"信号时，卖单冻结持仓导致买单资金不足的调仓失败问题。新增策略级开关 `defer_buy_on_insufficient_funds`（默认关，向后兼容）；触发条件为开关开启且同策略存在在途卖单（pending/partial）时，买单资金不足被挂起到 `pending_buy_orders` 表，5 秒轮询在 `poll_and_reconcile` 之后自动重试；卖单部分/全部成交时通过 `OrderTracker.on_fill_progress` 回调驱动 `StrategyManager.settle_partial_sell` 增量入账回款，`reconcile_position`/`rollback_position` 改补差模式避免重复入账或误扣冻结；target/value 类挂起单重试时按当时持仓重算 delta；超时（默认 30 分钟，可配 `PENDING_BUY_EXPIRE_MINUTES`）未成交标记 `expired` 并 Bark 通知；新增 Alembic 迁移、9 张数据表、`tests/repositories/test_pending_buy.py` 与 server/strategy_manager 集成测试
 - **Phase 21.1：修复挂起买单重试误标 failed** ✅ — 修复真实环境 Windows 端测试问题：挂起买单在卖出回款后仍不足一手时，重试被错误标记为 `failed`（signal_log 写入"挂起买单failed: 策略可用资金不足一手，订单取消"）。根因为 `PendingBuyManager._retry` 仅识别 `cancelled` 字段，而 `jukuan_orders.py` 取消返回只携带 `funds_cap_note`。修复：`_retry` 同时兼容 `cancelled` 与 `funds_cap_note` 判断取消并继续 `waiting`；4 个 handler 取消返回显式加入 `'cancelled': True`；新增回归测试验证重试仍不足一手时保持 `waiting` 而非 `failed`。`pytest tests/ -q` 全量通过
 - **Phase 21.2：实时订单时间列展示完整日期** ✅ — 前端「买卖监控-实时订单」列表"时间"列由仅时分秒（`toLocaleTimeString()`）改为固定 zh-CN 格式完整展示 `年/月/日 时:分:秒`（`toLocaleString('zh-CN', {...})`，月日补零、24 小时制），跨天筛选时可直接区分订单日期；现有 160px 列宽可容纳 19 字符等宽时间串，无需调整 CSS
+- **Phase 21.3：实时订单列表新增"价格"列** ✅ — 「买卖监控-实时订单」列表在"股票"列后新增"价格"列：限价单显示委托价（`toFixed(2)`），市价单（`price=0`）显示"市价"；数据直接复用订单接口已有 `price` 字段，纯前端改动。`.signal-item` 网格由 7 列扩为 8 列（新增 70px 价格列，订单ID 列 200px→140px 补偿股票列空间），`min-width` 760px→830px
 
 ---
 

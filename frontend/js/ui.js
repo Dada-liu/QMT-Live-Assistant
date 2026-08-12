@@ -158,6 +158,7 @@ export const UI = {
             <span>订单ID</span>
             <span>方向</span>
             <span>股票</span>
+            <span>价格</span>
             <span>成交/委托</span>
             <span>状态</span>
             <span>操作</span>
@@ -181,6 +182,8 @@ export const UI = {
                 ? `${escapeHtml(stockName)}(${escapeHtml(stockCode)})`
                 : escapeHtml(stockCode);
             const volume = `${o.filled_quantity || 0}/${o.quantity || '--'}`;
+            // 价格列：限价单显示委托价（两位小数），市价单（price=0）显示“市价”
+            const price = (o.price || 0) > 0 ? o.price.toFixed(2) : '市价';
             const status = o.status || '--';
 
             let directionBadge = '';
@@ -215,6 +218,7 @@ export const UI = {
                 <span class="signal-code">${orderId}</span>
                 <span class="signal-direction">${directionBadge}</span>
                 <span class="signal-msg">${stockDisplay}</span>
+                <span>${price}</span>
                 <span>${volume}</span>
                 <span>${statusBadge}</span>
                 <span>${actionCell}</span>

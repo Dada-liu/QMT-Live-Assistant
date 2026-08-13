@@ -699,3 +699,4 @@ CORS_ALLOW_ORIGINS=https://example.com
 23. 策略配置"按最大可买数量下单"→ 各买入路径（按数量/目标仓位/按金额/目标市值/通用下单/手动下单）超资按最大整手数成交、冻结金额与订单数量以封顶后为准；不足一手时聚宽/通用接口返回"订单取消"、手动下单返回 400；改回默认"放弃本次下单"后超资拒单；封顶/取消的信号在信号日志中记为异常并注明请求股数与实际下单股数，未封顶信号不标记
 24. 策略开启"资金不足时挂起等待卖出成交"→ 同策略存在在途卖单时买单因资金不足返回 `deferred: true` 并写入 `pending_buy_orders`；卖单全部/部分成交后 `process_all` 自动重试买入，target/value 类按当时持仓重算 delta；资金仍不足时保持 waiting；超时后标记 expired 并 Bark 通知；开关关闭或无在途卖单时维持原资金不足错误语义
 25. 卖单部分成交 → `settle_partial_sell` 立即将回款增量入账并扣减持仓，`reconcile_position` 终态时不重复入账；部分成交后手动撤单 → `rollback_position` 只释放未成交部分冻结，账务平
+26. 信号日志状态列：错误信息（`error_msg`）超出列宽打点省略（状态单元格 `min-width: 0` + `overflow: hidden` 保证 grid `1fr` 轨道可收缩），hover 通过自定义 tooltip（`data-tooltip`）展示完整内容

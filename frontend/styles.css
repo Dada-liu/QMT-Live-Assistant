@@ -670,6 +670,13 @@ a:hover { text-decoration: underline; }
   z-index: 1;
 }
 
+/* 状态列：grid item 默认 min-width: auto 会撑开 1fr 轨道导致省略失效，
+   需允许收缩并裁剪溢出，内部的 .signal-log-error 才能触发打点省略 */
+.signal-log-status {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .signal-log-error {
   display: block;
   margin-top: var(--spacing-xxs);

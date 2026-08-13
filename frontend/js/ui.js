@@ -272,7 +272,8 @@ export const UI = {
             else if (status === 'success') statusBadge = '<span class="badge badge-success">正常</span>';
             else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
-            const errorTip = errorMsg ? `<span class="signal-log-error" title="${escapeHtml(errorMsg)}">${escapeHtml(errorMsg)}</span>` : '';
+            // 错误信息超出打点省略，hover 通过自定义 tooltip 展示完整内容
+            const errorTip = errorMsg ? `<span class="signal-log-error" data-tooltip="${escapeHtml(errorMsg)}">${escapeHtml(errorMsg)}</span>` : '';
 
             return `
               <div class="signal-log-item">
@@ -281,7 +282,7 @@ export const UI = {
                 <span>${escapeHtml(endpoint)}</span>
                 <span class="signal-msg">${escapeHtml(security)}</span>
                 <span>${escapeHtml(directionAmount)}</span>
-                <span>${statusBadge}${errorTip}</span>
+                <span class="signal-log-status">${statusBadge}${errorTip}</span>
               </div>
             `;
         }).join('');

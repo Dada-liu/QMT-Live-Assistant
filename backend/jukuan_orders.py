@@ -17,6 +17,7 @@ from backend.utils import (
     get_lot_size,
     get_quantity_unit,
     validate_security_type_for_strategy,
+    round_price_to_tick,
 )
 from backend.qmt_client import create_trader
 from backend.logger import logger
@@ -245,6 +246,17 @@ class JukuanOrderHandler:
         else:
             final_price_type = self._get_strategy_market_price_type(strategy_id)
 
+        # 限价委托价按最小变动价位（tick）对齐，避免非 tick 价格被交易所拒单；
+        # 对齐后 freeze_price / 委托价 / 日志 / 返回值全部使用同一价格
+        if final_price_type == FIX_PRICE and price > 0:
+            aligned_price = round_price_to_tick(price, stock_code)
+            if aligned_price != price:
+                logger.info(
+                    f"{BLUE}【聚宽下单】{RESET} {stock_code} "
+                    f"委托价按最小变动价位对齐: {price} → {aligned_price}"
+                )
+                price = aligned_price
+
         # 市价买入单（price=0 或市价报价类型）没有委托价可冻结，用最新价估算成本做校验与冻结；
         # 行情取价失败时 freeze_price=0，成本为 0 视为跳过校验，由 QMT 实盘兜底
         freeze_price = price
@@ -334,19 +346,22 @@ class JukuanOrderHandler:
                 self.strategy_manager.rollback_position(strategy_id, optimistic_snapshot)
             raise ValueError("QMT 下单失败，返回空订单号")
 
+        # 日志价格精度与 tick 一致（可转债 3 位、其余 2 位），避免显示与实际委托价不符
+        price_decimals = 3 if is_convertible_bond(stock_code) else 2
         logger.info(
             f"{BLUE}【聚宽下单】{RESET} "
             f"证券:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
             f"数量:{quantity}{unit} "
             f"价格类型:{price_type_name(final_price_type)} "
-            f"价格:{order_price:.2f} "
+            f"价格:{order_price:.{price_decimals}f} "
             f"订单编号:{order_id}"
         )
         return {
             'order_id': order_id,
             'optimistic_snapshot': optimistic_snapshot,
             'quantity': quantity,
+            'price': price,
             'price_type': final_price_type,
             'requested_quantity': requested_quantity,
             'funds_cap_note': funds_cap_note,
@@ -448,7 +463,7 @@ class JukuanOrderHandler:
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': actual_quantity,
-                'price': price,
+                'price': submit_result['price'],
                 'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
@@ -554,7 +569,7 @@ class JukuanOrderHandler:
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': actual_quantity,
-                'price': price,
+                'price': submit_result['price'],
                 'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
@@ -642,7 +657,7 @@ class JukuanOrderHandler:
                 'jq_code': qmt_to_jq(stock_code),
                 'direction': direction,
                 'quantity': actual_quantity,
-                'price': price,
+                'price': submit_result['price'],
                 'price_type': submit_result['price_type'],
                 'order_type': order_type,
                 'requested_quantity': submit_result['requested_quantity'],
@@ -802,7 +817,7 @@ class JukuanOrderHandler:
             'jq_code': qmt_to_jq(stock_code),
             'direction': direction,
             'quantity': actual_quantity,
-            'price': price,
+            'price': submit_result['price'],
             'price_type': final_price_type,
             'order_type': final_order_type,
             'requested_quantity': submit_result['requested_quantity'],

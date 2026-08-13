@@ -4,7 +4,7 @@ import { getState, setState, getStoredToken } from './state.js';
 import { refreshDashboard } from './dashboard.js';
 import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
-import { getLotSize, getQuantityUnit } from './security-utils.js';
+import { getLotSize, getQuantityUnit, getPriceDecimalPlaces, isTickAlignedPrice } from './security-utils.js';
 
 let currentFilters = {};
 let currentSignalLogFilters = { status: 'error' };
@@ -245,9 +245,9 @@ function initResendModal() {
                 Toast.warning('请输入有效的限价价格（大于0）');
                 return;
             }
-            // 最多两位小数；用 epsilon 比较避免浮点误差误判（如 12.55）
-            if (Math.abs(price * 100 - Math.round(price * 100)) > 1e-6) {
-                Toast.warning('价格最多保留两位小数');
+            // 按券种校验最小变动价位（股票 2 位、可转债 3 位小数）；epsilon 比较避免浮点误差误判
+            if (!isTickAlignedPrice(price, stockCode)) {
+                Toast.warning(`价格最多保留${getPriceDecimalPlaces(stockCode)}位小数`);
                 return;
             }
         }

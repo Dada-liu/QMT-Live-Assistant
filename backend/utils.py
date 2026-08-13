@@ -7,6 +7,7 @@ import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from backend.constants import (
     RED, GREEN, RESET, STOCK_BUY, STOCK_SELL,
@@ -112,6 +113,10 @@ _CONVERTIBLE_BOND_PREFIXES = {
 STOCK_LOT_SIZE = 100
 CONVERTIBLE_BOND_LOT_SIZE = 10
 
+# 最小变动价位（tick）：股票 0.01 元，可转债/可交换债 0.001 元
+STOCK_TICK_SIZE = 0.01
+CONVERTIBLE_BOND_TICK_SIZE = 0.001
+
 
 def is_future(code: str) -> bool:
     """判断证券代码是否为期货品种。"""
@@ -146,6 +151,33 @@ def get_lot_size(stock_code: str) -> int:
 def get_quantity_unit(stock_code: str) -> str:
     """获取委托数量的中文单位：可转债为"张"，其余为"股"。"""
     return "张" if is_convertible_bond(stock_code) else "股"
+
+
+def get_tick_size(stock_code: str) -> float:
+    """获取证券最小变动价位（tick）：可转债 0.001 元，股票 0.01 元。
+
+    期货各品种 tick 不一（如 IF 为 0.2 点），无法统一对齐，返回 0 表示跳过。
+    """
+    if is_future(stock_code):
+        return 0
+    if is_convertible_bond(stock_code):
+        return CONVERTIBLE_BOND_TICK_SIZE
+    return STOCK_TICK_SIZE
+
+
+def round_price_to_tick(price: float, stock_code: str) -> float:
+    """将委托价格按最小变动价位（tick）四舍五入（ROUND_HALF_UP）对齐。
+
+    - price <= 0（市价单占位）或品种不支持对齐（期货）时原样返回；
+    - 使用 Decimal(str(price)) 量化，避免 float 二进制误差
+      （如 10.235 的 float 实际是 10.23499…，内置 round 会得到 10.23）。
+    """
+    tick = get_tick_size(stock_code)
+    if price <= 0 or tick <= 0:
+        return price
+    quantum = Decimal(str(tick))
+    aligned = Decimal(str(price)).quantize(quantum, rounding=ROUND_HALF_UP)
+    return float(aligned)
 
 
 def validate_security_type_for_strategy(security_type: Optional[str], stock_code: str) -> None:

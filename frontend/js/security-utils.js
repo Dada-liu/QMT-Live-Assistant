@@ -21,6 +21,9 @@ const CONVERTIBLE_BOND_PREFIXES = {
 const STOCK_LOT_SIZE = 100;
 const CONVERTIBLE_BOND_LOT_SIZE = 10;
 
+const STOCK_TICK_SIZE = 0.01;
+const CONVERTIBLE_BOND_TICK_SIZE = 0.001;
+
 /** 判断证券代码是否为可转债/可交换债（QMT 或聚宽格式后缀均可） */
 export function isConvertibleBond(stockCode) {
     const code = (stockCode || '').trim().toUpperCase();
@@ -42,6 +45,23 @@ export function getLotSize(stockCode) {
 /** 委托数量单位：可转债为"张"，其余为"股" */
 export function getQuantityUnit(stockCode) {
     return isConvertibleBond(stockCode) ? '张' : '股';
+}
+
+/** 最小变动价位（tick）：可转债 0.001 元，股票 0.01 元 */
+export function getTickSize(stockCode) {
+    return isConvertibleBond(stockCode) ? CONVERTIBLE_BOND_TICK_SIZE : STOCK_TICK_SIZE;
+}
+
+/** 限价价格允许的最大小数位：股票 2 位，可转债 3 位 */
+export function getPriceDecimalPlaces(stockCode) {
+    return isConvertibleBond(stockCode) ? 3 : 2;
+}
+
+/** 校验价格是否符合最小变动价位（tick）精度；epsilon 比较避免浮点误差误判（如 12.55） */
+export function isTickAlignedPrice(price, stockCode) {
+    const tick = getTickSize(stockCode);
+    const scaled = price / tick;
+    return Math.abs(scaled - Math.round(scaled)) <= 1e-6;
 }
 
 /** 策略种类中文名 */

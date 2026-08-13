@@ -938,3 +938,76 @@ class TestSecurityTypeEnforcement:
         handler = JukuanOrderHandler(trader=trader, account=MagicMock())
         result = handler.generic_order("113665.SH", 10, direction="buy", price=126.0)
         assert result["order_id"] == 200001
+
+
+class TestPriceTickAlignment:
+    """_submit_order 汇聚点应将 FIX_PRICE 委托价按 tick 对齐（股票 2 位、可转债 3 位小数）。"""
+
+    @pytest.fixture
+    def handler(self):
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+        account = MagicMock()
+        return JukuanOrderHandler(trader=trader, account=account)
+
+    def test_sell_price_from_position_value_division_aligned(self, handler):
+        # 持仓 300 股、市值 3071 → 参考价 10.236666…，委托价应对齐到 10.24
+        mock_pos = MagicMock()
+        mock_pos.stock_code = "000001.SZ"
+        mock_pos.volume = 300
+        mock_pos.market_value = 3071.0
+        mock_pos.open_price = 10.0
+        handler.trader.query_stock_positions.return_value = [mock_pos]
+        result = handler.jukuan_order("000001.SZ", -100)
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.24
+        # 返回值中的价格应与实际委托价一致
+        assert result["price"] == 10.24
+
+    def test_sell_price_from_strategy_avg_cost_aligned(self):
+        # 策略 avg_cost 为 4 位记账小数（10.2345），委托价应对齐到 10.23
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+        account = MagicMock()
+        strategy = MagicMock()
+        strategy.positions = [{
+            "stock_code": "000001.SZ", "quantity": 300,
+            "available_quantity": 300, "frozen_quantity": 0, "avg_cost": 10.2345,
+        }]
+        strategy_manager = MagicMock()
+        strategy_manager.get.return_value = strategy
+        handler = JukuanOrderHandler(
+            trader=trader, account=account, strategy_manager=strategy_manager
+        )
+        result = handler.jukuan_order("000001.SZ", -100, strategy_id="strat-1")
+        call = trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 10.23
+        assert result["price"] == 10.23
+
+    def test_generic_order_passthrough_price_aligned(self, handler):
+        # /api/order 透传的任意精度价格同样对齐
+        result = handler.generic_order("000001.SZ", 100, direction="buy", price=12.3456)
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == FIX_PRICE
+        assert call.kwargs["price"] == 12.35
+        assert result["price"] == 12.35
+
+    def test_bond_price_rounds_to_three_decimals(self, handler):
+        result = handler.generic_order("113665.SH", 10, direction="sell", price=123.4567)
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price"] == 123.457
+        assert result["price"] == 123.457
+
+    def test_bond_legit_three_decimal_price_kept(self, handler):
+        result = handler.generic_order("113665.SH", 10, direction="sell", price=123.456)
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price"] == 123.456
+
+    def test_market_order_price_untouched(self, handler):
+        # 市价单不发送价格，price=0 保持原样且报价类型为最新价
+        handler.generic_order("000001.SZ", 100, direction="buy", price=0)
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0

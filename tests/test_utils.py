@@ -27,6 +27,8 @@ from backend.utils import (
     get_lot_size,
     get_quantity_unit,
     validate_security_type_for_strategy,
+    get_tick_size,
+    round_price_to_tick,
 )
 from backend.constants import (
     STOCK_BUY, STOCK_SELL,
@@ -471,3 +473,49 @@ class TestValidateSecurityTypeForStrategy:
     def test_bond_strategy_rejects_future(self):
         with pytest.raises(ValueError, match="策略种类为可转债"):
             validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "RB8888.XSGE")
+
+
+class TestGetTickSize:
+    def test_stock_tick(self):
+        assert get_tick_size("000001.SZ") == 0.01
+        assert get_tick_size("600000.SH") == 0.01
+        assert get_tick_size("830799.BJ") == 0.01
+
+    def test_convertible_bond_tick(self):
+        assert get_tick_size("113665.SH") == 0.001
+        assert get_tick_size("127059.SZ") == 0.001
+
+    def test_future_tick_returns_zero(self):
+        # 期货各品种最小变动价位不一（如 IF 0.2），暂不支持对齐，返回 0 表示跳过
+        assert get_tick_size("RB8888.XSGE") == 0
+
+
+class TestRoundPriceToTick:
+    def test_stock_rounds_to_two_decimals(self):
+        assert round_price_to_tick(10.2366, "000001.SZ") == 10.24
+        assert round_price_to_tick(10.2345, "000001.SZ") == 10.23
+
+    def test_stock_half_up(self):
+        # ROUND_HALF_UP：10.235 → 10.24（float round 在二进制下结果不可靠，须用 Decimal）
+        assert round_price_to_tick(10.235, "600000.SH") == 10.24
+
+    def test_stock_already_aligned_unchanged(self):
+        assert round_price_to_tick(10.24, "000001.SZ") == 10.24
+
+    def test_division_price_aligned(self):
+        # 模拟 market_value / volume 产生的任意位小数（3071/300 = 10.236666…）
+        assert round_price_to_tick(3071 / 300, "000001.SZ") == 10.24
+
+    def test_bond_rounds_to_three_decimals(self):
+        assert round_price_to_tick(123.4567, "113665.SH") == 123.457
+        assert round_price_to_tick(123.4564, "113665.SH") == 123.456
+
+    def test_bond_keeps_legit_three_decimals(self):
+        assert round_price_to_tick(123.456, "127059.SZ") == 123.456
+
+    def test_non_positive_price_unchanged(self):
+        assert round_price_to_tick(0.0, "000001.SZ") == 0.0
+        assert round_price_to_tick(-1.5, "000001.SZ") == -1.5
+
+    def test_future_price_unchanged(self):
+        assert round_price_to_tick(3512.345678, "RB8888.XSGE") == 3512.345678

@@ -373,3 +373,52 @@ QMT-live-assistant/
 ```bash
 pytest tests/ -v
 ```
+
+## 数据库迁移（Alembic）
+
+表结构变更由 Alembic 统一管理（SQLAlchemy 2.0 + SQLite），迁移脚本位于 `backend/db/migrations/versions/`，数据文件为 `./data/qmt_live_assistant.db`。**应用启动时不会自动建表/迁移**，拉取包含新迁移的代码后需手动执行：
+
+```bash
+alembic upgrade head   # 迁移到最新版本
+alembic current        # 查看当前版本
+alembic history        # 查看完整迁移链
+```
+
+### 新增字段时的旧数据迁移流程
+
+以「strategies 表新增 `security_type` 列」为例（对应迁移 `b5c1d8f2a3e4`）：
+
+1. **修改数据库模型**：在 `backend/db/models/` 对应模型中添加列定义；
+2. **编写迁移脚本**：`alembic revision -m "add security_type to strategies"` 生成骨架。**项目约定新列一律 `nullable=True`**，不要求存量行立刻有值：
+
+   ```python
+   def upgrade() -> None:
+       # 存量数据为 NULL，读取时归一为 stock
+       op.add_column('strategies', sa.Column('security_type', sa.String(length=32), nullable=True))
+
+   def downgrade() -> None:
+       op.drop_column('strategies', 'security_type')
+   ```
+
+3. **存量数据处理**（二选一）：
+   - **读取归一**（推荐，项目惯例）：新列保持 NULL，Repository/领域模型读取时把 NULL 视作默认值——如 `security_type` NULL 归一为 `stock`、`insufficient_funds_policy` NULL 归一为 `reject`。零回填风险，可随时回滚；
+   - **迁移回填**：确需把默认值落库时，在 `upgrade()` 中追加 UPDATE：
+     ```python
+     op.execute("UPDATE strategies SET security_type = 'stock' WHERE security_type IS NULL")
+     ```
+4. **同步改动**：领域模型（`backend/models/`）、Repository 映射、相关 API 与前端；
+5. **执行迁移**：先备份 `./data/qmt_live_assistant.db`，再执行 `alembic upgrade head`；
+6. **回归验证**：`pytest tests/ -v`。仓储层测试用 `Base.metadata.create_all` 建内存库，重点覆盖 NULL 存量数据的归一读取逻辑。
+
+### 注意事项
+
+- **回滚**：`alembic downgrade -1` 回退一步；回滚会删除新增列（连同回填的数据），操作前务必备份数据文件；
+- **`downgrade()` 必须实现**：每个迁移脚本都要可回滚，与现有迁移保持一致；
+- **SQLite 限制**：`ADD COLUMN` 直接支持，`DROP COLUMN` 需要 SQLite ≥ 3.35；**修改列类型或给已有列增删约束**需用 `batch_alter_table`（重建表）：
+
+  ```python
+  with op.batch_alter_table('orders') as batch_op:
+      batch_op.alter_column('price', type_=sa.Float(), nullable=False)
+  ```
+
+- **迁移链**：脚本通过 `down_revision` 串联，多人协作产生多个 head 时用 `alembic merge heads` 合并。

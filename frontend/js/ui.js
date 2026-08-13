@@ -695,9 +695,9 @@ export const UI = {
             <div class="card strategy-overview-card clickable${isActive ? ' active' : ''}"
                  data-strategy-id="${s.id}">
                 <div class="strategy-overview-header">
+                    <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
                     <span class="strategy-overview-name">${escapeHtml(s.name)}</span>
                     <span class="strategy-type-tag strategy-type-tag-${s.security_type === 'convertible_bond' ? 'bond' : 'stock'}">${getSecurityTypeName(s.security_type)}</span>
-                    <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
                 </div>
                 <div class="strategy-overview-metrics">
                     <div class="strategy-overview-metrics-row">

@@ -88,9 +88,9 @@ function renderStrategyList() {
             <div class="strategy-item-info">
                 <div>
                     <div class="strategy-name">
+                        <span class="status-dot ${s.enabled ? 'running' : 'stopped'}" style="margin-left:6px;"></span>
                         ${escapeHtml(s.name)}
                         <span class="strategy-type-tag strategy-type-tag-${s.security_type === 'convertible_bond' ? 'bond' : 'stock'}">${getSecurityTypeName(s.security_type)}</span>
-                        <span class="status-dot ${s.enabled ? 'running' : 'stopped'}" style="margin-left:6px;"></span>
                     </div>
                     ${s.description ? `<div class="strategy-desc">${escapeHtml(s.description)}</div>` : ''}
                 </div>

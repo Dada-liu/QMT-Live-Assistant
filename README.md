@@ -304,7 +304,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 
 请求头：`X-Token: <策略Token>`
 
-- `security`：证券代码，聚宽格式（`.XSHE`/`.XSHG`/`.XBJ`）或 QMT 格式均可，后端自动归一化为 QMT 格式
+- `security`：证券代码，聚宽格式（`.XSHE`/`.XSHG`/`.XBJ`）、QMT 格式（`.SZ`/`.SH`/`.BJ`）或纯 6 位数字均可，后端自动归一化为 QMT 格式（纯数字按代码段补全市场后缀，含可转债精确分流：沪 110/111/113/118/132、深 123/127/128/117）
 - `amount`：目标数量，正数买入、负数卖出
 - `side`：股票默认 `long`；期货可指定 `short`
 - `notify_source` / `source_platform_webhook` / `source_platform`：可选，开启源平台状态通知

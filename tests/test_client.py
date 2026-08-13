@@ -47,6 +47,22 @@ class TestAddStockSuffix:
     def test_bj_stock(self):
         assert add_stock_suffix("830001") == "830001.BJ"
 
+    def test_sh_convertible_bonds(self):
+        assert add_stock_suffix("113665") == "113665.SH"
+        assert add_stock_suffix("110043") == "110043.SH"
+        assert add_stock_suffix("118003") == "118003.SH"
+
+    def test_sz_convertible_bonds(self):
+        assert add_stock_suffix("123001") == "123001.SZ"
+        assert add_stock_suffix("127059") == "127059.SZ"
+        assert add_stock_suffix("128033") == "128033.SZ"
+
+    def test_exchangeable_bonds(self):
+        # 深市可交换债 117 不能被通用 11 前缀误判为沪市
+        assert add_stock_suffix("117001") == "117001.SZ"
+        # 沪市可交换债 132
+        assert add_stock_suffix("132018") == "132018.SH"
+
     def test_invalid_code(self):
         with pytest.raises(ValueError):
             add_stock_suffix("12345")

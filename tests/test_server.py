@@ -703,6 +703,35 @@ class TestConvertibleBondOrderApi:
         assert response.status_code == 200
         assert response.json()["data"]["security_type"] == "convertible_bond"
 
+    def test_jukuan_order_plain_digits_bond_normalized(self, client, server):
+        """纯数字无后缀转债代码信号自动补全市场后缀。
+
+        回归：真实环境信号 security="113665"（无后缀）时 normalize_to_qmt 原样返回，
+        导致行情/持仓查询落空，报"无法获取最新价格"。
+        """
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "113665", "amount": 10},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["stock_code"] == "113665.SH"
+        assert data["direction"] == "buy"
+        assert data["quantity"] == 10
+
+    def test_jukuan_order_plain_digits_sz_bond_normalized(self, client, server):
+        """深市转债纯数字代码同样自动补全为 .SZ 后缀。"""
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "127059", "amount": 10},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["stock_code"] == "127059.SZ"
+
 
 class TestSourcePlatformNotification:
     """源平台订单状态通知测试"""

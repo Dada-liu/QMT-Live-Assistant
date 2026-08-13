@@ -110,6 +110,17 @@ class TestNormalizeToQmt:
     def test_future_code_unchanged(self):
         assert normalize_to_qmt("RB8888.XSGE") == "RB8888.XSGE"
 
+    def test_plain_digits_stock_suffixed(self):
+        # 6 位纯数字（无后缀）按代码段自动补全市场后缀
+        assert normalize_to_qmt("600000") == "600000.SH"
+        assert normalize_to_qmt("000001") == "000001.SZ"
+
+    def test_plain_digits_bond_suffixed(self):
+        # 转债按代码段精确分流：113665 沪市、127059 深市、117001 深市可交换债
+        assert normalize_to_qmt("113665") == "113665.SH"
+        assert normalize_to_qmt("127059") == "127059.SZ"
+        assert normalize_to_qmt("117001") == "117001.SZ"
+
     def test_empty_code(self):
         assert normalize_to_qmt("") == ""
 

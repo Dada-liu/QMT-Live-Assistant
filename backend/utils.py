@@ -32,11 +32,18 @@ def add_stock_suffix(stock_code: str) -> str:
     if len(stock_code) != 6 or not stock_code.isdigit():
         raise ValueError("股票代码必须是6位数字")
 
+    # 转债/可交换债按代码段精确分流，且优先于通用前缀——
+    # 117 深市可交换债会被通用 11 前缀误判为沪市
+    if stock_code.startswith(_CONVERTIBLE_BOND_PREFIXES["SH"]):
+        return f"{stock_code}.SH"
+    if stock_code.startswith(_CONVERTIBLE_BOND_PREFIXES["SZ"]):
+        return f"{stock_code}.SZ"
+
     if stock_code.startswith(("00", "30", "15", "16", "18", "12")):
         return f"{stock_code}.SZ"
     elif stock_code.startswith(("60", "68", "11")):
         return f"{stock_code}.SH"
-    elif stock_code.startswith(("83", "43")):
+    elif stock_code.startswith(("83", "43", "87", "88")):
         return f"{stock_code}.BJ"
 
     return f"{stock_code}.SH"
@@ -87,7 +94,8 @@ def normalize_to_qmt(code: str) -> str:
 
     - 已是 QMT 格式（.SZ/.SH/.BJ） -> 原样返回
     - 聚宽格式（.XSHE/.XSHG/.XBJ） -> 转换为 QMT
-    - 其他格式（期货、6 位数字等） -> 原样返回
+    - 6 位纯数字（无后缀） -> 按代码段补全市场后缀
+    - 其他格式（期货等） -> 原样返回
     """
     if not code:
         return code
@@ -95,6 +103,8 @@ def normalize_to_qmt(code: str) -> str:
         return code
     if code.endswith(('.XSHE', '.XSHG', '.XBJ')):
         return jq_to_qmt(code)
+    if len(code) == 6 and code.isdigit():
+        return add_stock_suffix(code)
     return code
 
 

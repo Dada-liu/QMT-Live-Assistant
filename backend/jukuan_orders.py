@@ -12,6 +12,11 @@ from backend.utils import (
     price_type_name,
     validate_price_type_for_market,
     MARKET_PRICE_TYPE_SET,
+    is_future,
+    is_convertible_bond,
+    get_lot_size,
+    get_quantity_unit,
+    validate_security_type_for_strategy,
 )
 from backend.qmt_client import create_trader
 from backend.logger import logger
@@ -21,7 +26,8 @@ from backend.constants import (
 )
 from backend.qmt_xtconstant import LATEST_PRICE, FIX_PRICE, ORDER_TYPE_SET, PRICE_TYPE_SET
 
-FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
+# 兼容旧导入路径：_is_future 已迁移至 backend.utils.is_future
+_is_future = is_future
 
 
 class InsufficientFundsError(ValueError):
@@ -32,17 +38,9 @@ class InsufficientFundsError(ValueError):
     """
 
 
-def _is_future(code: str) -> bool:
-    """判断证券代码是否为期货品种。"""
-    for suffix in FUTURE_EXCHANGES:
-        if code.endswith(suffix):
-            return True
-    return False
-
-
 def _lot_size(code: str) -> int:
-    """获取证券每手数量，期货为1手，股票为100手。"""
-    return 1 if _is_future(code) else 100
+    """获取证券每手数量：期货 1，可转债 10（张），股票 100（股）。"""
+    return get_lot_size(code)
 
 
 def _round_down_to_lot(quantity: float, code: str) -> int:
@@ -235,6 +233,11 @@ class JukuanOrderHandler:
         # 报价类型校验与派生先于资金冻结，fail-fast；
         # 市价场景（price<=0 且未显式指定）使用策略配置的默认市价方式
         validate_price_type_for_market(stock_code, price_type)
+        # 券种强校验：策略种类（股票/可转债）与证券代码券种必须一致
+        validate_security_type_for_strategy(
+            self._get_strategy_security_type(strategy_id), stock_code
+        )
+        unit = get_quantity_unit(stock_code)
         if price_type is not None:
             final_price_type = price_type
         elif price > 0:
@@ -259,10 +262,10 @@ class JukuanOrderHandler:
         if direction == 'buy' and quantity < requested_quantity:
             funds_cap_note = (
                 f"策略可用资金不足，按最大可买数量下单: "
-                f"请求 {requested_quantity} 股, 实际下单 {quantity} 股"
+                f"请求 {requested_quantity} {unit}, 实际下单 {quantity} {unit}"
             )
         if direction == 'buy' and quantity == 0:
-            msg = f"策略可用资金不足一手，订单取消: {stock_code} (请求 {requested_quantity} 股)"
+            msg = f"策略可用资金不足一手，订单取消: {stock_code} (请求 {requested_quantity} {unit})"
             logger.warning(f"{YELLOW}【聚宽下单】{RESET} {msg}")
             return {
                 'order_id': None,
@@ -291,7 +294,7 @@ class JukuanOrderHandler:
                 else:
                     available = self._get_strategy_available_quantity(strategy_id, stock_code)
                     raise ValueError(
-                        f"策略可用持仓不足: {stock_code} 可用 {available} 股, 需要卖出 {quantity} 股"
+                        f"策略可用持仓不足: {stock_code} 可用 {available} {unit}, 需要卖出 {quantity} {unit}"
                     )
 
         order_price = price if final_price_type == FIX_PRICE else 0
@@ -333,9 +336,9 @@ class JukuanOrderHandler:
 
         logger.info(
             f"{BLUE}【聚宽下单】{RESET} "
-            f"股票:{jq_code}→{stock_code} "
+            f"证券:{jq_code}→{stock_code} "
             f"类型:{'买入' if order_type == STOCK_BUY else '卖出'} "
-            f"数量:{quantity} "
+            f"数量:{quantity}{unit} "
             f"价格类型:{price_type_name(final_price_type)} "
             f"价格:{order_price:.2f} "
             f"订单编号:{order_id}"
@@ -348,6 +351,15 @@ class JukuanOrderHandler:
             'requested_quantity': requested_quantity,
             'funds_cap_note': funds_cap_note,
         }
+
+    def _get_strategy_security_type(self, strategy_id: Optional[str]) -> Optional[str]:
+        """读取策略种类（stock/convertible_bond）；无策略或未设置时返回 None（跳过券种校验）。"""
+        if not strategy_id or self.strategy_manager is None:
+            return None
+        strategy = self.strategy_manager.get(strategy_id)
+        if strategy is None:
+            return None
+        return getattr(strategy, 'security_type', None)
 
     def _get_strategy_market_price_type(self, strategy_id: Optional[str]) -> int:
         """读取策略配置的默认市价下单方式；未配置或策略不存在时回退最新价。"""
@@ -383,7 +395,7 @@ class JukuanOrderHandler:
         quantity = _round_down_to_lot(abs(amount), stock_code)
 
         if quantity == 0:
-            msg = f"下单数量不足一手，调整为0股，订单取消"
+            msg = f"下单数量不足一手，调整为0{get_quantity_unit(stock_code)}，订单取消"
             logger.warning(f"{YELLOW}【聚宽下单】{RESET} {stock_code} {msg}")
             return {
                 'order_id': None,
@@ -429,7 +441,7 @@ class JukuanOrderHandler:
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
             actual_quantity = submit_result['quantity']
-            msg = f"聚宽下单: {direction} {stock_code} {actual_quantity}股"
+            msg = f"聚宽下单: {direction} {stock_code} {actual_quantity}{get_quantity_unit(stock_code)}"
             return {
                 'order_id': order_id,
                 'stock_code': stock_code,
@@ -535,7 +547,7 @@ class JukuanOrderHandler:
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
             actual_quantity = submit_result['quantity']
-            msg = f"聚宽调仓: {direction} {stock_code} {actual_quantity}股 (当前:{current_qty}→目标:{amount})"
+            msg = f"聚宽调仓: {direction} {stock_code} {actual_quantity}{get_quantity_unit(stock_code)} (当前:{current_qty}→目标:{amount})"
             return {
                 'order_id': order_id,
                 'stock_code': stock_code,
@@ -622,7 +634,7 @@ class JukuanOrderHandler:
             order_id = submit_result['order_id']
             optimistic_snapshot = submit_result.get('optimistic_snapshot')
             actual_quantity = submit_result['quantity']
-            msg = (f"聚宽价值下单: {direction} {stock_code} {actual_quantity}股 "
+            msg = (f"聚宽价值下单: {direction} {stock_code} {actual_quantity}{get_quantity_unit(stock_code)} "
                    f"(价值:{value:.2f}, 价格:{price:.2f})")
             return {
                 'order_id': order_id,
@@ -737,12 +749,18 @@ class JukuanOrderHandler:
         if price_type is not None and price_type not in PRICE_TYPE_SET:
             raise ValueError(f"不支持的 price_type: {price_type}")
 
-        # 股票买入须为整手（期货除外）
+        # 买入须为整手（股票 100 股、可转债 10 张；期货除外）
+        lot_size = get_lot_size(stock_code)
         if (final_order_type == STOCK_BUY
-                and not _is_future(stock_code)
-                and quantity % 100 != 0):
+                and not is_future(stock_code)
+                and quantity % lot_size != 0):
+            unit = get_quantity_unit(stock_code)
+            if is_convertible_bond(stock_code):
+                raise ValueError(
+                    f"可转债买入数量须为10的整数倍: {stock_code} 请求 {quantity} {unit}"
+                )
             raise ValueError(
-                f"股票买入数量须为100的整数倍: {stock_code} 请求 {quantity} 股"
+                f"股票买入数量须为100的整数倍: {stock_code} 请求 {quantity} {unit}"
             )
 
         submit_result = self._submit_order(
@@ -777,7 +795,7 @@ class JukuanOrderHandler:
         final_price_type = submit_result['price_type']
 
         actual_quantity = submit_result['quantity']
-        msg = f"通用下单: {direction} {stock_code} {actual_quantity}股"
+        msg = f"通用下单: {direction} {stock_code} {actual_quantity}{get_quantity_unit(stock_code)}"
         return {
             'order_id': submit_result['order_id'],
             'stock_code': stock_code,

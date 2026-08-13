@@ -5,7 +5,12 @@
 """
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from backend.utils import fetch_preclose_from_xtdata, fetch_open_prices_from_xtdata, fetch_stock_names_from_xtdata
+from backend.utils import (
+    fetch_preclose_from_xtdata,
+    fetch_open_prices_from_xtdata,
+    fetch_stock_names_from_xtdata,
+    validate_security_type_for_strategy,
+)
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.models.strategy import Strategy, StrategyCreate, StrategyUpdate, PositionAssignment
 
@@ -62,8 +67,11 @@ class StrategyManager:
             defer_buy_on_insufficient_funds=data.defer_buy_on_insufficient_funds,
             bark_notify_enabled=data.bark_notify_enabled,
             default_market_price_type=data.default_market_price_type,
+            security_type=data.security_type,
         )
         if data.positions:
+            for pa in data.positions:
+                validate_security_type_for_strategy(data.security_type, pa.stock_code)
             codes = [pa.stock_code for pa in data.positions]
             open_prices = fetch_open_prices_from_xtdata(codes)
             total_cost = 0.0
@@ -152,7 +160,20 @@ class StrategyManager:
 
         update_data["updated_at"] = _now_iso()
 
+        if "security_type" in update_data and positions_value is None:
+            # 仅修改策略种类时，存量持仓必须与新券种相容（否则存量持仓将无法卖出）
+            for pos in strategy.positions:
+                validate_security_type_for_strategy(
+                    update_data["security_type"], pos["stock_code"]
+                )
+
         if positions_value is not None:
+            # 持仓分配按"生效后的策略种类"校验券种一致性
+            effective_security_type = update_data.get("security_type", strategy.security_type)
+            for pa in positions_value:
+                validate_security_type_for_strategy(
+                    effective_security_type, pa["stock_code"]
+                )
             base_cash = update_data.get("available_cash", strategy.available_cash)
             new_positions, new_cash = self._rebuild_positions(
                 strategy.positions, positions_value, base_cash

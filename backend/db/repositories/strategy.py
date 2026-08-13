@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from backend.constants import INSUFFICIENT_FUNDS_REJECT
+from backend.constants import INSUFFICIENT_FUNDS_REJECT, SECURITY_TYPE_STOCK
 from backend.models.strategy import Strategy
 from backend.db.models.strategy import StrategyModel
 from backend.db.models.position import PositionModel
@@ -170,6 +170,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             defer_buy_on_insufficient_funds=bool(row.defer_buy_on_insufficient_funds) if row.defer_buy_on_insufficient_funds is not None else False,
             bark_notify_enabled=bool(row.bark_notify_enabled) if row.bark_notify_enabled is not None else True,
             default_market_price_type=row.default_market_price_type if row.default_market_price_type is not None else 5,
+            security_type=row.security_type or SECURITY_TYPE_STOCK,
             total_asset=float(row.available_cash) + sum(
                 p["avg_cost"] * p["quantity"] for p in positions
             ),
@@ -195,6 +196,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
             defer_buy_on_insufficient_funds=strategy.defer_buy_on_insufficient_funds,
             bark_notify_enabled=strategy.bark_notify_enabled,
             default_market_price_type=strategy.default_market_price_type,
+            security_type=strategy.security_type,
             trading_records=list(strategy.trading_records or []),
         )
         model.positions = self._positions_to_models(strategy)
@@ -211,6 +213,7 @@ class SQLAlchemyStrategyRepository(StrategyRepository):
         model.defer_buy_on_insufficient_funds = strategy.defer_buy_on_insufficient_funds
         model.bark_notify_enabled = strategy.bark_notify_enabled
         model.default_market_price_type = strategy.default_market_price_type
+        model.security_type = strategy.security_type
         model.last_rollover_date = strategy.last_rollover_date
         model.trading_records = list(strategy.trading_records or [])
         model.updated_at = datetime.now(timezone.utc)

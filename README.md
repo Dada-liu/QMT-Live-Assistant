@@ -11,10 +11,11 @@
 ## 功能特性
 
 **交易与下单**
+- 可转债支持：策略种类可选「股票 / 可转债」（默认股票）；可转债委托单位为"张"、10 张/手（沿用 QMT `order_stock` 同一接口），行情（最新价/开盘价/前收盘/名称）与股票同链路直接可用；聚宽四接口、通用下单、手动下单、失败重发、挂起重试全链路按券种取整与校验；沪（110/111/113/118/132）、深（123/127/128/117）代码段自动识别；**策略种类与证券代码券种强校验**——股票策略下转债代码、转债策略下股票代码均拒绝下单
 - 聚宽风格下单：`/api/jukuan_order*` 四个接口（按数量/目标仓位/按金额/目标市值），仅接受策略 Token，自动关联策略并更新持仓；无持仓时自动从行情获取最新价
 - 通用下单：`/api/order`（策略 Token），支持 `direction`、`quantity`、`price`、`price_type`、`order_type`、`source_platform`、`notify_source`、`source_platform_webhook` 等完整业务参数，适用于聚宽、果仁等任意外部信号源
 - 策略信息查询：`/api/strategy_info`（策略 Token），外部服务可获取本策略的基本信息与资金汇总（分配资金/可用资金/总资产/当日盈亏），用于下单前的资金自查
-- 手动下单：展开策略持仓明细即可点击买入/卖出，弹窗中选股票（买入自由输入、卖出从持仓选择）、数量（100 整数倍步进）、价格（市价/限价），复用策略级校验与冻结链路
+- 手动下单：展开策略持仓明细即可点击买入/卖出，弹窗中选证券（买入自由输入、卖出从持仓选择）、数量（按券种整手步进：股票 100 股、可转债 10 张）、价格（市价/限价），复用策略级校验与冻结链路
 - 策略级校验：卖出不超可用持仓；**所有买入路径均校验可用资金**（市价单按最新价估算成本）；超资处理可按策略配置——默认"放弃本次下单"，也可选"按最大可买数量下单"；**调仓场景可开启"资金不足时挂起等待卖出成交"**，同一策略存在在途卖单时买单因资金不足被拒绝将挂起，卖单部分/全部成交后自动重试买入；若卖出回款后仍不足一手则继续等待，不会误标失败（默认 30 分钟过期）
 - 源平台状态通知：下单时传入 `notify_source=true` 与 `source_platform_webhook`，订单成交/失败/撤销后服务端主动向该 webhook POST 结构化状态信息
 - 订单主动管理：每日 09:30 开盘自动轮询刷新订单状态；待成交/部分成交订单可手动撤销；失败订单可在弹窗中修改价格与数量（支持市价/限价切换）后重发；部分成交时按 QMT 累计成交量更新，避免多次回调/轮询导致成交数量被重复累加
@@ -152,7 +153,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 
 ## 策略管理
 
-1. **创建策略**：名称与分配金额必填，可选配置"策略可用资金不足时"的处理方式（默认放弃本次下单，可选按最大可买数量下单）、"资金不足时挂起等待卖出成交（调仓场景）"开关，以及从账户现有持仓分配数量；创建后自动生成独立策略 Token
+1. **创建策略**：名称、**策略种类**（股票/可转债，默认股票）与分配金额必填，可选配置"策略可用资金不足时"的处理方式（默认放弃本次下单，可选按最大可买数量下单）、"资金不足时挂起等待卖出成交（调仓场景）"开关，以及从账户现有持仓分配数量；创建后自动生成独立策略 Token；「管理策略」列表与「各策略资产」卡片的策略名旁展示种类标签
 2. **下单关联**：远程策略用策略 Token 调 `/api/jukuan_order*`，订单自动关联到该策略；target/value 类接口按策略自身持仓与可用资金计算委托数量；调仓场景同时发出卖单+买单时，买单可因资金不足被挂起，等待同策略卖单成交后自动重试
 3. **持仓与盈亏**：持仓仅持久化代码/名称/数量/成本价（QMT 格式），现价、市值、当日盈亏在请求时实时计算；每日首次刷新自动跨日合并（今日买入 → 昨日持仓，以昨收价为新成本基准）
 4. **冻结与解冻**：买入下单即冻结资金（市价单按最新价估算），成交转持仓、失败/撤单自动解冻；接口返回的 `total_asset` 含冻结资金，`frozen_cash` 单独展示
@@ -179,7 +180,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 | DELETE | `/api/strategies/{id}` | 删除策略 |
 | POST | `/api/strategies/{id}/toggle` | 切换启用/禁用 |
 | POST | `/api/strategies/refresh` | 从 QMT 刷新策略持仓行情 |
-| POST | `/api/strategies/{id}/order` | 手动下单：body `{"stock_code","direction":"buy\|sell","quantity","price","notify_source?","source_platform_webhook?","source_platform?"}`，price=0 为市价；买入须整手、卖出不超可用持仓、禁用策略返回 400 |
+| POST | `/api/strategies/{id}/order` | 手动下单：body `{"stock_code","direction":"buy\|sell","quantity","price","notify_source?","source_platform_webhook?","source_platform?"}`，price=0 为市价；买入须整手（股票 100 股、可转债 10 张）、卖出不超可用持仓、禁用策略返回 400 |
 
 ### 交易 API
 
@@ -190,7 +191,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 | GET | `/api/account-positions` | 主 Token | 账户持仓明细 |
 | GET | `/api/orders` | 主 Token | 订单历史（`?status=&strategy_name=&start_date=&end_date=`），含 `retried_as_order_id` 重发链路字段 |
 | POST | `/api/orders/{order_id}/cancel` | 主 Token | 撤销待成交/部分成交订单，标记 failed 并回滚策略持仓 |
-| POST | `/api/orders/{order_id}/resend` | 主 Token | 重发失败订单（限 failed 且未重发过）；可选请求体 `{"quantity": int, "price": float}` 覆盖原参数（price=0 为市价），买入数量须为 100 的整数倍 |
+| POST | `/api/orders/{order_id}/resend` | 主 Token | 重发失败订单（限 failed 且未重发过）；可选请求体 `{"quantity": int, "price": float}` 覆盖原参数（price=0 为市价），买入数量须为整手（股票 100 股、可转债 10 张） |
 | GET | `/api/signal-logs` | 主 Token | 信号日志（`?status=&strategy_name=&start_date=&end_date=`） |
 | POST | `/api/convert/jq-to-qmt` | 主 Token | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | 主 Token | QMT→聚宽 转换 |
@@ -199,7 +200,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 | POST | `/api/jukuan_order_value` | 策略 Token | 聚宽风格按金额下单；资金不足被挂起时返回 `deferred: true` |
 | POST | `/api/jukuan_order_target_value` | 策略 Token | 聚宽风格目标市值下单；重试时按当时持仓重新计算 delta |
 | POST | `/api/order` | 策略 Token | 通用下单接口，参数最全，支持 `notify_source` / `source_platform_webhook` / `source_platform`；资金不足被挂起时返回 `deferred: true` |
-| GET | `/api/strategy_info` | 策略 Token | 查询本策略基本信息与资金汇总（`allocated_funds` / `available_cash` / `total_asset` / `daily_pnl`），QMT 断开时返回 503 |
+| GET | `/api/strategy_info` | 策略 Token | 查询本策略基本信息与资金汇总（`security_type` / `allocated_funds` / `available_cash` / `total_asset` / `daily_pnl`），QMT 断开时返回 503 |
 
 ### 源平台状态通知
 
@@ -357,7 +358,7 @@ QMT-live-assistant/
 │   ├── index.html           # 单页应用
 │   ├── styles.css           # Coinbase 风格设计系统
 │   └── js/                  # app / state / api / ui / config-panel
-│                            # monitor / dashboard / strategy / docs / toast
+│                            # monitor / dashboard / strategy / docs / toast / security-utils
 ├── config/settings.py       # 环境变量配置
 ├── docs/                    # 使用文档（界面内可浏览）
 ├── product-doc/             # 产品与设计文档

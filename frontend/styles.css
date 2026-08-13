@@ -513,6 +513,28 @@ a:hover { text-decoration: underline; }
 .status-dot.disconnected { background-color: var(--color-muted-soft); }
 .status-dot.failed { background-color: var(--color-semantic-down); }
 
+/* 策略种类标签（股票/可转债） */
+.strategy-type-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-left: 6px;
+  border-radius: var(--rounded-full);
+  font-size: var(--text-caption);
+  font-weight: 500;
+  line-height: 1.6;
+  vertical-align: middle;
+}
+
+.strategy-type-tag-stock {
+  background-color: rgba(0, 82, 255, 0.1);
+  color: var(--color-primary);
+}
+
+.strategy-type-tag-bond {
+  background-color: rgba(244, 176, 0, 0.14);
+  color: var(--color-accent-yellow);
+}
+
 .reconnecting-banner {
   background-color: rgba(244, 176, 0, 0.12);
   color: var(--color-accent-yellow);

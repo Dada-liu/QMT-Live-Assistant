@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, List, Literal
 from pydantic import BaseModel, Field
-from backend.constants import INSUFFICIENT_FUNDS_REJECT
+from backend.constants import INSUFFICIENT_FUNDS_REJECT, SECURITY_TYPE_STOCK
 
 
 def _now_iso() -> str:
@@ -26,6 +26,7 @@ class Strategy(BaseModel):
     defer_buy_on_insufficient_funds: bool = False
     bark_notify_enabled: bool = True
     default_market_price_type: Literal[5, 44, 45] = 5
+    security_type: Literal["stock", "convertible_bond"] = SECURITY_TYPE_STOCK
     last_rollover_date: Optional[str] = None
     positions: list = []
     trading_records: list = []
@@ -52,6 +53,7 @@ class StrategyCreate(BaseModel):
     defer_buy_on_insufficient_funds: bool = False
     bark_notify_enabled: bool = True
     default_market_price_type: Literal[5, 44, 45] = 5
+    security_type: Literal["stock", "convertible_bond"] = SECURITY_TYPE_STOCK
     positions: List[PositionAssignment] = []
 
 
@@ -65,4 +67,5 @@ class StrategyUpdate(BaseModel):
     defer_buy_on_insufficient_funds: Optional[bool] = None
     bark_notify_enabled: Optional[bool] = None
     default_market_price_type: Optional[Literal[5, 44, 45]] = None
+    security_type: Optional[Literal["stock", "convertible_bond"]] = None
     positions: Optional[List[PositionAssignment]] = None

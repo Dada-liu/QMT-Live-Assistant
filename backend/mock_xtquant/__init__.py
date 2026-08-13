@@ -225,6 +225,9 @@ class MockData:
         "002188.SZ": {"open": 6.30, "high": 6.60, "low": 6.25, "close": 6.50, "preClose": 6.35},
         "003003.SZ": {"open": 8.80, "high": 9.10, "low": 8.75, "close": 9.00, "preClose": 8.85},
         "002200.SZ": {"open": 4.30, "high": 4.55, "low": 4.25, "close": 4.50, "preClose": 4.35},
+        # 可转债行情（113665 汇通转债 / 127059 永东转2）
+        "113665.SH": {"open": 126.0, "high": 127.0, "low": 125.5, "close": 126.4, "preClose": 126.0},
+        "127059.SZ": {"open": 130.0, "high": 131.0, "low": 129.5, "close": 130.2, "preClose": 130.0},
     }
     _MOCK_TIME = "20260609"
 
@@ -309,6 +312,8 @@ class MockData:
             "002188.SZ": "中天服务",
             "003003.SZ": "天元股份",
             "002200.SZ": "交投控股",
+            "113665.SH": "汇通转债",
+            "127059.SZ": "永东转2",
         }
         return {
             "InstrumentName": names.get(stock_code, ""),

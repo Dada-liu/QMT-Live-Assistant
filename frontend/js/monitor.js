@@ -4,6 +4,7 @@ import { getState, setState, getStoredToken } from './state.js';
 import { refreshDashboard } from './dashboard.js';
 import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
+import { getLotSize, getQuantityUnit } from './security-utils.js';
 
 let currentFilters = {};
 let currentSignalLogFilters = { status: 'error' };
@@ -169,9 +170,11 @@ function openResendModal(order) {
         ? `${order.stock_name}(${order.stock_code})`
         : (order.stock_code || '');
     document.getElementById('resend-direction').value = order.direction === 'buy' ? '买入' : '卖出';
-    // 数量按 100 整数倍步进；买入最低 100，卖出允许零股（可手动输入）
+    // 数量按整手步进（股票 100 股 / 可转债 10 张）；买入最低一手，卖出允许零股（可手动输入）
     const resendQuantityInput = document.getElementById('resend-quantity');
-    resendQuantityInput.min = order.direction === 'buy' ? 100 : 0;
+    const resendLotSize = getLotSize(order.stock_code);
+    resendQuantityInput.step = resendLotSize;
+    resendQuantityInput.min = order.direction === 'buy' ? resendLotSize : 0;
     resendQuantityInput.value = order.quantity || '';
 
     const priceType = document.getElementById('resend-price-type');
@@ -226,10 +229,11 @@ function initResendModal() {
             Toast.warning('请输入有效的委托数量（正整数）');
             return;
         }
-        // 买入股票须为100整数倍（期货后缀不校验，与后端规则一致）；卖出允许零股
+        // 买入须整手（股票 100 股 / 可转债 10 张；期货后缀不校验，与后端规则一致）；卖出允许零股
         const isStock = /\.(SH|SZ|BJ)$/.test(stockCode);
-        if (direction === 'buy' && isStock && quantity % 100 !== 0) {
-            Toast.warning('买入数量须为100的整数倍');
+        const lotSize = getLotSize(stockCode);
+        if (direction === 'buy' && isStock && quantity % lotSize !== 0) {
+            Toast.warning(`买入数量须为${lotSize}的整数倍（${getQuantityUnit(stockCode)}）`);
             return;
         }
 

@@ -1,6 +1,7 @@
 import { api } from './api.js';
 import { getState, setState, getStoredToken } from './state.js';
 import { Docs } from './docs.js';
+import { getSecurityTypeName } from './security-utils.js';
 
 export const UI = {
 
@@ -695,6 +696,7 @@ export const UI = {
                  data-strategy-id="${s.id}">
                 <div class="strategy-overview-header">
                     <span class="strategy-overview-name">${escapeHtml(s.name)}</span>
+                    <span class="strategy-type-tag strategy-type-tag-${s.security_type === 'convertible_bond' ? 'bond' : 'stock'}">${getSecurityTypeName(s.security_type)}</span>
                     <span class="status-dot ${s.enabled ? 'running' : 'stopped'}"></span>
                 </div>
                 <div class="strategy-overview-metrics">

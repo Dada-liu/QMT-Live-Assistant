@@ -20,6 +20,7 @@ class StrategyModel(Base):
     defer_buy_on_insufficient_funds: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     bark_notify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     default_market_price_type: Mapped[int] = mapped_column(Integer, default=5)
+    security_type: Mapped[Optional[str]] = mapped_column(String(32), default=None)
     last_rollover_date: Mapped[Optional[str]] = mapped_column(String(8), default=None)
     trading_records: Mapped[list] = mapped_column(JSON, default=list)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

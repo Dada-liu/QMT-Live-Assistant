@@ -790,3 +790,151 @@ class TestStrategyMarketPriceType:
             )
         handler.trader.order_stock.assert_not_called()
         handler.strategy_manager.apply_optimistic_position.assert_not_called()
+
+
+class TestConvertibleBondOrders:
+    """可转债下单：10 张/手、数量单位为张。"""
+
+    @pytest.fixture
+    def make_handler(self):
+        def _make(policy="reject", available_cash=50000.0):
+            trader = MagicMock()
+            trader.order_stock.return_value = 200001
+            trader.query_stock_positions.return_value = []
+            account = MagicMock()
+
+            strategy = MagicMock()
+            strategy.available_cash = available_cash
+            strategy.insufficient_funds_policy = policy
+            strategy.security_type = "convertible_bond"
+            strategy.positions = [
+                {
+                    "stock_code": "113665.SH",
+                    "quantity": 50,
+                    "available_quantity": 50,
+                    "frozen_quantity": 0,
+                    "avg_cost": 126.0,
+                }
+            ]
+
+            strategy_manager = MagicMock()
+            strategy_manager.get.return_value = strategy
+            strategy_manager.apply_optimistic_position.return_value = {
+                "stock_code": "113665.SH", "delta_cash": -1260.0,
+            }
+            return JukuanOrderHandler(
+                trader=trader, account=account, strategy_manager=strategy_manager
+            )
+        return _make
+
+    def test_lot_size_bond(self):
+        assert _lot_size("113665.SH") == 10
+        assert _lot_size("127059.SZ") == 10
+
+    def test_round_down_to_lot_bond(self):
+        assert _round_down_to_lot(25, "113665.SH") == 20
+        assert _round_down_to_lot(10, "113665.SH") == 10
+        assert _round_down_to_lot(5, "113665.SH") == 0
+
+    def test_generic_order_bond_buy_multiple_of_ten_ok(self, make_handler):
+        handler = make_handler()
+        result = handler.generic_order(
+            "113665.SH", 30, direction="buy", price=126.0, strategy_id="strat-1"
+        )
+        assert result["quantity"] == 30
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 30
+
+    def test_generic_order_bond_buy_not_lot_rejected(self, make_handler):
+        handler = make_handler()
+        with pytest.raises(ValueError, match="可转债买入数量须为10的整数倍"):
+            handler.generic_order(
+                "113665.SH", 35, direction="buy", price=126.0, strategy_id="strat-1"
+            )
+        handler.trader.order_stock.assert_not_called()
+
+    def test_jukuan_order_bond_rounds_to_ten(self, make_handler):
+        """聚宽按数量下单：转债数量按 10 张向下取整，消息单位为张。"""
+        handler = make_handler()
+        result = handler.jukuan_order("113665.SH", 35, strategy_id="strat-1")
+        assert result["quantity"] == 30
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 30
+        assert "30张" in result["message"]
+
+    def test_max_buyable_cap_rounds_to_ten(self, make_handler):
+        """max_buyable：转债按 10 张步长封顶（1300 元 ÷ 126 元/张 = 10 张）。"""
+        handler = make_handler(policy="max_buyable", available_cash=1300.0)
+        result = handler.jukuan_order("113665.SH", 100, strategy_id="strat-1")
+        assert result["quantity"] == 10
+        assert result["requested_quantity"] == 100
+        assert "张" in result["funds_cap_note"]
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["order_volume"] == 10
+
+
+class TestSecurityTypeEnforcement:
+    """策略种类与证券代码券种强校验（_submit_order 集中入口）。"""
+
+    @pytest.fixture
+    def make_handler(self):
+        def _make(security_type):
+            trader = MagicMock()
+            trader.order_stock.return_value = 200001
+            trader.query_stock_positions.return_value = []
+            account = MagicMock()
+
+            strategy = MagicMock()
+            strategy.available_cash = 50000.0
+            strategy.insufficient_funds_policy = "reject"
+            strategy.security_type = security_type
+            strategy.positions = []
+            strategy_manager = MagicMock()
+            strategy_manager.get.return_value = strategy
+            strategy_manager.apply_optimistic_position.return_value = {
+                "stock_code": "113665.SH", "delta_cash": -1260.0,
+            }
+            return JukuanOrderHandler(
+                trader=trader, account=account, strategy_manager=strategy_manager
+            )
+        return _make
+
+    def test_bond_strategy_allows_bond_order(self, make_handler):
+        handler = make_handler("convertible_bond")
+        result = handler.generic_order(
+            "113665.SH", 10, direction="buy", price=126.0, strategy_id="strat-1"
+        )
+        assert result["order_id"] == 200001
+
+    def test_bond_strategy_rejects_stock_order(self, make_handler):
+        """可转债策略下股票代码：拒单、不冻结、不调 QMT。"""
+        handler = make_handler("convertible_bond")
+        with pytest.raises(ValueError, match="策略种类为可转债"):
+            handler.generic_order(
+                "000001.SZ", 100, direction="buy", price=12.55, strategy_id="strat-1"
+            )
+        handler.trader.order_stock.assert_not_called()
+        handler.strategy_manager.apply_optimistic_position.assert_not_called()
+
+    def test_stock_strategy_rejects_bond_order(self, make_handler):
+        handler = make_handler("stock")
+        with pytest.raises(ValueError, match="策略种类为股票"):
+            handler.generic_order(
+                "113665.SH", 10, direction="buy", price=126.0, strategy_id="strat-1"
+            )
+        handler.trader.order_stock.assert_not_called()
+
+    def test_stock_strategy_allows_stock_order(self, make_handler):
+        handler = make_handler("stock")
+        result = handler.generic_order(
+            "000001.SZ", 100, direction="buy", price=12.55, strategy_id="strat-1"
+        )
+        assert result["order_id"] == 200001
+
+    def test_no_strategy_skips_security_type_validation(self):
+        """无策略（主 Token 链路）不做券种校验。"""
+        trader = MagicMock()
+        trader.order_stock.return_value = 200001
+        handler = JukuanOrderHandler(trader=trader, account=MagicMock())
+        result = handler.generic_order("113665.SH", 10, direction="buy", price=126.0)
+        assert result["order_id"] == 200001

@@ -22,8 +22,16 @@ from backend.utils import (
     price_type_name,
     validate_price_type_for_market,
     run_blocking,
+    is_future,
+    is_convertible_bond,
+    get_lot_size,
+    get_quantity_unit,
+    validate_security_type_for_strategy,
 )
-from backend.constants import STOCK_BUY, STOCK_SELL
+from backend.constants import (
+    STOCK_BUY, STOCK_SELL,
+    SECURITY_TYPE_STOCK, SECURITY_TYPE_CONVERTIBLE_BOND,
+)
 from backend.qmt_xtconstant import (
     FIX_PRICE,
     LATEST_PRICE,
@@ -367,3 +375,99 @@ class TestValidatePriceTypeForMarket:
         validate_price_type_for_market("RB8888.XSGE", MARKET_SH_CONVERT_5_CANCEL)
         with pytest.raises(ValueError, match="不支持的 price_type"):
             validate_price_type_for_market("RB8888.XSGE", 999)
+
+
+class TestIsFuture:
+    def test_future_true(self):
+        assert is_future("RB8888.XSGE") is True
+        assert is_future("IF8888.CCFX") is True
+
+    def test_future_false(self):
+        assert is_future("000001.SZ") is False
+        assert is_future("600000.SH") is False
+        assert is_future("113665.SH") is False
+
+
+class TestIsConvertibleBond:
+    def test_sh_convertible_bonds(self):
+        for code in ("110043.SH", "111000.SH", "113665.SH", "118003.SH"):
+            assert is_convertible_bond(code) is True
+
+    def test_sz_convertible_bonds(self):
+        for code in ("123001.SZ", "127059.SZ", "128033.SZ"):
+            assert is_convertible_bond(code) is True
+
+    def test_exchangeable_bonds(self):
+        # 可交换债与可转债交易规则一致（10张/手、T+0），一并识别
+        assert is_convertible_bond("132018.SH") is True
+        assert is_convertible_bond("117001.SZ") is True
+
+    def test_stocks_are_not_bonds(self):
+        for code in ("600000.SH", "688981.SH", "000001.SZ", "300750.SZ", "830799.BJ"):
+            assert is_convertible_bond(code) is False
+
+    def test_futures_are_not_bonds(self):
+        assert is_convertible_bond("RB8888.XSGE") is False
+
+    def test_case_insensitive(self):
+        assert is_convertible_bond("113665.sh") is True
+
+    def test_empty_or_suffixless(self):
+        assert is_convertible_bond("") is False
+        assert is_convertible_bond("113665") is False
+
+
+class TestGetLotSize:
+    def test_stock_lot(self):
+        assert get_lot_size("000001.SZ") == 100
+        assert get_lot_size("600000.SH") == 100
+        assert get_lot_size("830799.BJ") == 100
+
+    def test_convertible_bond_lot(self):
+        assert get_lot_size("113665.SH") == 10
+        assert get_lot_size("127059.SZ") == 10
+
+    def test_future_lot(self):
+        assert get_lot_size("RB8888.XSGE") == 1
+
+
+class TestGetQuantityUnit:
+    def test_bond_unit_zhang(self):
+        assert get_quantity_unit("113665.SH") == "张"
+        assert get_quantity_unit("127059.SZ") == "张"
+
+    def test_stock_unit_gu(self):
+        assert get_quantity_unit("000001.SZ") == "股"
+        assert get_quantity_unit("RB8888.XSGE") == "股"
+
+
+class TestValidateSecurityTypeForStrategy:
+    def test_none_security_type_passes(self):
+        validate_security_type_for_strategy(None, "113665.SH")
+        validate_security_type_for_strategy(None, "000001.SZ")
+
+    def test_stock_strategy_allows_stock(self):
+        validate_security_type_for_strategy(SECURITY_TYPE_STOCK, "000001.SZ")
+        validate_security_type_for_strategy(SECURITY_TYPE_STOCK, "600000.SH")
+
+    def test_stock_strategy_rejects_bond(self):
+        with pytest.raises(ValueError, match="策略种类为股票"):
+            validate_security_type_for_strategy(SECURITY_TYPE_STOCK, "113665.SH")
+        with pytest.raises(ValueError, match="策略种类为股票"):
+            validate_security_type_for_strategy(SECURITY_TYPE_STOCK, "127059.SZ")
+
+    def test_stock_strategy_allows_future(self):
+        # 期货代码不受策略券种限制，保持向后兼容
+        validate_security_type_for_strategy(SECURITY_TYPE_STOCK, "RB8888.XSGE")
+
+    def test_bond_strategy_allows_bond(self):
+        validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "113665.SH")
+        validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "127059.SZ")
+
+    def test_bond_strategy_rejects_stock(self):
+        with pytest.raises(ValueError, match="策略种类为可转债"):
+            validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "000001.SZ")
+
+    def test_bond_strategy_rejects_future(self):
+        with pytest.raises(ValueError, match="策略种类为可转债"):
+            validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "RB8888.XSGE")

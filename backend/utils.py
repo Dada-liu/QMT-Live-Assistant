@@ -8,7 +8,10 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from typing import Optional
-from backend.constants import RED, GREEN, RESET, STOCK_BUY, STOCK_SELL
+from backend.constants import (
+    RED, GREEN, RESET, STOCK_BUY, STOCK_SELL,
+    SECURITY_TYPE_STOCK, SECURITY_TYPE_CONVERTIBLE_BOND, SECURITY_TYPE_NAMES,
+)
 from backend.logger import logger
 from backend.qmt_xtconstant import (
     LATEST_PRICE,
@@ -92,6 +95,79 @@ def normalize_to_qmt(code: str) -> str:
     if code.endswith(('.XSHE', '.XSHG', '.XBJ')):
         return jq_to_qmt(code)
     return code
+
+
+# ---- 券种识别与交易单位 ----
+
+FUTURE_EXCHANGES = {'.CCFX', '.XDCE', '.XSGE', '.XZCE'}
+
+# 可转债/可交换债代码段（QMT 格式，按交易所区分）
+# 沪市：110/111/113/118（可转债）、132（可交换债）；
+# 深市：123/127/128（可转债）、117（可交换债）。
+_CONVERTIBLE_BOND_PREFIXES = {
+    "SH": ("110", "111", "113", "118", "132"),
+    "SZ": ("123", "127", "128", "117"),
+}
+
+STOCK_LOT_SIZE = 100
+CONVERTIBLE_BOND_LOT_SIZE = 10
+
+
+def is_future(code: str) -> bool:
+    """判断证券代码是否为期货品种。"""
+    for suffix in FUTURE_EXCHANGES:
+        if code.endswith(suffix):
+            return True
+    return False
+
+
+def is_convertible_bond(stock_code: str) -> bool:
+    """判断 QMT 格式证券代码是否为可转债/可交换债（交易规则一致，一并识别）。
+
+    无交易所后缀或交易所不可识别（期货等）时返回 False。
+    """
+    code = (stock_code or "").strip().upper()
+    if "." not in code:
+        return False
+    number, _, suffix = code.partition(".")
+    prefixes = _CONVERTIBLE_BOND_PREFIXES.get(suffix)
+    return prefixes is not None and number.startswith(prefixes)
+
+
+def get_lot_size(stock_code: str) -> int:
+    """获取证券最小交易单位（每手数量）：期货 1，可转债 10（张），股票 100（股）。"""
+    if is_future(stock_code):
+        return 1
+    if is_convertible_bond(stock_code):
+        return CONVERTIBLE_BOND_LOT_SIZE
+    return STOCK_LOT_SIZE
+
+
+def get_quantity_unit(stock_code: str) -> str:
+    """获取委托数量的中文单位：可转债为"张"，其余为"股"。"""
+    return "张" if is_convertible_bond(stock_code) else "股"
+
+
+def validate_security_type_for_strategy(security_type: Optional[str], stock_code: str) -> None:
+    """强校验策略种类与证券代码券种一致，不一致抛 ValueError。
+
+    - security_type 为空（无策略/未关联）：放行；
+    - convertible_bond：仅允许可转债/可交换债代码；
+    - stock：拒绝可转债代码；期货代码放行（保持向后兼容）。
+    """
+    if not security_type:
+        return
+    type_name = SECURITY_TYPE_NAMES.get(security_type, security_type)
+    if security_type == SECURITY_TYPE_CONVERTIBLE_BOND:
+        if not is_convertible_bond(stock_code):
+            raise ValueError(
+                f"策略种类为{type_name}，仅支持可转债代码: {stock_code}"
+            )
+    elif security_type == SECURITY_TYPE_STOCK:
+        if is_convertible_bond(stock_code):
+            raise ValueError(
+                f"策略种类为{type_name}，不支持可转债代码: {stock_code}"
+            )
 
 
 # ---- 报价类型（price_type）辅助 ----

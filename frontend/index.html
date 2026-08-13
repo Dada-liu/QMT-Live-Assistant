@@ -404,6 +404,13 @@
           <input class="form-input" type="text" id="strategy-desc" placeholder="可选描述">
         </div>
         <div class="form-group">
+          <label class="form-label required-label" for="strategy-security-type">策略种类</label>
+          <select class="form-input" id="strategy-security-type" required>
+            <option value="stock" selected>股票</option>
+            <option value="convertible_bond">可转债</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label class="form-label required-label" for="strategy-funds">分配金额 (元)</label>
           <input class="form-input" type="number" id="strategy-funds" placeholder="例如：50000" min="0" step="0.01" required>
         </div>

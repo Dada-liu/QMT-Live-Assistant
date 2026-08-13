@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, BLOCKING_CALL_TIMEOUT_LONG
-from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError, _is_future
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit
+from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
 from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest, GenericOrderRequest
@@ -681,11 +681,14 @@ class QMTServer:
             else:
                 new_price_type = order.price_type
 
-            # 人工重发时买入须为整手（期货除外）；卖出允许零股，故不校验
+            # 人工重发时买入须为整手（股票 100 股、可转债 10 张；期货除外）；卖出允许零股，故不校验
             if (order.direction == 'buy'
-                    and not _is_future(order.stock_code)
-                    and new_quantity % 100 != 0):
-                raise HTTPException(status_code=400, detail="买入数量须为100的整数倍")
+                    and not is_future(order.stock_code)
+                    and new_quantity % get_lot_size(order.stock_code) != 0):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"买入数量须为{get_lot_size(order.stock_code)}的整数倍（{get_quantity_unit(order.stock_code)}）",
+                )
 
             handler = _get_jukuan_handler()
             try:
@@ -1155,6 +1158,7 @@ class QMTServer:
                 'name': data['name'],
                 'description': data['description'],
                 'enabled': data['enabled'],
+                'security_type': data['security_type'],
                 'allocated_funds': data['allocated_funds'],
                 'available_cash': data['available_cash'],
                 'total_asset': data['total_asset'],
@@ -1280,11 +1284,14 @@ class QMTServer:
             if not qmt_code:
                 raise HTTPException(status_code=400, detail="请提供股票代码")
 
-            # 买入须为整手（期货除外），与重发端点规则一致；卖出允许零股
+            # 买入须为整手（股票 100 股、可转债 10 张；期货除外），与重发端点规则一致；卖出允许零股
             if (data.direction == 'buy'
-                    and not _is_future(qmt_code)
-                    and data.quantity % 100 != 0):
-                raise HTTPException(status_code=400, detail="买入数量须为100的整数倍")
+                    and not is_future(qmt_code)
+                    and data.quantity % get_lot_size(qmt_code) != 0):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"买入数量须为{get_lot_size(qmt_code)}的整数倍（{get_quantity_unit(qmt_code)}）",
+                )
 
             stock_name = (await run_blocking(
                 fetch_stock_names_from_xtdata, {qmt_code},

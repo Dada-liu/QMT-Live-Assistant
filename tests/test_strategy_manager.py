@@ -138,6 +138,132 @@ class TestInsufficientFundsPolicyConfig:
         assert updated.insufficient_funds_policy == "max_buyable"
 
 
+class TestSecurityTypeConfig:
+    """策略种类（security_type：stock/convertible_bond）配置项与持仓券种校验。"""
+
+    def test_domain_default_stock(self):
+        s = Strategy(name="测试策略")
+        assert s.security_type == "stock"
+
+    def test_create_model_default_stock(self):
+        data = StrategyCreate(name="测试", allocated_funds=10000)
+        assert data.security_type == "stock"
+
+    def test_create_model_convertible_bond(self):
+        data = StrategyCreate(name="测试", allocated_funds=10000, security_type="convertible_bond")
+        assert data.security_type == "convertible_bond"
+
+    def test_create_model_invalid_security_type(self):
+        with pytest.raises(Exception):
+            StrategyCreate(name="测试", allocated_funds=10000, security_type="bogus")
+
+    def test_update_model_invalid_security_type(self):
+        with pytest.raises(Exception):
+            StrategyUpdate(security_type="bogus")
+
+    def test_manager_create_default_stock(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
+        assert s.security_type == "stock"
+        assert mgr.get(s.id).security_type == "stock"
+
+    def test_manager_create_convertible_bond(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="转债策略", allocated_funds=10000, security_type="convertible_bond"
+        ))
+        assert s.security_type == "convertible_bond"
+        assert mgr.get(s.id).security_type == "convertible_bond"
+
+    def test_manager_update_security_type(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略1", allocated_funds=10000))
+        updated = mgr.update(s.id, StrategyUpdate(security_type="convertible_bond"))
+        assert updated.security_type == "convertible_bond"
+        assert mgr.get(s.id).security_type == "convertible_bond"
+
+    def test_bond_strategy_assign_stock_position_rejected(self):
+        """可转债策略分配股票持仓 → ValueError。"""
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.5}):
+            with pytest.raises(ValueError, match="可转债"):
+                mgr.create(StrategyCreate(
+                    name="转债策略", allocated_funds=100000, security_type="convertible_bond",
+                    positions=[PositionAssignment(
+                        stock_code="000001.SZ", stock_name="平安银行",
+                        quantity=100, current_price=12.5,
+                    )],
+                ))
+
+    def test_stock_strategy_assign_bond_position_rejected(self):
+        """股票策略分配可转债持仓 → ValueError。"""
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"113665.SH": 126.0}):
+            with pytest.raises(ValueError, match="股票"):
+                mgr.create(StrategyCreate(
+                    name="股票策略", allocated_funds=100000, security_type="stock",
+                    positions=[PositionAssignment(
+                        stock_code="113665.SH", stock_name="汇通转债",
+                        quantity=10, current_price=126.0,
+                    )],
+                ))
+
+    def test_bond_strategy_assign_bond_position_ok(self):
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"113665.SH": 126.0}):
+            s = mgr.create(StrategyCreate(
+                name="转债策略", allocated_funds=100000, security_type="convertible_bond",
+                positions=[PositionAssignment(
+                    stock_code="113665.SH", stock_name="汇通转债",
+                    quantity=10, current_price=126.0,
+                )],
+            ))
+        assert s.positions[0]["stock_code"] == "113665.SH"
+
+    def test_update_positions_rejects_mismatched_security_type(self):
+        """更新持仓时按策略现有券种校验。"""
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="股票策略", allocated_funds=100000))
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"113665.SH": 126.0}):
+            with pytest.raises(ValueError, match="股票"):
+                mgr.update(s.id, StrategyUpdate(positions=[
+                    PositionAssignment(stock_code="113665.SH", quantity=10, current_price=126.0),
+                ]))
+
+    def test_update_positions_uses_new_security_type(self):
+        """同一请求中修改券种并分配持仓时，按新券种校验。"""
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="策略", allocated_funds=100000))
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"113665.SH": 126.0}):
+            updated = mgr.update(s.id, StrategyUpdate(
+                security_type="convertible_bond",
+                positions=[PositionAssignment(
+                    stock_code="113665.SH", quantity=10, current_price=126.0,
+                )],
+            ))
+        assert updated.security_type == "convertible_bond"
+        assert updated.positions[0]["stock_code"] == "113665.SH"
+
+    def test_change_security_type_with_mismatched_positions_rejected(self):
+        """已有股票持仓的策略不允许直接改为可转债类型（存量持仓会无法卖出）。"""
+        mgr = StrategyManager()
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.5}):
+            s = mgr.create(StrategyCreate(
+                name="股票策略", allocated_funds=100000,
+                positions=[PositionAssignment(
+                    stock_code="000001.SZ", quantity=100, current_price=12.5,
+                )],
+            ))
+        with pytest.raises(ValueError, match="可转债"):
+            mgr.update(s.id, StrategyUpdate(security_type="convertible_bond"))
+
+
 class TestStrategyManagerCRUD:
     @pytest.fixture
     def mgr(self):

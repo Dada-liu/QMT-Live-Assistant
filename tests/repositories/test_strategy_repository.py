@@ -159,6 +159,32 @@ class TestSQLAlchemyStrategyRepository:
         found = repo.get_by_id(saved.id)
         assert found.default_market_price_type == 44
 
+    def test_security_type_defaults_to_stock(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="默认券种", allocated_funds=10000))
+        found = repo.get_by_id(saved.id)
+        assert found.security_type == "stock"
+
+    def test_save_and_update_security_type(self, db_session):
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="转债策略", allocated_funds=10000,
+                                   security_type="convertible_bond"))
+        found = repo.get_by_id(saved.id)
+        assert found.security_type == "convertible_bond"
+        updated = found.model_copy(update={"security_type": "stock"})
+        repo.save(updated)
+        assert repo.get_by_id(saved.id).security_type == "stock"
+
+    def test_null_security_type_normalized_to_stock(self, db_session):
+        """历史数据中 NULL 的 security_type 应归一为 stock。"""
+        repo = SQLAlchemyStrategyRepository(db_session)
+        saved = repo.save(Strategy(name="旧数据", allocated_funds=10000))
+        row = db_session.get(StrategyModel, saved.id)
+        row.security_type = None
+        db_session.commit()
+        found = repo.get_by_id(saved.id)
+        assert found.security_type == "stock"
+
         updated = saved.model_copy(update={"default_market_price_type": 45})
         repo.save(updated)
         found = repo.get_by_id(saved.id)

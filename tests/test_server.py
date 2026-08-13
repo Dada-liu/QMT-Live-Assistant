@@ -612,6 +612,98 @@ class TestGenericOrderApi:
         assert "不支持的 price_type" in response.json()["detail"]
 
 
+class TestConvertibleBondOrderApi:
+    """可转债下单与策略种类强校验的端到端测试。"""
+
+    def _create_strategy(self, client, server, security_type=None):
+        body = {"name": f"测试策略-{security_type or 'stock'}", "allocated_funds": 100000}
+        if security_type:
+            body["security_type"] = security_type
+        response = client.post(
+            "/api/strategies",
+            json=body,
+            headers={"X-Token": server.token},
+        )
+        return response.json()["data"]
+
+    def test_bond_strategy_buy_bond_multiple_of_ten(self, client, server):
+        """可转债策略买转债（10 张整数倍）成功，数量单位为张。"""
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            "/api/order",
+            json={"security": "113665.XSHG", "direction": "buy", "quantity": 30, "price": 126.0},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["stock_code"] == "113665.SH"
+        assert data["quantity"] == 30
+        assert "30张" in data["message"]
+
+    def test_bond_strategy_buy_bond_not_lot_rejected(self, client, server):
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            "/api/order",
+            json={"security": "113665.XSHG", "direction": "buy", "quantity": 35, "price": 126.0},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "10的整数倍" in response.json()["detail"]
+
+    def test_stock_strategy_buy_bond_rejected(self, client, server):
+        """股票策略（默认）下可转债代码被强校验拒绝。"""
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/order",
+            json={"security": "113665.XSHG", "direction": "buy", "quantity": 10, "price": 126.0},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "策略种类为股票" in response.json()["detail"]
+
+    def test_bond_strategy_buy_stock_rejected(self, client, server):
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            "/api/order",
+            json={"security": "000001.XSHE", "direction": "buy", "quantity": 100, "price": 12.5},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 400
+        assert "策略种类为可转债" in response.json()["detail"]
+
+    def test_manual_order_bond_buy(self, client, server):
+        """手动下单：可转债策略买 30 张转债成功。"""
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "127059.SZ", "direction": "buy", "quantity": 30, "price": 130.0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["quantity"] == 30
+
+    def test_manual_order_bond_not_lot_rejected(self, client, server):
+        """手动下单：转债买入非 10 张整数倍返回 400。"""
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.post(
+            f"/api/strategies/{strategy['id']}/order",
+            json={"stock_code": "127059.SZ", "direction": "buy", "quantity": 35, "price": 130.0},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 400
+        assert "10的整数倍" in response.json()["detail"]
+
+    def test_strategy_info_returns_security_type(self, client, server):
+        """策略信息接口返回策略种类。"""
+        strategy = self._create_strategy(client, server, "convertible_bond")
+        response = client.get(
+            "/api/strategy_info",
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["security_type"] == "convertible_bond"
+
+
 class TestSourcePlatformNotification:
     """源平台订单状态通知测试"""
 
@@ -2641,11 +2733,12 @@ class TestStrategyInfo:
         assert body["success"] is True
         data = body["data"]
         assert set(data.keys()) == {
-            "id", "name", "description", "enabled",
+            "id", "name", "description", "enabled", "security_type",
             "allocated_funds", "available_cash", "total_asset", "daily_pnl",
         }
         assert data["id"] == strategy["id"]
         assert data["name"] == "信息查询策略"
+        assert data["security_type"] == "stock"
         assert data["allocated_funds"] == 88800
         # 白名单之外：不暴露 token / 持仓 / 交易记录
         assert "token" not in data

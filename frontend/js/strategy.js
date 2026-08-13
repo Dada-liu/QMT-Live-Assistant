@@ -3,6 +3,7 @@ import { getState } from './state.js';
 import { UI } from './ui.js';
 import { Toast } from './toast.js';
 import { applyOrderFilters, fetchOrders } from './monitor.js';
+import { getLotSize, getQuantityUnit, getSecurityTypeName } from './security-utils.js';
 
 let _strategies = [];
 let _originalStrategyPositions = null;
@@ -88,6 +89,7 @@ function renderStrategyList() {
                 <div>
                     <div class="strategy-name">
                         ${escapeHtml(s.name)}
+                        <span class="strategy-type-tag strategy-type-tag-${s.security_type === 'convertible_bond' ? 'bond' : 'stock'}">${getSecurityTypeName(s.security_type)}</span>
                         <span class="status-dot ${s.enabled ? 'running' : 'stopped'}" style="margin-left:6px;"></span>
                     </div>
                     ${s.description ? `<div class="strategy-desc">${escapeHtml(s.description)}</div>` : ''}
@@ -190,6 +192,7 @@ async function showStrategyModal(strategy = null) {
     const editId = document.getElementById('strategy-edit-id');
     const nameInput = document.getElementById('strategy-name');
     const descInput = document.getElementById('strategy-desc');
+    const securityTypeInput = document.getElementById('strategy-security-type');
     const fundsInput = document.getElementById('strategy-funds');
     const fundsPolicyInput = document.getElementById('strategy-funds-policy');
     const marketPriceTypeInput = document.getElementById('strategy-market-price-type');
@@ -202,6 +205,7 @@ async function showStrategyModal(strategy = null) {
         if (editId) editId.value = strategy.id;
         if (nameInput) nameInput.value = strategy.name || '';
         if (descInput) descInput.value = strategy.description || '';
+        if (securityTypeInput) securityTypeInput.value = strategy.security_type || 'stock';
         if (fundsInput) fundsInput.value = strategy.allocated_funds || 0;
         if (fundsPolicyInput) fundsPolicyInput.value = strategy.insufficient_funds_policy || 'reject';
         if (marketPriceTypeInput) marketPriceTypeInput.value = String(strategy.default_market_price_type ?? 5);
@@ -214,6 +218,7 @@ async function showStrategyModal(strategy = null) {
         if (editId) editId.value = '';
         if (nameInput) nameInput.value = '';
         if (descInput) descInput.value = '';
+        if (securityTypeInput) securityTypeInput.value = 'stock';
         if (fundsInput) fundsInput.value = '';
         if (fundsPolicyInput) fundsPolicyInput.value = 'reject';
         if (marketPriceTypeInput) marketPriceTypeInput.value = '5';
@@ -312,7 +317,7 @@ async function loadAccountPositionsForAssign(strategy) {
                                placeholder="0"
                                min="0"
                                max="${available}"
-                               step="100">
+                               step="${getLotSize(code)}">
                     </td>
                 </tr>
             `;
@@ -370,6 +375,8 @@ export function initStrategyPanel() {
         const editId = editIdEl ? editIdEl.value : '';
         const name = nameEl ? nameEl.value.trim() : '';
         const description = descEl ? descEl.value.trim() : '';
+        const securityTypeEl = document.getElementById('strategy-security-type');
+        const security_type = securityTypeEl ? securityTypeEl.value : 'stock';
         const fundsStr = fundsEl ? fundsEl.value.trim() : '';
         const allocated_funds = parseFloat(fundsStr) || 0;
         const insufficient_funds_policy = fundsPolicyEl ? fundsPolicyEl.value : 'reject';
@@ -396,9 +403,10 @@ export function initStrategyPanel() {
         for (const input of qtyInputs) {
             const qty = parseInt(input.value, 10) || 0;
             if (qty > 0) {
-                if (qty % 100 !== 0) {
+                const lotSize = getLotSize(input.dataset.stockCode);
+                if (qty % lotSize !== 0) {
                     const label = input.dataset.stockName || input.dataset.stockCode;
-                    Toast.warning(`${label} 分配数量须为100的整数倍`);
+                    Toast.warning(`${label} 分配数量须为${lotSize}的整数倍（${getQuantityUnit(input.dataset.stockCode)}）`);
                     return;
                 }
                 const max = parseInt(input.dataset.max, 10) || 0;
@@ -425,7 +433,7 @@ export function initStrategyPanel() {
             }
         }
 
-        const data = { name, description, allocated_funds, insufficient_funds_policy, default_market_price_type, bark_notify_enabled, defer_buy_on_insufficient_funds };
+        const data = { name, description, security_type, allocated_funds, insufficient_funds_policy, default_market_price_type, bark_notify_enabled, defer_buy_on_insufficient_funds };
         const positionsChanged = editId
             ? (JSON.stringify(positions) !== _originalStrategyPositions)
             : (positions.length > 0);
@@ -572,10 +580,17 @@ function openStrategyOrderModal(direction) {
         }).join('');
     }
 
-    // 数量按 100 整数倍步进；买入最低 100，卖出允许零股（可手动输入）
+    // 数量按整手步进（股票 100 股 / 可转债 10 张）；买入最低一手，卖出允许零股（可手动输入）
     const quantityInput = document.getElementById('order-quantity');
-    quantityInput.min = isBuy ? 100 : 0;
+    quantityInput.step = getLotSize(isBuy ? '' : stockSelect.value);
+    quantityInput.min = isBuy ? getLotSize('') : 0;
     quantityInput.value = '';
+    // 买入模式：代码输入时按券种动态调整数量步进与提示单位
+    codeInput.oninput = () => {
+        const lot = getLotSize(codeInput.value.trim().toUpperCase());
+        quantityInput.step = lot;
+        quantityInput.min = lot;
+    };
     // 报价方式预选策略配置的默认市价方式（5 最新价 / 44 对手方最优 / 45 本方最优）
     document.getElementById('order-price-type').value = String(strategy.default_market_price_type ?? 5);
     document.getElementById('order-price-group').style.display = 'none';
@@ -592,18 +607,22 @@ function hideStrategyOrderModal() {
     if (modal) modal.style.display = 'none';
 }
 
-// 卖出切换股票时：预填限价（现价）并更新可用数量提示
+// 卖出切换股票时：预填限价（现价）、更新可用数量提示与数量步进
 function _onOrderStockChange() {
     const stockSelect = document.getElementById('order-stock-select');
     const hint = document.getElementById('order-quantity-hint');
     const priceInput = document.getElementById('order-price');
+    const quantityInput = document.getElementById('order-quantity');
     const pos = _orderModalPositions[stockSelect.value];
+    if (quantityInput) {
+        quantityInput.step = getLotSize(stockSelect.value);
+    }
     if (!pos) {
         hint.style.display = 'none';
         return;
     }
     const available = pos.available_quantity ?? pos.quantity ?? 0;
-    hint.textContent = `可用 ${available} 股`;
+    hint.textContent = `可用 ${available} ${getQuantityUnit(stockSelect.value)}`;
     hint.style.display = '';
     if (pos.current_price > 0) {
         priceInput.value = pos.current_price;
@@ -660,17 +679,18 @@ function initStrategyOrderModal() {
             Toast.warning('请输入有效的委托数量（正整数）');
             return;
         }
-        // 买入股票须为100整数倍（期货后缀不校验，与后端规则一致）；卖出允许零股
+        // 买入须整手（股票 100 股 / 可转债 10 张；期货后缀不校验，与后端规则一致）；卖出允许零股
         const isStock = /\.(SH|SZ|BJ|XSHG|XSHE|XBJ)$/.test(stockCode);
-        if (isBuy && isStock && quantity % 100 !== 0) {
-            Toast.warning('买入数量须为100的整数倍');
+        const lotSize = getLotSize(stockCode);
+        if (isBuy && isStock && quantity % lotSize !== 0) {
+            Toast.warning(`买入数量须为${lotSize}的整数倍（${getQuantityUnit(stockCode)}）`);
             return;
         }
         if (!isBuy) {
             const pos = _orderModalPositions[stockCode];
             const available = pos ? (pos.available_quantity ?? pos.quantity ?? 0) : 0;
             if (quantity > available) {
-                Toast.warning(`卖出数量不可超过可用数量（${available} 股）`);
+                Toast.warning(`卖出数量不可超过可用数量（${available} ${getQuantityUnit(stockCode)}）`);
                 return;
             }
         }

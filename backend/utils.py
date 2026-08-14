@@ -445,14 +445,17 @@ def fetch_latest_prices_from_xtdata(stock_codes):
     if not stock_codes:
         return {}
     codes = list(stock_codes)
+    print("获取最新价格，股票代码列表 codes:", codes)
     try:
         from xtquant import xtdata
         full_tick = xtdata.get_full_tick(codes)
         price_map = {}
+        print("全量行情数据 full_tick:", full_tick)
         for code in codes:
             tick = full_tick.get(code)
             if tick and tick.get('lastPrice', 0) > 0:
                 price_map[code] = float(tick['lastPrice'])
+        print("最新价格映射 price_map:", price_map)
         return price_map
     except ImportError:
         from backend.mock_xtquant import MockData

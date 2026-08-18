@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { getState } from './state.js';
 import { UI } from './ui.js';
 import { Toast } from './toast.js';
+import { Confirm } from './confirm.js';
 import { applyOrderFilters, fetchOrders } from './monitor.js';
 import { getLotSize, getQuantityUnit, getSecurityTypeName, getPriceDecimalPlaces, isTickAlignedPrice } from './security-utils.js';
 
@@ -152,7 +153,13 @@ function renderStrategyList() {
     list.querySelectorAll('[data-action="delete"]').forEach(btn => {
         btn.addEventListener('click', async () => {
             const id = btn.dataset.id;
-            if (!confirm('确定要删除该策略吗？此操作不可撤销。')) return;
+            const confirmed = await Confirm.show({
+                title: '删除策略',
+                message: '确定要删除该策略吗？此操作不可撤销。',
+                confirmText: '删除',
+                type: 'danger',
+            });
+            if (!confirmed) return;
             try {
                 await api.deleteStrategy(id, getState('token'));
                 Toast.success('策略已删除');

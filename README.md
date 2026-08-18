@@ -37,6 +37,9 @@
 - 主 Token + 策略 Token 双层认证；跨终端可手动输入主 Token 连接
 - 亮/暗双主题切换
 
+**UI 交互**
+- 全局 Confirm 弹窗组件（`frontend/js/confirm.js`）：Promise 风格 API，替代浏览器原生 `confirm()`，支持标题、消息、按钮文案自定义与危险/警告/信息视觉类型；已应用于「删除策略」「停止服务器」等关键操作
+
 ## 技术栈
 
 - **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK / SQLAlchemy 2.0 / Alembic / SQLite

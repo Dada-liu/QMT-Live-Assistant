@@ -5,6 +5,7 @@ import { stopStatusCheck } from './monitor.js';
 import { refreshDashboard } from './dashboard.js';
 import { loadStrategies, populateStrategyDropdown } from './strategy.js';
 import { Toast } from './toast.js';
+import { Confirm } from './confirm.js';
 
 // --- Bark 推送设置 ---
 
@@ -125,7 +126,13 @@ export function initConfigPanel() {
 
     const btnStop = el('btn-stop');
     if (btnStop) btnStop.addEventListener('click', async () => {
-        if (!confirm('确定要停止服务器吗？停止后所有连接将断开。')) return;
+        const confirmed = await Confirm.show({
+            title: '停止服务器',
+            message: '确定要停止服务器吗？停止后所有连接将断开。',
+            confirmText: '停止',
+            type: 'warning',
+        });
+        if (!confirmed) return;
 
         let stopError = null;
         try {

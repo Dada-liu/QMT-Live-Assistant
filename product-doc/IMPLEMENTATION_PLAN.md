@@ -65,6 +65,7 @@ graph TB
             API[api.js]
             UI[ui.js]
             TOAST[toast.js]
+            CONFIRM[confirm.js]
             CONFIG_JS[config-panel.js]
             MON_JS[monitor.js]
             DASH_JS[dashboard.js]
@@ -528,6 +529,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 | `dashboard.js` | 账户资产四卡片刷新；持仓明细展开（loading/错误态） |
 | `docs.js` | 文档列表与 Markdown 渲染（marked CDN） |
 | `toast.js` | Toast.success/error/warning/info，自动消失 |
+| `confirm.js` | 全局 Confirm 弹窗组件：Promise 风格 `Confirm.show({ title, message, confirmText, cancelText, type })`，替代原生 `confirm()`；支持 `primary/danger/warning/info` 视觉类型与 ESC/点击遮罩/关闭按钮取消；已用于「删除策略」「停止服务器」等关键操作 |
 
 ---
 
@@ -559,6 +561,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 23：委托价 tick 对齐** ✅ — 排查确认卖出链路全链路无价格精度处理：持仓 `market_value / volume` 除法价（任意位小数）、策略 avg_cost（4 位记账小数）、`/api/order` 透传价三个来源的非 tick 价格会原样成为限价委托价被交易所拒单。`backend/utils.py` 新增 `get_tick_size`（股票 0.01、可转债 0.001、期货返回 0 暂跳过）与 `round_price_to_tick`（`Decimal(str(price))` + `ROUND_HALF_UP` 量化，规避 float 二进制误差如 10.235→10.23）；`_submit_order` 汇聚点在 `final_price_type` 推导后对 FIX_PRICE 委托价统一对齐（冻结价/委托价/日志/返回值同一价格），市价单不受影响，对齐发生时记录"原始价 → 对齐价"日志；四个聚宽方法、`generic_order`、手动下单与失败重发的响应 `price` 均改为对齐后的实际委托价；下单日志价格精度按券种显示（转债 3 位、其余 2 位）；前端 `security-utils.js` 新增 `getTickSize` / `getPriceDecimalPlaces` / `isTickAlignedPrice`，手动下单与重发弹窗价格校验由固定两位小数改为按券种（股票 2 位、可转债 3 位）；新增 utils 与 jukuan_orders 测试用例覆盖股票/转债/期货/边界
 - **Phase 23.1：README 新增「数据库迁移（Alembic）」章节** ✅ — 说明启动时不自动迁移、需手动 `alembic upgrade head`；新增字段标准流程（改模型 → `nullable=True` 迁移脚本 → 存量数据读取归一或 UPDATE 回填 → 同步领域模型/Repository/API/前端 → 备份后执行迁移 → pytest 回归）；补充回滚、SQLite `batch_alter_table` 限制与迁移链合并注意事项
 - **Phase 23.2：修复纯数字（无后缀）证券代码信号取价失败** ✅ — 真实环境故障：信号 `security` 为纯数字 `113665` 时 `normalize_to_qmt` 原样返回不补后缀（注释明写"6 位数字原样返回"），下游持仓匹配与 `xtdata.get_full_tick` 全部落空（xtdata 仅识别 `113665.SH` 合约格式），`_get_price` 抛"无法获取最新价格"；macOS/mock 未暴露因 mock 补了带后缀转债行情且既有测试信号均带后缀。修复：`normalize_to_qmt` 新增 6 位纯数字分支调用 `add_stock_suffix` 补全后缀（信号四端点与手动下单自动受益）；`add_stock_suffix` 修正缺陷——转债/可交换债按 `_CONVERTIBLE_BOND_PREFIXES` 精确分流且优先于通用前缀（原实现把 117 深市可交换债误判为 .SH，132 沪市债仅靠默认分支碰巧正确），北交所补 87/88 代码段；新增 test_client 转债分流、test_utils normalize 纯数字、test_server 端点（纯数字沪/深转债信号走通取价下单链）回归用例
+- **Phase 23.3：全局 Confirm 弹窗组件替换原生 confirm** ✅ — 前端新增 `frontend/js/confirm.js`：Promise 风格 `Confirm.show({ title, message, confirmText, cancelText, type })`，复用现有 `.modal-overlay/.modal` 体系，支持 `primary/danger/warning/info` 视觉类型（删除策略用 danger 红色、停止服务器用 warning 黄色），支持 ESC/点击遮罩/关闭按钮取消并在 DOM 未找到时回退到原生 `confirm`；`index.html` 注入 `#confirm-modal` DOM，`styles.css` 新增 `.btn-danger/.btn-warning/.confirm-modal/.confirm-body/.confirm-actions` 样式；`strategy.js` 与 `config-panel.js` 中原生 `confirm()` 全部替换为新组件；README 与本文档同步更新
 
 ---
 

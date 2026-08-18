@@ -444,6 +444,36 @@ a:hover { text-decoration: underline; }
   box-shadow: var(--btn-shadow-active);
 }
 
+.btn-danger {
+  background-color: var(--color-semantic-down);
+  color: var(--color-on-primary);
+  box-shadow: 0 2px 4px rgba(207, 32, 47, 0.20);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #a81b27;
+  box-shadow: 0 4px 8px rgba(207, 32, 47, 0.25);
+}
+
+.btn-danger:active:not(:disabled) {
+  box-shadow: 0 1px 2px rgba(207, 32, 47, 0.20);
+}
+
+.btn-warning {
+  background-color: var(--color-accent-yellow);
+  color: var(--color-ink);
+  box-shadow: 0 2px 4px rgba(244, 176, 0, 0.20);
+}
+
+.btn-warning:hover:not(:disabled) {
+  background-color: #c78d00;
+  box-shadow: 0 4px 8px rgba(244, 176, 0, 0.25);
+}
+
+.btn-warning:active:not(:disabled) {
+  box-shadow: 0 1px 2px rgba(244, 176, 0, 0.20);
+}
+
 .btn-icon {
   width: 36px;
   height: 36px;
@@ -1496,6 +1526,23 @@ a:hover { text-decoration: underline; }
 #strategy-modal .position-assign-table-wrapper {
   max-height: none;
   overflow: visible;
+}
+
+/* --- Confirm Modal --- */
+.confirm-modal {
+  max-width: 420px;
+}
+
+.confirm-body {
+  font-size: var(--text-body-md);
+  color: var(--color-body);
+  line-height: 1.6;
+  margin-bottom: var(--spacing-lg);
+  word-break: break-word;
+}
+
+.confirm-actions {
+  justify-content: flex-end;
 }
 
 /* --- Required Label --- */

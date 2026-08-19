@@ -3004,3 +3004,42 @@ class TestPendingBuy:
             assert log is not None
             assert "挂起买单failed" not in (log.error_msg or ""), f"signal_log 被误标: {log.error_msg}"
 
+    def test_deferred_retry_preserves_notify_source_fields(self, client, server):
+        """挂起买单重试下单后，notify_source/source_platform_webhook/source_platform 不丢失。"""
+        strategy = self._create_strategy(client, server, defer=True)
+        self._sell_all(client, strategy)
+
+        response = client.post(
+            "/api/jukuan_order",
+            json={
+                "security": "300750.XSHE",
+                "amount": 1100,
+                "notify_source": True,
+                "source_platform": "joinquant",
+                "source_platform_webhook": "https://example.com/hook",
+            },
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["deferred"] is True
+        pending_buy_id = data["pending_buy_id"]
+
+        # 挂起请求应完整保存通知字段
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.request_payload.get("notify_source") is True
+        assert pb.request_payload.get("source_platform_webhook") == "https://example.com/hook"
+
+        # 卖单成交回款 → 重试买入成功
+        server.order_tracker.poll_and_reconcile(server.trader, server.account)
+        server.pending_buy_manager.process_all(server.trader, server.account)
+        pb = server.pending_buy_manager._repo.get(pending_buy_id)
+        assert pb.status == "submitted"
+
+        # 重试产生的订单必须携带源平台通知字段，终态才能回调源平台
+        tracked = server.order_tracker.get_order(str(pb.submitted_order_id))
+        assert tracked is not None
+        assert tracked.notify_source is True
+        assert tracked.source_platform == "joinquant"
+        assert tracked.source_platform_webhook == "https://example.com/hook"
+

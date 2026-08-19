@@ -158,6 +158,11 @@ class PendingBuyManager:
         stock_name = fetch_stock_names_from_xtdata({pb.stock_code}).get(pb.stock_code) or ""
         strategy_name = strategy.name
         result["strategy_name"] = strategy_name
+        # 补回挂起请求携带的源平台通知字段（正常路径由端点层注入，
+        # 重试路径绕过端点，需从原始 payload 恢复，否则终态不会回调源平台）
+        result["notify_source"] = pb.request_payload.get("notify_source", False)
+        result["source_platform_webhook"] = pb.request_payload.get("source_platform_webhook")
+        result["source_platform"] = pb.request_payload.get("source_platform")
         self._track_callback(result, pb.strategy_id, strategy_name, stock_name=stock_name)
         self._strategy_manager.add_trading_record(pb.strategy_id, {
             "timestamp": datetime.now(timezone.utc).isoformat(),

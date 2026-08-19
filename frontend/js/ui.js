@@ -249,7 +249,7 @@ export const UI = {
             <span>时间</span>
             <span>策略</span>
             <span>端点</span>
-            <span>代码</span>
+            <span>股票</span>
             <span>方向/数量</span>
             <span>状态</span>
           </div>
@@ -261,6 +261,10 @@ export const UI = {
             const endpoint = log.endpoint || '--';
             const payload = log.payload || {};
             const security = payload.security || '--';
+            const stockName = log.stock_name || '';
+            const securityDisplay = stockName
+                ? `${escapeHtml(stockName)}(${escapeHtml(security)})`
+                : escapeHtml(security);
             const amount = payload.amount || 0;
             const side = payload.side || '--';
             const directionAmount = `${side} / ${amount}`;
@@ -280,7 +284,7 @@ export const UI = {
                 <span class="signal-time">${time}</span>
                 <span>${escapeHtml(strategyName)}</span>
                 <span>${escapeHtml(endpoint)}</span>
-                <span class="signal-msg">${escapeHtml(security)}</span>
+                <span class="signal-msg">${securityDisplay}</span>
                 <span>${escapeHtml(directionAmount)}</span>
                 <span class="signal-log-status">${statusBadge}${errorTip}</span>
               </div>

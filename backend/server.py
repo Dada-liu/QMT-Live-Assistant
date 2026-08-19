@@ -763,6 +763,22 @@ class QMTServer:
 
             logs = _current_server._signal_log_repository.list_all(**filters)
 
+            # 批量补充股票名称：查询时实时获取，历史日志同样可显示 股票名(代码)
+            qmt_codes = set()
+            for log in logs:
+                sec = (log.payload or {}).get('security')
+                if sec:
+                    qmt_codes.add(normalize_to_qmt(sec))
+            name_map = {}
+            if qmt_codes:
+                try:
+                    name_map = await run_blocking(
+                        fetch_stock_names_from_xtdata, qmt_codes,
+                        timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                    )
+                except Exception:
+                    name_map = {}
+
             result = []
             for log in logs:
                 is_error = bool(log.error_msg)
@@ -778,6 +794,7 @@ class QMTServer:
                 if end_date and date_part > end_date:
                     continue
 
+                security = (log.payload or {}).get('security') or ''
                 result.append({
                     "id": log.id,
                     "strategy_id": log.strategy_id,
@@ -785,6 +802,7 @@ class QMTServer:
                     "endpoint": log.endpoint,
                     "source_platform": log.source_platform,
                     "payload": log.payload,
+                    "stock_name": name_map.get(normalize_to_qmt(security), "") if security else "",
                     "processed_order_id": log.processed_order_id,
                     "error_msg": log.error_msg,
                     "received_at": received_at,

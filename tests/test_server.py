@@ -1512,6 +1512,63 @@ class TestSignalLogFundsCap:
         assert all_logs[0]["status"] == "success"
 
 
+class TestSignalLogStockName:
+    """信号日志列表应返回 stock_name，供前端展示 股票名(代码)。"""
+
+    def _create_strategy(self, client, server, name="日志名称策略"):
+        response = client.post(
+            "/api/strategies",
+            json={"name": name, "allocated_funds": 100000},
+            headers={"X-Token": server.token},
+        )
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def _enable_signal_logs(self, server):
+        from backend.db.repositories.signal_log import InMemorySignalLogRepository
+        server._signal_log_repository = InMemorySignalLogRepository()
+
+    def _get_logs(self, client, server):
+        response = client.get("/api/signal-logs", headers={"X-Token": server.token})
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    def test_signal_logs_include_stock_name(self, client, server):
+        """聚宽格式代码应转换为 QMT 格式并返回对应股票名称。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server)
+        response = client.post(
+            "/api/jukuan_order",
+            json={"security": "000001.XSHE", "amount": 100},
+            headers={"X-Token": strategy["token"]},
+        )
+        assert response.status_code == 200
+
+        logs = self._get_logs(client, server)
+        assert len(logs) == 1
+        assert logs[0]["payload"]["security"] == "000001.XSHE"
+        assert logs[0]["stock_name"] == "平安银行"
+
+    def test_signal_logs_unknown_code_returns_empty_name(self, client, server):
+        """mock 中无名称的代码返回空字符串，不影响日志查询。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server)
+
+        from datetime import datetime, timezone
+        from backend.db.models.signal_log import SignalLogModel
+        server._signal_log_repository.add(SignalLogModel(
+            strategy_id=strategy["id"],
+            endpoint="/api/jukuan_order",
+            payload={"security": "999999.XSHE", "amount": 100},
+            received_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+        ))
+
+        logs = self._get_logs(client, server)
+        assert len(logs) == 1
+        assert logs[0]["stock_name"] == ""
+
+
 class TestOrderCancelResendApi:
     """订单撤销与重发 API 测试"""
 

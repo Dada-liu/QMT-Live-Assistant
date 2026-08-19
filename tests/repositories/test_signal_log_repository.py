@@ -45,9 +45,16 @@ class TestSQLAlchemySignalLogRepository:
             endpoint="/api/jukuan_order",
             payload={"security": "000001.XSHE"},
         ))
+        assert log.error_at is None
+
         repo.update_error(log.id, "无效的 security")
         found = repo.get(log.id)
         assert found.error_msg == "无效的 security"
+        # 报错发生时间应被记录，且带 UTC 时区
+        assert found.error_at is not None
+        assert found.error_at.tzinfo is not None
+        assert found.error_at.utcoffset().total_seconds() == 0
+        assert found.error_at >= found.received_at
 
 
 class TestInMemorySignalLogRepository:
@@ -59,6 +66,11 @@ class TestInMemorySignalLogRepository:
         assert added.created_at.tzinfo is not None
         assert added.received_at.utcoffset().total_seconds() == 0
         assert added.created_at.utcoffset().total_seconds() == 0
+        assert added.error_at is None
+
         repo.update_error(added.id, "失败")
         found = repo.get(added.id)
         assert found.error_msg == "失败"
+        assert found.error_at is not None
+        assert found.error_at.tzinfo is not None
+        assert found.error_at >= found.received_at

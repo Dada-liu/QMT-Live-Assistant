@@ -17,6 +17,7 @@ class SignalLogModel(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     processed_order_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("orders.id"), index=True)
     error_msg: Mapped[Optional[str]] = mapped_column(Text)
+    error_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -25,6 +26,10 @@ class SignalLogModel(Base):
     )
 
     def __init__(self, **kwargs):
+        # id 默认由 SQLAlchemy column default 在 INSERT 时生成，此处提前生成
+        # 保证实例化即有 id（InMemory Repository 以 id 为 key，避免多条互相覆盖）
+        if kwargs.get("id") is None:
+            kwargs["id"] = uuid4_str()
         if kwargs.get("received_at") is None:
             kwargs["received_at"] = datetime.now(timezone.utc)
         if kwargs.get("created_at") is None:

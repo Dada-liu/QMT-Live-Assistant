@@ -805,6 +805,7 @@ class QMTServer:
                     "stock_name": name_map.get(normalize_to_qmt(security), "") if security else "",
                     "processed_order_id": log.processed_order_id,
                     "error_msg": log.error_msg,
+                    "error_at": log.error_at.isoformat() if log.error_at else None,
                     "received_at": received_at,
                     "status": "error" if is_error else "success",
                 })

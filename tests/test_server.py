@@ -1568,6 +1568,35 @@ class TestSignalLogStockName:
         assert len(logs) == 1
         assert logs[0]["stock_name"] == ""
 
+    def test_signal_logs_error_log_has_error_at(self, client, server):
+        """异常日志应返回报错发生时间 error_at，正常日志为 null。"""
+        self._enable_signal_logs(server)
+        strategy = self._create_strategy(client, server)
+
+        from datetime import datetime, timezone
+        from backend.db.models.signal_log import SignalLogModel
+        ok_log = server._signal_log_repository.add(SignalLogModel(
+            strategy_id=strategy["id"],
+            endpoint="/api/jukuan_order",
+            payload={"security": "000001.XSHE", "amount": 100},
+            received_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+        ))
+        err_log = server._signal_log_repository.add(SignalLogModel(
+            strategy_id=strategy["id"],
+            endpoint="/api/jukuan_order",
+            payload={"security": "000001.XSHE", "amount": 100},
+            received_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+        ))
+        server._signal_log_repository.update_error(err_log.id, "资金不足")
+
+        logs = self._get_logs(client, server)
+        assert len(logs) == 2
+        by_id = {log["id"]: log for log in logs}
+        assert by_id[err_log.id]["error_at"] is not None
+        assert by_id[ok_log.id]["error_at"] is None
+
 
 class TestOrderCancelResendApi:
     """订单撤销与重发 API 测试"""

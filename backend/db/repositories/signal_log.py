@@ -34,6 +34,7 @@ class InMemorySignalLogRepository(InMemoryRepository[SignalLogModel], SignalLogR
         log = self._store.get(signal_log_id)
         if log is not None:
             log.error_msg = error_msg
+            log.error_at = datetime.now(timezone.utc)
 
 
 class SQLAlchemySignalLogRepository(SignalLogRepository):
@@ -106,6 +107,7 @@ class SQLAlchemySignalLogRepository(SignalLogRepository):
         if log is not None:
             try:
                 log.error_msg = error_msg
+                log.error_at = datetime.now(timezone.utc)
                 self._session.commit()
             except Exception:
                 self._session.rollback()
@@ -116,4 +118,5 @@ class SQLAlchemySignalLogRepository(SignalLogRepository):
         """确保从数据库读取的时间字段携带 UTC 时区。"""
         entity.received_at = _ensure_utc(entity.received_at)
         entity.created_at = _ensure_utc(entity.created_at)
+        entity.error_at = _ensure_utc(entity.error_at)
         return entity

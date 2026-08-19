@@ -246,7 +246,7 @@ export const UI = {
 
         const header = `
           <div class="signal-log-item header">
-            <span>时间</span>
+            <span>信号接收时间</span>
             <span>策略</span>
             <span>端点</span>
             <span>股票</span>
@@ -276,8 +276,14 @@ export const UI = {
             else if (status === 'success') statusBadge = '<span class="badge badge-success">正常</span>';
             else statusBadge = `<span class="badge badge-warning">${escapeHtml(status)}</span>`;
 
-            // 错误信息超出打点省略，hover 通过自定义 tooltip 展示完整内容
-            const errorTip = errorMsg ? `<span class="signal-log-error" data-tooltip="${escapeHtml(errorMsg)}">${escapeHtml(errorMsg)}</span>` : '';
+            // 报错文案前缀报错发生时间（【报错时间】文案）；历史数据无 error_at 时回退接收时间
+            let errorDisplay = '';
+            if (errorMsg) {
+                const errorTimeRaw = log.error_at || log.received_at;
+                const errorTime = errorTimeRaw ? new Date(errorTimeRaw).toLocaleString() : '';
+                const errorText = errorTime ? `【${errorTime}】${errorMsg}` : errorMsg;
+                errorDisplay = `<span class="signal-log-error" data-tooltip="${escapeHtml(errorText)}">${escapeHtml(errorText)}</span>`;
+            }
 
             return `
               <div class="signal-log-item">
@@ -286,7 +292,7 @@ export const UI = {
                 <span>${escapeHtml(endpoint)}</span>
                 <span class="signal-msg">${securityDisplay}</span>
                 <span>${escapeHtml(directionAmount)}</span>
-                <span class="signal-log-status">${statusBadge}${errorTip}</span>
+                <span class="signal-log-status">${statusBadge}${errorDisplay}</span>
               </div>
             `;
         }).join('');

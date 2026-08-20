@@ -2,13 +2,12 @@
 
 ## Context
 
-根据 PRD.md 构建 miniQMT 量化交易助手：Python 服务器 + 原生 HTML 前端，Coinbase 风格 UI（DESIGN.md）。核心链路：远程聚宽策略服务器 → 本地 FastAPI 服务（策略级校验与记账）→ miniQMT（XtQuant SDK）→ 券商。功能涵盖：多策略管理、策略 Token 认证、聚宽风格下单、订单监控与主动管理、信号日志、桌面窗口/托盘、EXE 打包。
+根据 PRD.md 构建 miniQMT 量化交易助手：Python 服务器 + 原生 HTML 前端，Coinbase 风格 UI（DESIGN.md）。核心链路：远程聚宽策略服务器 → 本地 FastAPI 服务（策略级校验与记账）→ miniQMT（XtQuant SDK）→ 券商。功能涵盖：多策略管理、策略 Token 认证、聚宽风格下单、订单监控与主动管理、信号日志。
 
 ## 技术栈
 
 - **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK / SQLAlchemy 2.0 / Alembic / SQLite
 - **前端**: 原生 HTML + CSS + JS（ES Module，无框架）
-- **桌面壳**: pywebview（WebView2 窗口）+ pystray（系统托盘）+ PyInstaller（单 exe）
 
 ## 项目架构图示
 
@@ -32,10 +31,6 @@ graph TB
             STRAT[strategy_manager.py<br/>StrategyManager<br/>策略CRUD + 持仓跟踪]
             JK[jukuan_orders.py<br/>JukuanOrderHandler<br/>聚宽风格下单]
             SP[source_platform_notifier.py<br/>源平台状态通知]
-        end
-        subgraph 桌面层["桌面壳层"]
-            WINDOW[window.py<br/>WindowManager<br/>pywebview 窗口]
-            TRAY[tray.py<br/>TrayManager<br/>系统托盘]
         end
         subgraph 基础设施层["基础设施层"]
             LOG[logger.py<br/>日志系统]
@@ -477,7 +472,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 ### `backend/pending_buy_manager.py` — 调仓延迟买单管理器
 单例管理器，由 `QMTServer` 在构造时注入 `strategy_manager`、`order_tracker`、`pending_buy_repository`、`signal_log_repository`、`bark_service`、handler 工厂与订单跟踪回调：
 - **`defer`**：当策略开启 `defer_buy_on_insufficient_funds` 且存在在途卖单时，将买单请求登记为 `waiting` 状态，写入 `pending_buy_orders` 表，关联原 `signal_log_id`
-- **`process_all`**：由 `_poll_orders_loop` 每 5 秒在 `poll_and_reconcile` 之后调用；先清理超时 waiting 行（→ `expired` 并 Bark 通知），再按策略 FIFO 重试 waiting 买单：重建 handler 调用（target/value 类按当时持仓重新计算 delta）、资金仍不足则保持 waiting、成功则 `submitted` 并走 `_track_and_apply_order` 注册订单与 `add_trading_record`、其他异常或策略已禁用/删除则 `failed`
+- **`process_all`**：由 `_poll_orders_loop` 每 5 秒在 `poll_and_reconcile` 之后调用；先清理超时 waiting 行（→ `expired` 并 Bark 通知），再按策略 FIFO 重试 waiting 买单：重建 handler 调用（target/value 类按当时持仓重新计算 delta）；**异常分级**：`InsufficientFundsError` 与行情缺失导致的 `ReferencePriceUnavailableError` 保持 `waiting`，等待资金/行情恢复；`ValueError` 等永久异常（如参数错误、券种校验失败）立即标记 `failed`，避免无限重试；策略已禁用/删除也标记 `failed`
 - **过期/失败通知**：通过 `bark_service.notify_strategy_event` 推送策略级事件，不阻塞轮询
 
 ### `backend/db/` — 数据库层
@@ -540,7 +535,7 @@ FastAPI lifespan + CORS + 前端静态挂载；管理 API（start-server 返回 
 - **Phase 3-4：策略管理与信号功能** ✅ — StrategyManager（CRUD + 持仓跟踪）、OrderTracker；原 signal_handler 后由聚宽风格下单替代
 - **Phase 5-6：测试体系与前端** ✅ — pytest 各层测试；Coinbase 设计系统 + 9 个 JS 模块的单页前端
 - **Phase 7：聚宽风格下单** ✅ — qmt_xtconstant 映射 + 4 个 jukuan 下单接口（仅策略 Token）
-- **Phase 8-9：桌面壳与打包** ✅ — 托盘 / pywebview 窗口模式；PyInstaller 单 exe
+- **Phase 8-9：~~桌面壳与打包~~** ✅ — 已移除（pywebview / pystray / PyInstaller 不再维护）
 - **Phase 10：集成与文档** ✅ — 端到端集成验证，README 与本文档
 - **Phase 11：行情工具重构** ✅ — 行情函数迁移至 utils.py；无持仓时 `get_full_tick` 取最新价支持首次建仓
 - **Phase 12：代码归一化** ✅ — `normalize_to_qmt` 统一系统边界代码格式；订单计数替代信号计数；前端文案统一为「订单」

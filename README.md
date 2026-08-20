@@ -44,7 +44,6 @@
 
 - **后端**: Python 3.10+ / FastAPI / uvicorn / xtquant SDK / SQLAlchemy 2.0 / Alembic / SQLite
 - **前端**: 原生 HTML + CSS + JS（ES Module，无框架无构建）
-- **桌面壳**: pywebview（原生窗口）/ pystray（系统托盘）/ PyInstaller（打包 exe）
 
 ## 快速开始
 
@@ -57,22 +56,15 @@ alembic upgrade head   # 初始化 SQLite，数据文件位于 ./data/qmt_live_a
 
 ### 运行模式
 
-| 命令 | 模式 | 说明 |
-|------|------|------|
-| `--window` | 桌面窗口（Windows 推荐） | WebView2 窗口，关闭最小化到系统托盘 |
-| `--tray` | 桌面壳 | 系统托盘 + 自动打开浏览器 |
-| `--port 8000` | 前端界面 | 仅管理界面，浏览器中配置并启动服务 |
-| `--account … --qmt-path …` | CLI 服务 | 无界面直接启动，控制台打印 Token |
-
 ```bash
-# 例：桌面窗口模式
-python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\userdata_mini" --window
-
-# 前端界面模式
+# 仅启动管理界面与 API，浏览器中配置并启动服务
 python -m backend.main --port 8000
+
+# 无界面直接启动，控制台打印 Token
+python -m backend.main --account 1234567890 --qmt-path "C:\国金QMT交易端\userdata_mini"
 ```
 
-前端界面模式下，浏览器打开 `http://localhost:8000`，填写账户 ID 与 QMT 路径，点击「启动服务器」。
+浏览器打开 `http://localhost:8000`，填写账户 ID 与 QMT 路径，点击「启动服务器」。
 
 ### nginx 反向代理部署
 
@@ -358,7 +350,7 @@ QMT-live-assistant/
 │   ├── logger.py            # 日志系统（控制台 + 按日轮转）
 │   ├── constants.py         # 常量定义
 │   ├── qmt_xtconstant.py    # QMT 常量映射
-│   ├── window.py / tray.py  # 桌面窗口 / 系统托盘
+│   ├── window.py / tray.py  # ~~桌面窗口 / 系统托盘（已移除）~~
 │   └── mock_xtquant/        # 非 Windows 平台的 mock
 ├── frontend/
 │   ├── index.html           # 单页应用
@@ -369,7 +361,6 @@ QMT-live-assistant/
 ├── docs/                    # 使用文档（界面内可浏览）
 ├── product-doc/             # 产品与设计文档
 ├── tests/                   # pytest（含 repositories/ 与 jukuan_server/）
-├── pyinstaller.spec         # exe 打包配置
 └── pytest.ini
 ```
 

@@ -1,7 +1,6 @@
 """FastAPI 应用入口与 CLI 启动器。
 
-负责注册 HTTP 路由、启动/停止 QMT 服务器、
-提供系统托盘模式与原生桌面窗口模式入口。
+负责注册 HTTP 路由、启动/停止 QMT 服务器。
 """
 import argparse
 import os
@@ -72,23 +71,17 @@ def _create_repositories(session):
 
 
 def _get_frontend_dir() -> str:
-    """获取前端目录路径（兼容开发模式 + PyInstaller 打包模式）"""
-    if getattr(sys, 'frozen', False):
-        base = Path(sys._MEIPASS)
-    else:
-        base = Path(__file__).resolve().parent.parent
+    """获取前端目录路径。"""
+    base = Path(__file__).resolve().parent.parent
     frontend = base / "frontend"
     if frontend.exists():
         return str(frontend)
-    raise FileNotFoundError("前端目录不存在，请检查打包配置")
+    raise FileNotFoundError("前端目录不存在")
 
 
 def _get_docs_dir() -> str:
     """获取文档目录路径"""
-    if getattr(sys, 'frozen', False):
-        base = Path(sys._MEIPASS)
-    else:
-        base = Path(__file__).resolve().parent.parent
+    base = Path(__file__).resolve().parent.parent
     docs = base / "docs"
     return str(docs) if docs.exists() else ""
 
@@ -289,34 +282,6 @@ async def stop_server(_token: str = Depends(verify_server_token)):
     return {"success": True, "data": {"message": "服务器已停止"}}
 
 
-def _start_tray_mode(host, port, token):
-    """桌面壳模式：托盘图标 + 自动打开浏览器"""
-    import uvicorn
-    from backend.tray import run_tray_mode
-
-    def on_exit():
-        if server:
-            server.stop()
-
-    run_tray_mode(host=host, port=port, token=token, on_exit=on_exit)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
-
-
-def _start_window_mode(host, port, token):
-    """原生桌面窗口模式：pywebview + 托盘，失败时降级到 tray 模式"""
-    import traceback
-    from backend.logger import logger
-
-    try:
-        from backend.window import WindowManager
-        wm = WindowManager(app=app, host=host, port=port, token=token)
-        wm.start()
-    except Exception as e:
-        logger.warning(f"窗口模式启动失败，降级到托盘模式: {e}")
-        traceback.print_exc()
-        _start_tray_mode(host, port, token)
-
-
 if __name__ == "__main__":
     import uvicorn
 
@@ -326,18 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--account", default=settings.ACCOUNT_ID)
     parser.add_argument("--qmt-path", default=settings.MINI_QMT_PATH)
     parser.add_argument("--token", default=None)
-    parser.add_argument("--tray", action="store_true", help="启动系统托盘模式（桌面壳）")
-    parser.add_argument("--window", action="store_true",
-                        help="启动原生桌面窗口模式（需 pywebview）")
     args = parser.parse_args()
-
-    _is_frozen = getattr(sys, 'frozen', False)
-    _has_args = len(sys.argv) > 1
-    if _is_frozen and not _has_args:
-        if args.account and args.qmt_path:
-            args.window = True
-        else:
-            args.window = True
 
     if args.account and args.qmt_path:
         db_session = SessionLocal() if settings.PERSISTENCE_MODE != "memory" else None
@@ -365,14 +319,6 @@ if __name__ == "__main__":
             db_session=db_session,
         )
 
-        if args.window:
-            _start_window_mode(args.host, args.port, server.token)
-        elif args.tray:
-            _start_tray_mode(args.host, args.port, server.token)
-        else:
-            uvicorn.run(app, host=server.host, port=server.port)
+        uvicorn.run(app, host=server.host, port=server.port)
     else:
-        if args.window:
-            _start_window_mode(args.host, args.port, None)
-        else:
-            uvicorn.run(app, host=args.host, port=args.port)
+        uvicorn.run(app, host=args.host, port=args.port)

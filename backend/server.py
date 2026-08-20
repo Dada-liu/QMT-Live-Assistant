@@ -17,7 +17,16 @@ from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtd
 from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
-from backend.models.order import TrackedOrder, OrderResendRequest, ManualOrderRequest, GenericOrderRequest
+from backend.models.order import (
+    TrackedOrder,
+    OrderResendRequest,
+    ManualOrderRequest,
+    GenericOrderRequest,
+    JukuanOrderRequest,
+    JukuanOrderTargetRequest,
+    JukuanOrderValueRequest,
+    JukuanOrderTargetValueRequest,
+)
 from backend.db.repositories.order import OrderRepository, InMemoryOrderRepository
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.db.repositories.signal_log import SignalLogRepository, InMemorySignalLogRepository
@@ -509,7 +518,7 @@ class QMTServer:
 
         async def endpoint(request: RequestModel, token: str = Depends(_require_qmt_connected)):
             try:
-                params = request.dict(exclude_unset=True)
+                params = request.model_dump(exclude_unset=True)
                 if 'account' in param_names:
                     params['account'] = _current_server.account
                 result = await run_blocking(
@@ -1003,36 +1012,60 @@ class QMTServer:
                 raise
 
         @app.post('/api/jukuan_order')
-        async def jukuan_order_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
+        async def jukuan_order_endpoint(
+            request: JukuanOrderRequest,
+            raw_request: Request,
+            x_token: str = Header(...),
+        ):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order', raw_request)
+                return await _jukuan_endpoint(
+                    request.model_dump(), x_token, 'jukuan_order', raw_request
+                )
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_target')
-        async def jukuan_order_target_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
+        async def jukuan_order_target_endpoint(
+            request: JukuanOrderTargetRequest,
+            raw_request: Request,
+            x_token: str = Header(...),
+        ):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target', raw_request)
+                return await _jukuan_endpoint(
+                    request.model_dump(), x_token, 'jukuan_order_target', raw_request
+                )
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_value')
-        async def jukuan_order_value_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
+        async def jukuan_order_value_endpoint(
+            request: JukuanOrderValueRequest,
+            raw_request: Request,
+            x_token: str = Header(...),
+        ):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_value', raw_request)
+                return await _jukuan_endpoint(
+                    request.model_dump(), x_token, 'jukuan_order_value', raw_request
+                )
             except HTTPException:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.post('/api/jukuan_order_target_value')
-        async def jukuan_order_target_value_endpoint(request: dict, raw_request: Request, x_token: str = Header(...)):
+        async def jukuan_order_target_value_endpoint(
+            request: JukuanOrderTargetValueRequest,
+            raw_request: Request,
+            x_token: str = Header(...),
+        ):
             try:
-                return await _jukuan_endpoint(request, x_token, 'jukuan_order_target_value', raw_request)
+                return await _jukuan_endpoint(
+                    request.model_dump(), x_token, 'jukuan_order_target_value', raw_request
+                )
             except HTTPException:
                 raise
             except Exception as e:

@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from backend.jukuan_orders import (
     JukuanOrderHandler, _is_future, _lot_size, _round_down_to_lot,
+    ReferencePriceUnavailableError,
 )
 from backend.constants import STOCK_BUY, STOCK_SELL
 from backend.qmt_xtconstant import (
@@ -59,20 +60,21 @@ class TestJukuanOrder:
         assert result["order_id"] == 200001
         assert result["stock_code"] == "000001.SZ"
         assert result["jq_code"] == "000001.XSHE"
-        # 无持仓时从行情获取价格，mock 行情价为 12.55
-        assert result["price"] == 12.55
+        # 市价单委托价为 0，price_type 为最新价
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.55
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_sell(self, handler):
         result = handler.jukuan_order("000001.SZ", -100)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
-        assert result["price"] == 12.55
+        # 市价单委托价为 0
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.55
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_zero_quantity_below_lot(self, handler):
         result = handler.jukuan_order("000001.SZ", 50)
@@ -81,28 +83,23 @@ class TestJukuanOrder:
         assert result["quantity"] == 0
 
     def test_future_long(self, handler):
-        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
-                   return_value={"RB8888.XSGE": 4500.0}):
-            result = handler.jukuan_order("RB8888.XSGE", 3, side="long")
+        result = handler.jukuan_order("RB8888.XSGE", 3, side="long")
         assert result["direction"] == "buy"
         assert result["quantity"] == 3
         assert result["stock_code"] == "RB8888.XSGE"
         assert result["jq_code"] == "RB8888.XSGE"
-        assert result["price"] == 4500.0
+        # 期货同样按市价委托
+        assert result["price"] == 0.0
 
     def test_future_short_open(self, handler):
-        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
-                   return_value={"RB8888.XSGE": 4500.0}):
-            result = handler.jukuan_order("RB8888.XSGE", 3, side="short")
+        result = handler.jukuan_order("RB8888.XSGE", 3, side="short")
         assert result["direction"] == "sell"
-        assert result["price"] == 4500.0
+        assert result["price"] == 0.0
 
     def test_future_short_cover(self, handler):
-        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
-                   return_value={"RB8888.XSGE": 4500.0}):
-            result = handler.jukuan_order("RB8888.XSGE", -3, side="short")
+        result = handler.jukuan_order("RB8888.XSGE", -3, side="short")
         assert result["direction"] == "buy"
-        assert result["price"] == 4500.0
+        assert result["price"] == 0.0
 
     def test_order_error(self, handler):
         handler.trader.order_stock.side_effect = Exception("下单失败")
@@ -138,20 +135,20 @@ class TestJukuanOrderTarget:
         assert result["direction"] == "buy"
         assert result["quantity"] == 100
         assert result["order_id"] == 200001
-        # _get_price 使用市值/数量 = 1200/100 = 12.0
-        assert result["price"] == 12.0
+        # 统一按市价委托，委托价为 0
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_decrease(self, handler):
         result = handler.jukuan_order_target("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
-        assert result["price"] == 12.0
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_delta_below_lot(self, handler):
         handler.trader.query_stock_positions.return_value = []
@@ -181,19 +178,21 @@ class TestJukuanOrderValue:
         assert result["direction"] == "buy"
         assert result["quantity"] == 1000
         assert result["order_id"] == 200001
-        assert result["price"] == 10.0
+        # result 中的 price 为计算数量的参考价
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 10.0
+        # 实际委托统一为市价单
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_sell_by_value(self, handler):
         result = handler.jukuan_order_value("000001.SZ", -5000)
         assert result["direction"] == "sell"
         assert result["quantity"] == 500
-        assert result["price"] == 10.0
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 10.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_value_too_small(self, handler):
         result = handler.jukuan_order_value("000001.SZ", 500)
@@ -206,7 +205,7 @@ class TestJukuanOrderValue:
         handler.trader.query_stock_positions.return_value = []
         with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
                    return_value={}):
-            with pytest.raises(ValueError, match="无法获取"):
+            with pytest.raises(ReferencePriceUnavailableError, match="无法获取"):
                 handler.jukuan_order_value("000001.SZ", 10000)
 
     def test_price_from_market_data_when_no_position(self, handler):
@@ -217,6 +216,10 @@ class TestJukuanOrderValue:
         assert result["direction"] == "buy"
         assert result["quantity"] == 700
         assert result["order_id"] == 200001
+        assert result["price"] == 0.0
+        call = handler.trader.order_stock.call_args
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
 
 class TestJukuanOrderTargetValue:
@@ -246,19 +249,20 @@ class TestJukuanOrderTargetValue:
         assert result["direction"] == "buy"
         assert result["quantity"] == 200
         assert result["order_id"] == 200001
-        assert result["price"] == 10.0
+        # result 中的 price 为参考价
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 10.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_decrease_value(self, handler):
         result = handler.jukuan_order_target_value("000001.SZ", 0)
         assert result["direction"] == "sell"
         assert result["quantity"] == 100
-        assert result["price"] == 10.0
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 10.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
 
 class TestJukuanOrderStrategyScoped:
@@ -303,11 +307,11 @@ class TestJukuanOrderStrategyScoped:
         assert result["direction"] == "buy"
         # 策略当前 300，目标 500，缺口 200
         assert result["quantity"] == 200
-        # 使用策略持仓 avg_cost=12.0 作为限价
-        assert result["price"] == 12.0
+        # 统一按市价委托
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_target_sell_rejected_when_strategy_short(self, handler):
         # 将策略可用持仓设为 0（全部冻结），此时 target=0 需要卖出 300 股，应被拒绝
@@ -317,16 +321,19 @@ class TestJukuanOrderStrategyScoped:
 
     def test_value_buy_capped_by_strategy_cash(self, handler):
         # 策略配置为 max_buyable 时，按金额买入按可用资金封顶：
-        # 策略可用资金 50000，价格 12，最多可买 4100 股（按手数 100 取整）
+        # 策略可用资金 50000，参考价 12，最多可买 4100 股（按手数 100 取整）
         strategy = handler.strategy_manager.get.return_value
         strategy.insufficient_funds_policy = "max_buyable"
-        result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
         assert result["direction"] == "buy"
         assert result["quantity"] == 4100
-        assert result["price"] == 12.0
+        # result 中的 price 为实际委托价（市价单为 0）
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
     def test_value_sell_rejected_when_strategy_short(self, handler):
         handler.strategy_manager.apply_optimistic_position.return_value = None
@@ -357,14 +364,18 @@ class TestJukuanOrderStrategyScoped:
         handler.strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)
 
     def test_target_value_uses_strategy_current_value(self, handler):
-        # 策略当前 300 股 * 12 = 3600，目标 6000，delta=2400，可买 200 股
-        result = handler.jukuan_order_target_value("000001.SZ", 6000, strategy_id="strat-1")
+        # 策略当前 300 股；账户参考价 10.0（fixture 持仓市值/数量），当前市值 3000
+        # 目标 6000，delta_value=3000，可买 300 股
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.jukuan_order_target_value("000001.SZ", 6000, strategy_id="strat-1")
         assert result["direction"] == "buy"
-        assert result["quantity"] == 200
-        assert result["price"] == 12.0
+        assert result["quantity"] == 300
+        # result 中的 price 为实际委托价（市价单为 0）
+        assert result["price"] == 0.0
         call = handler.trader.order_stock.call_args
-        assert call.kwargs["price_type"] == FIX_PRICE
-        assert call.kwargs["price"] == 12.0
+        assert call.kwargs["price_type"] == LATEST_PRICE
+        assert call.kwargs["price"] == 0.0
 
 
 class TestGenericOrder:
@@ -486,12 +497,13 @@ class TestGenericOrder:
             handler.generic_order("000001.SZ", 100, direction="buy", strategy_id="strat-1")
         strategy_manager.rollback_position.assert_called_once_with("strat-1", snapshot)
 
-    def test_get_position_info_returns_empty_on_query_failure(self, handler):
-        """query_stock_positions 失败时返回空持仓信息。"""
+    def test_get_position_info_propagates_query_failure(self, handler):
+        """query_stock_positions 失败时异常应透明上抛，不再降级为空持仓。"""
         handler.trader.query_stock_positions.side_effect = RuntimeError("QMT 查询失败")
         from backend.jukuan_orders import _get_position_info
-        result = _get_position_info(handler.trader, handler.account, "000001.SZ")
-        assert result == {"volume": 0, "price": 0.0, "found": False}
+        from backend.utils import QMTInteractionError
+        with pytest.raises(QMTInteractionError, match="QMT 查询失败"):
+            _get_position_info(handler.trader, handler.account, "000001.SZ")
 
 
 class TestInsufficientFundsPolicy:
@@ -529,7 +541,9 @@ class TestInsufficientFundsPolicy:
         """max_buyable：固定数量买入超资时按最大可买数量下单。"""
         handler = make_handler("max_buyable")
         # 5000 股 × 12 = 60000 > 50000，封顶为 4100 股
-        result = handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.jukuan_order("000001.SZ", 5000, strategy_id="strat-1")
         assert result["order_id"] == 200001
         assert result["quantity"] == 4100
         assert result["direction"] == "buy"
@@ -578,7 +592,9 @@ class TestInsufficientFundsPolicy:
     def test_order_value_capped_under_max_buyable(self, make_handler):
         """max_buyable：按金额买入超资时按最大可买数量下单。"""
         handler = make_handler("max_buyable")
-        result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.jukuan_order_value("000001.SZ", 100000, strategy_id="strat-1")
         assert result["order_id"] == 200001
         assert result["quantity"] == 4100
         call = handler.trader.order_stock.call_args
@@ -596,7 +612,9 @@ class TestInsufficientFundsPolicy:
         """max_buyable：目标持仓买入缺口超资时按最大可买数量下单。"""
         handler = make_handler("max_buyable")
         # 策略当前 300 股，目标 5000，缺口 4700 股 × 12 = 56400 > 50000，封顶 4100
-        result = handler.jukuan_order_target("000001.SZ", 5000, strategy_id="strat-1")
+        with patch("backend.jukuan_orders.fetch_latest_prices_from_xtdata",
+                   return_value={"000001.SZ": 12.0}):
+            result = handler.jukuan_order_target("000001.SZ", 5000, strategy_id="strat-1")
         assert result["order_id"] == 200001
         assert result["quantity"] == 4100
 
@@ -636,7 +654,7 @@ class TestInsufficientFundsPolicy:
         call = handler.trader.order_stock.call_args
         assert call.kwargs["order_volume"] == 300
         handler.strategy_manager.apply_optimistic_position.assert_called_once_with(
-            "strat-1", "000001.SZ", "sell", 300, 12.0
+            "strat-1", "000001.SZ", "sell", 300, 0.0
         )
 
 
@@ -951,14 +969,8 @@ class TestPriceTickAlignment:
         return JukuanOrderHandler(trader=trader, account=account)
 
     def test_sell_price_from_position_value_division_aligned(self, handler):
-        # 持仓 300 股、市值 3071 → 参考价 10.236666…，委托价应对齐到 10.24
-        mock_pos = MagicMock()
-        mock_pos.stock_code = "000001.SZ"
-        mock_pos.volume = 300
-        mock_pos.market_value = 3071.0
-        mock_pos.open_price = 10.0
-        handler.trader.query_stock_positions.return_value = [mock_pos]
-        result = handler.jukuan_order("000001.SZ", -100)
+        # jukuan_order 已统一为市价单；tick 对齐行为在 generic_order 限价路径验证
+        result = handler.generic_order("000001.SZ", 100, direction="sell", price=10.236666)
         call = handler.trader.order_stock.call_args
         assert call.kwargs["price_type"] == FIX_PRICE
         assert call.kwargs["price"] == 10.24
@@ -966,7 +978,7 @@ class TestPriceTickAlignment:
         assert result["price"] == 10.24
 
     def test_sell_price_from_strategy_avg_cost_aligned(self):
-        # 策略 avg_cost 为 4 位记账小数（10.2345），委托价应对齐到 10.23
+        # 策略 avg_cost 为 4 位记账小数（10.2345），限价委托价应对齐到 10.23
         trader = MagicMock()
         trader.order_stock.return_value = 200001
         account = MagicMock()
@@ -980,7 +992,7 @@ class TestPriceTickAlignment:
         handler = JukuanOrderHandler(
             trader=trader, account=account, strategy_manager=strategy_manager
         )
-        result = handler.jukuan_order("000001.SZ", -100, strategy_id="strat-1")
+        result = handler.generic_order("000001.SZ", 100, direction="sell", price=10.2345, strategy_id="strat-1")
         call = trader.order_stock.call_args
         assert call.kwargs["price_type"] == FIX_PRICE
         assert call.kwargs["price"] == 10.23

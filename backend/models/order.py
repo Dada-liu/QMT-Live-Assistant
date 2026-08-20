@@ -1,7 +1,7 @@
 """订单领域模型。"""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -137,3 +137,72 @@ class GenericOrderRequest(BaseModel):
         if v is not None and v not in ("long", "short"):
             raise ValueError("side 必须为 long 或 short")
         return v
+
+
+class JukuanOrderRequest(BaseModel):
+    """聚宽风格按数量下单请求体（策略 Token）。"""
+    security: str = Field(min_length=1, description="证券代码，支持 QMT/聚宽/6位数字格式")
+    amount: int = Field(description="目标数量，正数买入/开多，负数卖出/平多")
+    side: Literal["long", "short"] = Field(default="long", description="仅对期货空头逻辑生效：long 或 short")
+    source_platform: Optional[str] = Field(
+        default=None,
+        description="信号来源平台，用于信号日志与 webhook 映射",
+    )
+    notify_source: bool = Field(
+        default=False,
+        description="是否在订单状态变更时通知源平台",
+    )
+    source_platform_webhook: Optional[str] = Field(
+        default=None,
+        description="源平台回调地址",
+    )
+
+    @field_validator("security")
+    @classmethod
+    def strip_security(cls, v: str) -> str:
+        return v.strip()
+
+
+class JukuanOrderTargetRequest(BaseModel):
+    """聚宽风格目标持仓数量调仓请求体（策略 Token）。"""
+    security: str = Field(min_length=1, description="证券代码，支持 QMT/聚宽/6位数字格式")
+    amount: int = Field(ge=0, description="目标持仓数量，必须大于等于 0")
+    side: Literal["long", "short"] = Field(default="long", description="仅对期货空头逻辑生效：long 或 short")
+    source_platform: Optional[str] = Field(default=None, description="信号来源平台")
+    notify_source: bool = Field(default=False, description="是否在订单状态变更时通知源平台")
+    source_platform_webhook: Optional[str] = Field(default=None, description="源平台回调地址")
+
+    @field_validator("security")
+    @classmethod
+    def strip_security(cls, v: str) -> str:
+        return v.strip()
+
+
+class JukuanOrderValueRequest(BaseModel):
+    """聚宽风格按金额下单请求体（策略 Token）。"""
+    security: str = Field(min_length=1, description="证券代码，支持 QMT/聚宽/6位数字格式")
+    value: float = Field(description="目标金额，正数买入，负数卖出")
+    side: Literal["long", "short"] = Field(default="long", description="仅对期货空头逻辑生效：long 或 short")
+    source_platform: Optional[str] = Field(default=None, description="信号来源平台")
+    notify_source: bool = Field(default=False, description="是否在订单状态变更时通知源平台")
+    source_platform_webhook: Optional[str] = Field(default=None, description="源平台回调地址")
+
+    @field_validator("security")
+    @classmethod
+    def strip_security(cls, v: str) -> str:
+        return v.strip()
+
+
+class JukuanOrderTargetValueRequest(BaseModel):
+    """聚宽风格目标持仓市值调仓请求体（策略 Token）。"""
+    security: str = Field(min_length=1, description="证券代码，支持 QMT/聚宽/6位数字格式")
+    value: float = Field(description="目标持仓市值")
+    side: Literal["long", "short"] = Field(default="long", description="仅对期货空头逻辑生效：long 或 short")
+    source_platform: Optional[str] = Field(default=None, description="信号来源平台")
+    notify_source: bool = Field(default=False, description="是否在订单状态变更时通知源平台")
+    source_platform_webhook: Optional[str] = Field(default=None, description="源平台回调地址")
+
+    @field_validator("security")
+    @classmethod
+    def strip_security(cls, v: str) -> str:
+        return v.strip()

@@ -3,6 +3,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest.mock import patch, MagicMock
 from backend.strategy_manager import (
     Strategy, StrategyCreate, StrategyUpdate, StrategyManager, PositionAssignment,
@@ -1285,3 +1287,73 @@ class TestSettlePartialSell:
         s = mgr.get(sid)
         assert s.positions[0]["quantity"] == 60
         assert s.available_cash == pytest.approx(100000 - 60 * 10.2)
+
+
+class TestConcurrency:
+    """乐观冻结操作在全局锁保护下应避免 TOCTOU 竞态。"""
+
+    def _create_strategy(self):
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 10.0}):
+            mgr = StrategyManager()
+            s = mgr.create(StrategyCreate(name="并发策略", allocated_funds=10000))
+            return mgr, s.id
+
+    def test_concurrent_buy_does_not_overdraft_cash(self):
+        """10 线程同时买入同一股票，可用资金仅够 500 股，最终冻结总量不超过 500。"""
+        with patch("backend.strategy_manager.fetch_open_prices_from_xtdata",
+                   return_value={"000001.SZ": 10.0}):
+            mgr = StrategyManager()
+            s = mgr.create(StrategyCreate(name="并发策略", allocated_funds=5000))
+        sid = s.id
+
+        results = {"success": 0, "failed": 0}
+        lock = threading.Lock()
+
+        def task(_):
+            snapshot = mgr.apply_optimistic_position(
+                sid, "000001.SZ", "buy", 100, 10.0
+            )
+            with lock:
+                if snapshot is not None:
+                    results["success"] += 100
+                else:
+                    results["failed"] += 1
+            # 模拟下单延迟，保持冻结一段时间
+            return snapshot
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(task, range(10)))
+
+        s = mgr.get(sid)
+        # 初始资金 5000，每股 10，最多冻结 500 股
+        assert results["success"] <= 500
+        assert s.available_cash == pytest.approx(5000 - results["success"] * 10.0)
+
+    def test_concurrent_target_zero_does_not_oversell(self):
+        """10 线程同时 target=0，初始持仓 100 股，最终只卖出 100 股。"""
+        mgr, sid = self._create_strategy()
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+
+        results = {"success": 0, "failed": 0}
+        lock = threading.Lock()
+
+        def task(_):
+            snapshot = mgr.apply_optimistic_position(
+                sid, "000001.SZ", "sell", 100, 10.0
+            )
+            with lock:
+                if snapshot is not None:
+                    results["success"] += 100
+                else:
+                    results["failed"] += 1
+            return snapshot
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(task, range(10)))
+
+        s = mgr.get(sid)
+        assert results["success"] == 100
+        assert s.positions[0]["quantity"] == 100
+        assert s.positions[0]["available_quantity"] == 0
+        assert s.positions[0]["frozen_quantity"] == 100

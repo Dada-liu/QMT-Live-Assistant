@@ -39,6 +39,15 @@ class InsufficientFundsError(ValueError):
     """
 
 
+class ReferencePriceUnavailableError(RuntimeError):
+    """行情参考价不可用（瞬时错误）。
+
+    不继承 ValueError：挂起买单重试链路对 ValueError 做 fail-fast（永久错误），
+    而行情抖动应等待下一轮重试。继承 RuntimeError 使其向上传播到 process_all
+    的兜底捕获，挂起买单保持 waiting。
+    """
+
+
 def _lot_size(code: str) -> int:
     """获取证券每手数量：期货 1，可转债 10（张），股票 100（股）。"""
     return get_lot_size(code)
@@ -54,16 +63,14 @@ def _get_position_info(trader, account, stock_code: str) -> dict:
     """查询指定 QMT 代码在账户中的持仓信息。
 
     返回包含持仓数量、参考价格以及是否找到持仓的字典。
+    查询失败时直接抛出异常，避免将 QMT 错误静默降级为"无持仓"。
     """
-    try:
-        positions = qmt_call(
-            trader,
-            "query_stock_positions",
-            account,
-            context={"stock_code": stock_code, "account_id": getattr(account, 'account_id', account)},
-        )
-    except Exception:
-        positions = []
+    positions = qmt_call(
+        trader,
+        "query_stock_positions",
+        account,
+        context={"stock_code": stock_code, "account_id": getattr(account, 'account_id', account)},
+    )
 
     for pos in positions:
         pos_code = getattr(pos, 'stock_code', '')
@@ -84,35 +91,27 @@ def _get_position_info(trader, account, stock_code: str) -> dict:
     return {'volume': 0, 'price': 0.0, 'found': False}
 
 
-def _get_price(
+def _get_reference_price(
     trader, account, stock_code: str,
     strategy_manager=None, strategy_id: Optional[str] = None
 ) -> float:
-    """获取指定 QMT 代码的最新参考价格。
+    """获取用于数量换算/成本估算的参考价格。
 
-    若提供 strategy_id，优先读取策略持仓 avg_cost；否则优先使用账户持仓市值，
-    无持仓时从行情接口获取。
+    优先账户持仓市值价，无持仓时取行情最新价；不返回 avg_cost（避免
+    value 类方法在估算数量时依赖成本价）。
     """
-    if strategy_id and strategy_manager is not None:
-        strategy = strategy_manager.get(strategy_id)
-        if strategy:
-            pos = next(
-                (p for p in strategy.positions if p["stock_code"] == stock_code), None
-            )
-            if pos and pos.get("avg_cost", 0.0) > 0:
-                return pos["avg_cost"]
-
     info = _get_position_info(trader, account, stock_code)
     if info['price'] > 0:
         return info['price']
 
-    # 无持仓时，从 QMT 行情接口获取最新价
     price_map = fetch_latest_prices_from_xtdata([stock_code])
     price = price_map.get(stock_code, 0.0)
     if price > 0:
         return price
 
-    raise ValueError(f"无法获取 {stock_code} 的最新价格，请确保持仓中有该股票或行情接口可用")
+    raise ReferencePriceUnavailableError(
+        f"无法获取 {stock_code} 的最新价格，请确保持仓中有该股票或行情接口可用"
+    )
 
 
 def _get_volume(
@@ -258,12 +257,16 @@ class JukuanOrderHandler:
                 price = aligned_price
 
         # 市价买入单（price=0 或市价报价类型）没有委托价可冻结，用最新价估算成本做校验与冻结；
-        # 行情取价失败时 freeze_price=0，成本为 0 视为跳过校验，由 QMT 实盘兜底
+        # 行情取价失败时拒绝下单，避免 available_cash 被扣成负数
         freeze_price = price
         if (direction == 'buy'
                 and (price <= 0 or is_market_price_type(final_price_type))
                 and strategy_id and self.strategy_manager is not None):
             freeze_price = fetch_latest_prices_from_xtdata([stock_code]).get(stock_code, 0.0)
+            if freeze_price <= 0:
+                raise ReferencePriceUnavailableError(
+                    f"{stock_code} 市价买入无法获取行情参考价，无法估算冻结成本，订单取消"
+                )
 
         # 策略配置为 max_buyable 时，买入数量先按可用资金封顶；封顶为 0 说明一手都买不起，订单取消
         requested_quantity = quantity
@@ -430,14 +433,9 @@ class JukuanOrderHandler:
 
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
-        price = _get_price(
-            self.trader, self.account, stock_code,
-            strategy_manager=self.strategy_manager, strategy_id=strategy_id,
-        )
-
         try:
             submit_result = self._submit_order(
-                stock_code, order_type, quantity, price=price, strategy_id=strategy_id
+                stock_code, order_type, quantity, price=0.0, strategy_id=strategy_id
             )
             if submit_result.get('cancelled'):
                 return {
@@ -446,7 +444,7 @@ class JukuanOrderHandler:
                     'jq_code': qmt_to_jq(stock_code),
                     'direction': 'none',
                     'quantity': 0,
-                    'price': price,
+                    'price': 0.0,
                     'order_type': None,
                     'requested_quantity': submit_result['requested_quantity'],
                     'funds_cap_note': submit_result['funds_cap_note'],
@@ -536,14 +534,9 @@ class JukuanOrderHandler:
 
         direction = 'buy' if order_type == STOCK_BUY else 'sell'
 
-        price = _get_price(
-            self.trader, self.account, stock_code,
-            strategy_manager=self.strategy_manager, strategy_id=strategy_id,
-        )
-
         try:
             submit_result = self._submit_order(
-                stock_code, order_type, quantity, price=price, strategy_id=strategy_id
+                stock_code, order_type, quantity, price=0.0, strategy_id=strategy_id
             )
             if submit_result.get('cancelled'):
                 return {
@@ -552,7 +545,7 @@ class JukuanOrderHandler:
                     'jq_code': qmt_to_jq(stock_code),
                     'direction': 'none',
                     'quantity': 0,
-                    'price': price,
+                    'price': 0.0,
                     'order_type': None,
                     'requested_quantity': submit_result['requested_quantity'],
                     'funds_cap_note': submit_result['funds_cap_note'],
@@ -584,7 +577,8 @@ class JukuanOrderHandler:
     # ---- (3) jukuan_order_value ----
 
     def jukuan_order_value(self, stock_code: str, value: float,
-                           side: str = 'long', strategy_id: Optional[str] = None) -> dict:
+                           side: str = 'long', strategy_id: Optional[str] = None,
+                           _reference_price: Optional[float] = None) -> dict:
         """按指定金额下单。
 
         根据持仓最新价格计算可购买数量，并向下取整到整手。
@@ -594,14 +588,19 @@ class JukuanOrderHandler:
             value: 目标金额，正数为买入，负数为卖出。
             side: 方向，'long' 或 'short'，仅对期货生效。
             strategy_id: 策略ID，卖出时校验策略持仓可用数量。
+            _reference_price: 内部复用参考价（如 jukuan_order_target_value 已取价），
+                避免同一笔调仓两次行情调用导致数量不一致。
 
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        price = _get_price(
-            self.trader, self.account, stock_code,
-            strategy_manager=self.strategy_manager, strategy_id=strategy_id,
-        )
+        if _reference_price is not None:
+            price = _reference_price
+        else:
+            price = _get_reference_price(
+                self.trader, self.account, stock_code,
+                strategy_manager=self.strategy_manager, strategy_id=strategy_id,
+            )
         target_qty = abs(value) / price
         quantity = _round_down_to_lot(target_qty, stock_code)
 
@@ -630,7 +629,7 @@ class JukuanOrderHandler:
 
         try:
             submit_result = self._submit_order(
-                stock_code, order_type, quantity, price=price, strategy_id=strategy_id
+                stock_code, order_type, quantity, price=0.0, strategy_id=strategy_id
             )
             if submit_result.get('cancelled'):
                 return {
@@ -686,7 +685,7 @@ class JukuanOrderHandler:
         Returns:
             包含 order_id、direction、quantity、message 的字典。
         """
-        price = _get_price(
+        price = _get_reference_price(
             self.trader, self.account, stock_code,
             strategy_manager=self.strategy_manager, strategy_id=strategy_id,
         )
@@ -714,7 +713,8 @@ class JukuanOrderHandler:
             }
 
         return self.jukuan_order_value(
-            stock_code, delta_value, side=side, strategy_id=strategy_id
+            stock_code, delta_value, side=side, strategy_id=strategy_id,
+            _reference_price=price,
         )
 
     # ---- (5) generic_order ----

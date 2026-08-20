@@ -11,6 +11,7 @@ from backend.utils import (
     fetch_stock_names_from_xtdata,
     validate_security_type_for_strategy,
 )
+from backend.db.base import db_lock
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
 from backend.models.strategy import Strategy, StrategyCreate, StrategyUpdate, PositionAssignment
 
@@ -210,24 +211,25 @@ class StrategyManager:
     def update_position(self, strategy_id: str, stock_code: str,
                         direction: str, quantity: int, price: float):
         """按实际成交更新策略持仓（可用数量和总数量同步变更）。"""
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy:
-            return
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy:
+                return
 
-        new_positions, new_cash = self._apply_actual_fill(
-            strategy.positions,
-            strategy.available_cash,
-            stock_code,
-            direction,
-            quantity,
-            price,
-        )
-        new_strategy = strategy.model_copy(update={
-            "positions": new_positions,
-            "available_cash": new_cash,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
+            new_positions, new_cash = self._apply_actual_fill(
+                strategy.positions,
+                strategy.available_cash,
+                stock_code,
+                direction,
+                quantity,
+                price,
+            )
+            new_strategy = strategy.model_copy(update={
+                "positions": new_positions,
+                "available_cash": new_cash,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
 
     def apply_optimistic_position(self, strategy_id: str, stock_code: str,
                                   direction: str, quantity: int, price: float):
@@ -239,61 +241,62 @@ class StrategyManager:
         返回的 snapshot 包含本订单造成的增量（delta_*），多笔同股票订单并发
         时 rollback / reconcile 只撤销本订单的增量，不影响其他待成交订单。
         """
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy:
-            return None
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy:
+                return None
 
-        old_pos = next(
-            (p for p in strategy.positions if p["stock_code"] == stock_code), None
-        )
-        pre_quantity = old_pos["quantity"] if old_pos else 0
-        pre_available = old_pos["available_quantity"] if old_pos else 0
-        pre_frozen = old_pos["frozen_quantity"] if old_pos else 0
-        pre_avg_cost = old_pos["avg_cost"] if old_pos else 0.0
-        pre_cash = strategy.available_cash
+            old_pos = next(
+                (p for p in strategy.positions if p["stock_code"] == stock_code), None
+            )
+            pre_quantity = old_pos["quantity"] if old_pos else 0
+            pre_available = old_pos["available_quantity"] if old_pos else 0
+            pre_frozen = old_pos["frozen_quantity"] if old_pos else 0
+            pre_avg_cost = old_pos["avg_cost"] if old_pos else 0.0
+            pre_cash = strategy.available_cash
 
-        freeze_result = self._freeze_position(
-            strategy.positions,
-            strategy.available_cash,
-            stock_code,
-            direction,
-            quantity,
-            price,
-        )
-        if freeze_result is None:
-            return None
-        new_positions, new_cash = freeze_result
+            freeze_result = self._freeze_position(
+                strategy.positions,
+                strategy.available_cash,
+                stock_code,
+                direction,
+                quantity,
+                price,
+            )
+            if freeze_result is None:
+                return None
+            new_positions, new_cash = freeze_result
 
-        new_pos = next(
-            (p for p in new_positions if p["stock_code"] == stock_code), None
-        )
-        post_available = new_pos["available_quantity"] if new_pos else pre_available
-        post_frozen = new_pos["frozen_quantity"] if new_pos else pre_frozen
+            new_pos = next(
+                (p for p in new_positions if p["stock_code"] == stock_code), None
+            )
+            post_available = new_pos["available_quantity"] if new_pos else pre_available
+            post_frozen = new_pos["frozen_quantity"] if new_pos else pre_frozen
 
-        snapshot = {
-            "stock_code": stock_code,
-            "direction": direction,
-            "requested_quantity": quantity,
-            "price": price,
-            # 冻结前状态（保留以兼容现有测试与调试）
-            "quantity": pre_quantity,
-            "available_quantity": pre_available,
-            "frozen_quantity": pre_frozen,
-            "avg_cost": pre_avg_cost,
-            "available_cash": pre_cash,
-            # 本订单造成的增量
-            "delta_available_quantity": post_available - pre_available,
-            "delta_frozen_quantity": post_frozen - pre_frozen,
-            "delta_cash": new_cash - pre_cash,
-        }
+            snapshot = {
+                "stock_code": stock_code,
+                "direction": direction,
+                "requested_quantity": quantity,
+                "price": price,
+                # 冻结前状态（保留以兼容现有测试与调试）
+                "quantity": pre_quantity,
+                "available_quantity": pre_available,
+                "frozen_quantity": pre_frozen,
+                "avg_cost": pre_avg_cost,
+                "available_cash": pre_cash,
+                # 本订单造成的增量
+                "delta_available_quantity": post_available - pre_available,
+                "delta_frozen_quantity": post_frozen - pre_frozen,
+                "delta_cash": new_cash - pre_cash,
+            }
 
-        new_strategy = strategy.model_copy(update={
-            "positions": new_positions,
-            "available_cash": new_cash,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
-        return snapshot
+            new_strategy = strategy.model_copy(update={
+                "positions": new_positions,
+                "available_cash": new_cash,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
+            return snapshot
 
     @staticmethod
     def _rollback_position_deltas(positions: List[dict], stock_code: str,
@@ -331,33 +334,34 @@ class StrategyManager:
         卖单已增量结算（settled_quantity>0）时，只释放未成交部分的冻结，
         已成交部分的持仓扣减与回款入账保留。
         """
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy or not snapshot:
-            return
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy or not snapshot:
+                return
 
-        delta_frozen = snapshot.get("delta_frozen_quantity", 0)
-        delta_available = snapshot.get("delta_available_quantity", 0)
-        settled = int(snapshot.get("settled_quantity", 0) or 0)
-        if settled > 0:
-            # 增量成交时已按成交量扣减冻结，这里只回滚剩余未成交部分
-            residual = max(0, delta_frozen - settled)
-            delta_frozen = residual
-            delta_available = -residual if delta_available < 0 else delta_available
+            delta_frozen = snapshot.get("delta_frozen_quantity", 0)
+            delta_available = snapshot.get("delta_available_quantity", 0)
+            settled = int(snapshot.get("settled_quantity", 0) or 0)
+            if settled > 0:
+                # 增量成交时已按成交量扣减冻结，这里只回滚剩余未成交部分
+                residual = max(0, delta_frozen - settled)
+                delta_frozen = residual
+                delta_available = -residual if delta_available < 0 else delta_available
 
-        new_positions = self._rollback_position_deltas(
-            strategy.positions,
-            snapshot["stock_code"],
-            delta_available,
-            delta_frozen,
-        )
-        new_cash = strategy.available_cash - snapshot.get("delta_cash", 0.0)
+            new_positions = self._rollback_position_deltas(
+                strategy.positions,
+                snapshot["stock_code"],
+                delta_available,
+                delta_frozen,
+            )
+            new_cash = strategy.available_cash - snapshot.get("delta_cash", 0.0)
 
-        new_strategy = strategy.model_copy(update={
-            "available_cash": new_cash,
-            "positions": new_positions,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
+            new_strategy = strategy.model_copy(update={
+                "available_cash": new_cash,
+                "positions": new_positions,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
 
     def settle_partial_sell(self, strategy_id: str, stock_code: str,
                             delta_qty: int, delta_price: float,
@@ -370,41 +374,42 @@ class StrategyManager:
         """
         if delta_qty <= 0 or snapshot is None:
             return
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy:
-            return
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy:
+                return
 
-        new_positions, new_cash = self._apply_actual_fill(
-            strategy.positions,
-            strategy.available_cash,
-            stock_code,
-            "sell",
-            delta_qty,
-            delta_price,
-        )
-        # _apply_actual_fill 不动冻结量，这里显式扣减本笔成交占用的冻结
-        adjusted_positions = []
-        for pos in new_positions:
-            if pos["stock_code"] != stock_code:
-                adjusted_positions.append(pos)
-                continue
-            new_pos = dict(pos)
-            new_pos["frozen_quantity"] = max(
-                0, new_pos.get("frozen_quantity", 0) - delta_qty
+            new_positions, new_cash = self._apply_actual_fill(
+                strategy.positions,
+                strategy.available_cash,
+                stock_code,
+                "sell",
+                delta_qty,
+                delta_price,
             )
-            new_pos["available_quantity"] = max(
-                0, new_pos["quantity"] - new_pos["frozen_quantity"]
-            )
-            adjusted_positions.append(new_pos)
+            # _apply_actual_fill 不动冻结量，这里显式扣减本笔成交占用的冻结
+            adjusted_positions = []
+            for pos in new_positions:
+                if pos["stock_code"] != stock_code:
+                    adjusted_positions.append(pos)
+                    continue
+                new_pos = dict(pos)
+                new_pos["frozen_quantity"] = max(
+                    0, new_pos.get("frozen_quantity", 0) - delta_qty
+                )
+                new_pos["available_quantity"] = max(
+                    0, new_pos["quantity"] - new_pos["frozen_quantity"]
+                )
+                adjusted_positions.append(new_pos)
 
-        snapshot["settled_quantity"] = int(snapshot.get("settled_quantity", 0) or 0) + delta_qty
+            snapshot["settled_quantity"] = int(snapshot.get("settled_quantity", 0) or 0) + delta_qty
 
-        new_strategy = strategy.model_copy(update={
-            "available_cash": new_cash,
-            "positions": adjusted_positions,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
+            new_strategy = strategy.model_copy(update={
+                "available_cash": new_cash,
+                "positions": adjusted_positions,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
 
     def reconcile_position(self, strategy_id: str, stock_code: str,
                            direction: str, requested_qty: int,
@@ -416,40 +421,41 @@ class StrategyManager:
         rollback 只释放未成交部分的冻结，_apply_actual_fill 只入账
         未被增量回调覆盖的成交量；买单 settled=0 时退化为原有行为。
         """
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy:
-            return
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy:
+                return
 
-        if filled_qty <= 0:
+            if filled_qty <= 0:
+                self.rollback_position(strategy_id, snapshot)
+                return
+
+            settled = int(snapshot.get("settled_quantity", 0) or 0) if snapshot else 0
+            unsettled_filled = filled_qty - settled if direction == "sell" else filled_qty
+
+            # 先回滚本订单的乐观冻结（rollback 内部已感知 settled，只释放未结算部分）
             self.rollback_position(strategy_id, snapshot)
-            return
 
-        settled = int(snapshot.get("settled_quantity", 0) or 0) if snapshot else 0
-        unsettled_filled = filled_qty - settled if direction == "sell" else filled_qty
+            if unsettled_filled <= 0:
+                # 卖单成交已全部增量入账，无需重复修正
+                return
 
-        # 先回滚本订单的乐观冻结（rollback 内部已感知 settled，只释放未结算部分）
-        self.rollback_position(strategy_id, snapshot)
-
-        if unsettled_filled <= 0:
-            # 卖单成交已全部增量入账，无需重复修正
-            return
-
-        # 再按真实成交数量更新持仓
-        strategy = self._repo.get_by_id(strategy_id)
-        new_positions, new_cash = self._apply_actual_fill(
-            strategy.positions,
-            strategy.available_cash,
-            stock_code,
-            direction,
-            unsettled_filled,
-            filled_price,
-        )
-        new_strategy = strategy.model_copy(update={
-            "available_cash": new_cash,
-            "positions": new_positions,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
+            # 再按真实成交数量更新持仓
+            strategy = self._repo.get_by_id(strategy_id)
+            new_positions, new_cash = self._apply_actual_fill(
+                strategy.positions,
+                strategy.available_cash,
+                stock_code,
+                direction,
+                unsettled_filled,
+                filled_price,
+            )
+            new_strategy = strategy.model_copy(update={
+                "available_cash": new_cash,
+                "positions": new_positions,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
 
     @staticmethod
     def _apply_actual_fill(
@@ -660,16 +666,17 @@ class StrategyManager:
 
     def add_trading_record(self, strategy_id: str, record: dict):
         """添加买卖记录"""
-        strategy = self._repo.get_by_id(strategy_id)
-        if not strategy:
-            return
-        records = list(strategy.trading_records)
-        records.append(record)
-        new_strategy = strategy.model_copy(update={
-            "trading_records": records,
-            "updated_at": _now_iso(),
-        })
-        self._persist(new_strategy)
+        with db_lock:
+            strategy = self._repo.get_by_id(strategy_id)
+            if not strategy:
+                return
+            records = list(strategy.trading_records)
+            records.append(record)
+            new_strategy = strategy.model_copy(update={
+                "trading_records": records,
+                "updated_at": _now_iso(),
+            })
+            self._persist(new_strategy)
 
     def _current_trade_date(self) -> str:
         """返回当前本地日期 YYYYMMDD。未来可替换为交易日历。"""

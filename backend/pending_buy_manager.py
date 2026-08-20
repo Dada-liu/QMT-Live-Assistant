@@ -22,7 +22,10 @@ from backend.db.repositories.pending_buy import (
     InMemoryPendingBuyRepository,
     PendingBuyRepository,
 )
-from backend.jukuan_orders import InsufficientFundsError
+from backend.jukuan_orders import (
+    InsufficientFundsError,
+    ReferencePriceUnavailableError,
+)
 from backend.logger import logger
 from backend.models.order import OrderState
 from backend.utils import fetch_stock_names_from_xtdata
@@ -140,6 +143,13 @@ class PendingBuyManager:
         except InsufficientFundsError:
             # 资金仍不足，等下一笔卖单回款
             return
+        except ValueError as e:
+            # 永久异常（如参数错误、券种校验失败、持仓不足），不再重试
+            self._resolve(pb, PENDING_BUY_FAILED, f"永久异常，停止重试: {e}")
+            return
+        except ReferencePriceUnavailableError:
+            # 行情参考价不可用是瞬时异常，保持 waiting，下一周期或行情恢复后自动重试
+            raise
 
         # 资金不足一手被取消（max_buyable 策略）：继续等待。
         # jukuan_* handler 在取消时不一定透传 cancelled 字段，但一定会有 funds_cap_note，

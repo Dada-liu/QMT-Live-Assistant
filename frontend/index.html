@@ -420,7 +420,10 @@
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label" for="strategy-market-price-type">市价单下单方式</label>
+          <label class="form-label" for="strategy-market-price-type">市价单下单方式
+            <span id="market-price-type-help" class="help-icon hidden"
+                  data-tooltip="QMT限制，可转债只能用最新价下单">?</span>
+          </label>
           <select class="form-input" id="strategy-market-price-type">
             <option value="5">最新价</option>
             <option value="44">对手方最优</option>

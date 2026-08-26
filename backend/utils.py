@@ -231,6 +231,24 @@ MARKET_PRICE_TYPE_SET = frozenset({
     LATEST_PRICE, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST,
 })
 
+
+def validate_market_price_type_for_security_type(
+    security_type: Optional[str], market_price_type: Optional[int]
+) -> None:
+    """QMT 限制：可转债策略的市价单下单方式仅允许最新价，否则抛 ValueError。
+
+    - None：放行（调用方自行推导默认值）；
+    - 策略种类非可转债：不做额外限制；
+    - 可转债且 market_price_type 不为最新价(5)：ValueError。
+    """
+    if market_price_type is None:
+        return
+    if security_type == SECURITY_TYPE_CONVERTIBLE_BOND and market_price_type != LATEST_PRICE:
+        raise ValueError(
+            "QMT限制：策略种类为可转债时，市价单下单方式仅支持最新价"
+        )
+
+
 # 各交易所支持的报价类型集合（参考 xtquant 文档：上交所/北交所一组，深交所一组）
 _EXCHANGE_PRICE_TYPES = {
     "SH": frozenset({

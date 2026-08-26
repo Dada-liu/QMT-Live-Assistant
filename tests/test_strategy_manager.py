@@ -265,6 +265,57 @@ class TestSecurityTypeConfig:
         with pytest.raises(ValueError, match="可转债"):
             mgr.update(s.id, StrategyUpdate(security_type="convertible_bond"))
 
+    def test_create_bond_strategy_with_non_latest_market_price_rejected(self):
+        """可转债策略市价单下单方式非最新价 → ValueError。"""
+        mgr = StrategyManager()
+        with pytest.raises(ValueError, match="QMT限制.*可转债.*仅支持最新价"):
+            mgr.create(StrategyCreate(
+                name="转债策略", allocated_funds=10000, security_type="convertible_bond",
+                default_market_price_type=44,
+            ))
+
+    def test_create_bond_strategy_with_latest_price_ok(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="转债策略", allocated_funds=10000, security_type="convertible_bond",
+            default_market_price_type=5,
+        ))
+        assert s.default_market_price_type == 5
+
+    def test_create_stock_strategy_with_peer_price_first_ok(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="股票策略", allocated_funds=10000, security_type="stock",
+            default_market_price_type=44,
+        ))
+        assert s.default_market_price_type == 44
+
+    def test_update_to_bond_strategy_with_non_latest_market_price_rejected(self):
+        """股票策略改为可转债且市价方式非最新价 → ValueError。"""
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(name="股票策略", allocated_funds=10000, default_market_price_type=44))
+        with pytest.raises(ValueError, match="QMT限制.*可转债.*仅支持最新价"):
+            mgr.update(s.id, StrategyUpdate(
+                security_type="convertible_bond", default_market_price_type=44,
+            ))
+
+    def test_update_bond_strategy_to_non_latest_market_price_rejected(self):
+        """可转债策略单独改市价方式为对手方最优 → ValueError。"""
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="转债策略", allocated_funds=10000, security_type="convertible_bond",
+        ))
+        with pytest.raises(ValueError, match="QMT限制.*可转债.*仅支持最新价"):
+            mgr.update(s.id, StrategyUpdate(default_market_price_type=44))
+
+    def test_update_bond_strategy_to_latest_price_ok(self):
+        mgr = StrategyManager()
+        s = mgr.create(StrategyCreate(
+            name="转债策略", allocated_funds=10000, security_type="convertible_bond",
+        ))
+        updated = mgr.update(s.id, StrategyUpdate(default_market_price_type=5))
+        assert updated.default_market_price_type == 5
+
 
 class TestStrategyManagerCRUD:
     @pytest.fixture

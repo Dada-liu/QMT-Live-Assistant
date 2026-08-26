@@ -27,6 +27,7 @@ from backend.utils import (
     get_lot_size,
     get_quantity_unit,
     validate_security_type_for_strategy,
+    validate_market_price_type_for_security_type,
     get_tick_size,
     round_price_to_tick,
 )
@@ -484,6 +485,31 @@ class TestValidateSecurityTypeForStrategy:
     def test_bond_strategy_rejects_future(self):
         with pytest.raises(ValueError, match="策略种类为可转债"):
             validate_security_type_for_strategy(SECURITY_TYPE_CONVERTIBLE_BOND, "RB8888.XSGE")
+
+
+class TestValidateMarketPriceTypeForSecurityType:
+    def test_none_price_type_passes(self):
+        validate_market_price_type_for_security_type(SECURITY_TYPE_CONVERTIBLE_BOND, None)
+        validate_market_price_type_for_security_type(SECURITY_TYPE_STOCK, None)
+
+    def test_stock_strategy_allows_all_market_types(self):
+        for price_type in (LATEST_PRICE, MARKET_PEER_PRICE_FIRST, MARKET_MINE_PRICE_FIRST):
+            validate_market_price_type_for_security_type(SECURITY_TYPE_STOCK, price_type)
+
+    def test_bond_strategy_only_allows_latest_price(self):
+        validate_market_price_type_for_security_type(SECURITY_TYPE_CONVERTIBLE_BOND, LATEST_PRICE)
+
+    def test_bond_strategy_rejects_peer_price_first(self):
+        with pytest.raises(ValueError, match="QMT限制.*可转债.*仅支持最新价"):
+            validate_market_price_type_for_security_type(
+                SECURITY_TYPE_CONVERTIBLE_BOND, MARKET_PEER_PRICE_FIRST
+            )
+
+    def test_bond_strategy_rejects_mine_price_first(self):
+        with pytest.raises(ValueError, match="QMT限制.*可转债.*仅支持最新价"):
+            validate_market_price_type_for_security_type(
+                SECURITY_TYPE_CONVERTIBLE_BOND, MARKET_MINE_PRICE_FIRST
+            )
 
 
 class TestGetTickSize:

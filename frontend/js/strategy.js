@@ -239,6 +239,7 @@ async function showStrategyModal(strategy = null) {
 
     // 加载账户持仓用于分配
     await loadAccountPositionsForAssign(strategy);
+    _syncMarketPriceTypeLock();
 
     if (nameInput) nameInput.focus();
 }
@@ -342,6 +343,25 @@ function hideStrategyModal() {
     if (modal) modal.style.display = 'none';
 }
 
+function _syncMarketPriceTypeLock() {
+    const securityTypeInput = document.getElementById('strategy-security-type');
+    const marketPriceTypeInput = document.getElementById('strategy-market-price-type');
+    const helpIcon = document.getElementById('market-price-type-help');
+    if (!securityTypeInput || !marketPriceTypeInput) return;
+
+    const isBond = securityTypeInput.value === 'convertible_bond';
+    if (isBond) {
+        marketPriceTypeInput.value = '5';
+        marketPriceTypeInput.disabled = true;
+    } else {
+        marketPriceTypeInput.disabled = false;
+    }
+
+    if (helpIcon) {
+        helpIcon.classList.toggle('hidden', !isBond);
+    }
+}
+
 export function initStrategyPanel() {
     const el = (id) => {
         const e = document.getElementById(id);
@@ -368,6 +388,10 @@ export function initStrategyPanel() {
     const btnClose = el('btn-strategy-modal-close');
     if (btnClose) btnClose.addEventListener('click', () => { hideStrategyModal(); });
 
+    // Security type change: lock market price type to latest price for convertible bonds
+    const securityTypeInput = el('strategy-security-type');
+    if (securityTypeInput) securityTypeInput.addEventListener('change', _syncMarketPriceTypeLock);
+
     // Strategy form submit
     const form = el('strategy-form');
     if (form) form.addEventListener('submit', async (e) => {
@@ -388,7 +412,10 @@ export function initStrategyPanel() {
         const allocated_funds = parseFloat(fundsStr) || 0;
         const insufficient_funds_policy = fundsPolicyEl ? fundsPolicyEl.value : 'reject';
         const marketPriceTypeEl = document.getElementById('strategy-market-price-type');
-        const default_market_price_type = marketPriceTypeEl ? Number(marketPriceTypeEl.value) : 5;
+        let default_market_price_type = marketPriceTypeEl ? Number(marketPriceTypeEl.value) : 5;
+        if (security_type === 'convertible_bond') {
+            default_market_price_type = 5;
+        }
         const barkNotifyEl = document.getElementById('strategy-bark-notify');
         const bark_notify_enabled = barkNotifyEl ? barkNotifyEl.checked : true;
         const deferBuyEl = document.getElementById('strategy-defer-buy');

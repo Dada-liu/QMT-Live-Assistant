@@ -10,6 +10,7 @@ from backend.utils import (
     fetch_open_prices_from_xtdata,
     fetch_stock_names_from_xtdata,
     validate_security_type_for_strategy,
+    validate_market_price_type_for_security_type,
 )
 from backend.db.base import db_lock
 from backend.db.repositories.strategy import StrategyRepository, InMemoryStrategyRepository
@@ -69,6 +70,9 @@ class StrategyManager:
             bark_notify_enabled=data.bark_notify_enabled,
             default_market_price_type=data.default_market_price_type,
             security_type=data.security_type,
+        )
+        validate_market_price_type_for_security_type(
+            data.security_type, data.default_market_price_type
         )
         if data.positions:
             for pa in data.positions:
@@ -160,6 +164,14 @@ class StrategyManager:
             update_data["available_cash"] = strategy.available_cash + diff
 
         update_data["updated_at"] = _now_iso()
+
+        effective_security_type = update_data.get("security_type", strategy.security_type)
+        effective_market_price_type = update_data.get(
+            "default_market_price_type", strategy.default_market_price_type
+        )
+        validate_market_price_type_for_security_type(
+            effective_security_type, effective_market_price_type
+        )
 
         if "security_type" in update_data and positions_value is None:
             # 仅修改策略种类时，存量持仓必须与新券种相容（否则存量持仓将无法卖出）

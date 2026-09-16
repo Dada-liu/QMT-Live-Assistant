@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from unittest.mock import patch, MagicMock
 from backend.strategy_manager import (
@@ -1408,3 +1409,71 @@ class TestConcurrency:
         assert s.positions[0]["quantity"] == 100
         assert s.positions[0]["available_quantity"] == 0
         assert s.positions[0]["frozen_quantity"] == 100
+
+
+class TestListAllEnrichedCache:
+    """list_all_enriched 的 TTL 缓存 + 单飞锁：多平台并发轮询共享一次 QMT 查询。"""
+
+    def _make_mgr(self):
+        mgr = StrategyManager()
+        mgr.create(StrategyCreate(name="缓存策略", allocated_funds=100000))
+        trader = MagicMock()
+        trader.query_stock_positions.return_value = []
+        account = MagicMock()
+        return mgr, trader, account
+
+    def test_second_call_within_ttl_uses_cache(self):
+        mgr, trader, account = self._make_mgr()
+        first = mgr.list_all_enriched(trader, account)
+        second = mgr.list_all_enriched(trader, account)
+        assert trader.query_stock_positions.call_count == 1
+        assert first == second
+
+    def test_mutation_invalidates_cache(self):
+        mgr, trader, account = self._make_mgr()
+        mgr.list_all_enriched(trader, account)
+        sid = next(iter(mgr._strategies))
+        mgr.update_position(sid, "000001.SZ", "buy", 100, 10.0)
+        mgr.list_all_enriched(trader, account)
+        assert trader.query_stock_positions.call_count == 2
+
+    def test_force_refresh_bypasses_cache(self):
+        mgr, trader, account = self._make_mgr()
+        mgr.list_all_enriched(trader, account)
+        mgr.list_all_enriched(trader, account, force_refresh=True)
+        assert trader.query_stock_positions.call_count == 2
+
+    def test_cache_expires_after_ttl(self, monkeypatch):
+        monkeypatch.setattr(StrategyManager, "ENRICHED_CACHE_TTL", 0)
+        mgr, trader, account = self._make_mgr()
+        mgr.list_all_enriched(trader, account)
+        mgr.list_all_enriched(trader, account)
+        assert trader.query_stock_positions.call_count == 2
+
+    def test_caller_mutation_does_not_pollute_cache(self):
+        mgr, trader, account = self._make_mgr()
+        first = mgr.list_all_enriched(trader, account)
+        first[0]["total_asset"] = -999
+        first[0]["order_count"] = 5
+        second = mgr.list_all_enriched(trader, account)
+        assert trader.query_stock_positions.call_count == 1
+        assert second[0]["total_asset"] == 100000
+        assert "order_count" not in second[0]
+
+    def test_concurrent_calls_share_single_qmt_query(self):
+        """8 线程同时查询，慢 QMT 调用只执行一次，其余线程读缓存。"""
+        mgr, trader, account = self._make_mgr()
+
+        def slow_query(*args, **kwargs):
+            time.sleep(0.1)
+            return []
+
+        trader.query_stock_positions.side_effect = slow_query
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(
+                lambda _: mgr.list_all_enriched(trader, account), range(8)
+            ))
+
+        assert trader.query_stock_positions.call_count == 1
+        assert all(r == results[0] for r in results)

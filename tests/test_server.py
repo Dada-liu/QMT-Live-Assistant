@@ -2936,6 +2936,23 @@ class TestStrategyInfo:
         finally:
             server._watchdog._state = ConnectionState.CONNECTED
 
+    def test_qmt_hang_returns_503_not_500(self, client, server, monkeypatch):
+        """QMT 查询 hang 时超时返回 503，而不是未捕获异常的 500。"""
+        monkeypatch.setattr("backend.server.BLOCKING_CALL_TIMEOUT_LONG", 0.2)
+        strategy = self._create_strategy(client, server)
+
+        def hang_query(*args, **kwargs):
+            time.sleep(2)
+            return []
+
+        with patch.object(server.trader, "query_stock_positions", hang_query):
+            response = client.get(
+                "/api/strategy_info",
+                headers={"X-Token": strategy["token"]},
+            )
+        assert response.status_code == 503
+        assert "超时" in response.json()["detail"]
+
 
 class TestPendingBuy:
     """调仓资金不足时的延迟买单（/api/jukuan_order + defer 开关 + process_all 重试）。"""

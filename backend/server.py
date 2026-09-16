@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, QMTInteractionError, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit
 from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -84,7 +84,11 @@ async def _verify_strategy_token(x_token: str = Header(...)):
     """仅策略 Token 可用，校验通过后返回对应策略；QMT 未连接时 503。"""
     if _current_server is None:
         raise HTTPException(status_code=401, detail="服务器未运行")
-    strategy = _current_server.strategy_manager.find_by_token(x_token)
+    # DB 查询卸载到线程池，避免同步 SQLite 调用阻塞事件循环
+    try:
+        strategy = await run_blocking(_current_server.strategy_manager.find_by_token, x_token)
+    except QMTInteractionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     if strategy is None or not strategy.enabled:
         raise HTTPException(status_code=401, detail="无效的Token")
     if not _current_server.running:
@@ -1196,11 +1200,14 @@ class QMTServer:
         @app.get('/api/strategy_info')
         async def strategy_info(strategy=Depends(_verify_strategy_token)):
             """外部服务用策略 Token 查询本策略的基本信息与资金汇总。"""
-            enriched = await run_blocking(
-                _current_server.strategy_manager.list_all_enriched,
-                _current_server.trader, _current_server.account,
-                timeout=BLOCKING_CALL_TIMEOUT_LONG,
-            )
+            try:
+                enriched = await run_blocking(
+                    _current_server.strategy_manager.list_all_enriched,
+                    _current_server.trader, _current_server.account,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
+            except QMTInteractionError as e:
+                raise HTTPException(status_code=503, detail=str(e))
             data = next((s for s in enriched if s['id'] == strategy.id), None)
             if data is None:
                 raise HTTPException(status_code=404, detail="策略不存在")
@@ -1236,11 +1243,14 @@ class QMTServer:
 
         @app.get('/api/strategies')
         async def list_strategies(token: str = Depends(_verify_token)):
-            strategies = await run_blocking(
-                _current_server.strategy_manager.list_all_enriched,
-                _current_server.trader, _current_server.account,
-                timeout=BLOCKING_CALL_TIMEOUT_LONG,
-            )
+            try:
+                strategies = await run_blocking(
+                    _current_server.strategy_manager.list_all_enriched,
+                    _current_server.trader, _current_server.account,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
+            except QMTInteractionError as e:
+                raise HTTPException(status_code=503, detail=str(e))
             return {'success': True, 'data': _enrich_order_count(strategies)}
 
         @app.post('/api/strategies')
@@ -1422,11 +1432,16 @@ class QMTServer:
 
         @app.post('/api/strategies/refresh')
         async def refresh_strategies(token: str = Depends(_require_qmt_connected)):
-            strategies = await run_blocking(
-                _current_server.strategy_manager.list_all_enriched,
-                _current_server.trader, _current_server.account,
-                timeout=BLOCKING_CALL_TIMEOUT_LONG,
-            )
+            # 手动刷新必须绕过 TTL 缓存，强制重新查询 QMT
+            try:
+                strategies = await run_blocking(
+                    _current_server.strategy_manager.list_all_enriched,
+                    _current_server.trader, _current_server.account,
+                    force_refresh=True,
+                    timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                )
+            except QMTInteractionError as e:
+                raise HTTPException(status_code=503, detail=str(e))
             return {'success': True, 'data': _enrich_order_count(strategies)}
 
         @app.get('/api/bark-config')

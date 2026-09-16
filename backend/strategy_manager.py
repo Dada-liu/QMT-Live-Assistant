@@ -3,6 +3,9 @@
 管理多个远程交易策略，支持策略 CRUD、资金分配、持仓跟踪、
 交易记录，以及基于 QMT 实时行情的持仓富化和当日盈亏计算。
 """
+import copy
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from backend.utils import (
@@ -46,10 +49,18 @@ def _make_position(stock_code: str, stock_name: str, quantity: int, avg_cost: fl
 class StrategyManager:
     """策略管理器 — 管理所有策略的生命周期和资金持仓跟踪"""
 
+    ENRICHED_CACHE_TTL = 2.0
+    """list_all_enriched 富化结果的缓存秒数；类属性便于测试 monkeypatch。"""
+
     def __init__(self, repository: Optional[StrategyRepository] = None):
         self._repo = repository or InMemoryStrategyRepository()
         self._daily_profit: float = 0.0
         self._strategies: Dict[str, Strategy] = {}
+        self._data_version = 0
+        self._enriched_lock = threading.Lock()
+        self._enriched_cache: Optional[List[dict]] = None
+        self._enriched_cache_time: float = 0.0
+        self._enriched_cache_version: int = -1
         self._refresh_cache()
 
     @property
@@ -202,6 +213,7 @@ class StrategyManager:
         result = self._repo.delete(strategy_id)
         if result:
             self._strategies.pop(strategy_id, None)
+            self._data_version += 1
         return result
 
     def toggle(self, strategy_id: str) -> Optional[Strategy]:
@@ -730,8 +742,28 @@ class StrategyManager:
             result[sid] = new_strategy
         return result
 
-    def list_all_enriched(self, trader, account) -> List[dict]:
-        """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）。"""
+    def list_all_enriched(self, trader, account, force_refresh: bool = False) -> List[dict]:
+        """列出所有策略，并用 QMT 实时行情数据富化持仓（current_price/market_value/daily_pnl）。
+
+        多平台并发轮询时共享同一份结果：锁保证同一时刻只有一个请求真正
+        查询 QMT（单飞），其余请求在 TTL 内直接读缓存；策略数据变更
+        （_persist/delete）会递增 _data_version 使缓存立即失效。
+        返回深拷贝，调用方对结果字典的修改不会污染缓存。
+        """
+        with self._enriched_lock:
+            now = time.monotonic()
+            if (not force_refresh
+                    and self._enriched_cache is not None
+                    and self._enriched_cache_version == self._data_version
+                    and now - self._enriched_cache_time < self.ENRICHED_CACHE_TTL):
+                return copy.deepcopy(self._enriched_cache)
+            result = self._list_all_enriched_uncached(trader, account)
+            self._enriched_cache = result
+            self._enriched_cache_time = time.monotonic()
+            self._enriched_cache_version = self._data_version
+            return copy.deepcopy(result)
+
+    def _list_all_enriched_uncached(self, trader, account) -> List[dict]:
         self._refresh_cache()
         if not self._strategies:
             return []
@@ -829,6 +861,7 @@ class StrategyManager:
         """保存策略并同步内存缓存。"""
         saved = self._repo.save(strategy)
         self._strategies[saved.id] = saved
+        self._data_version += 1
         return saved
 
     def _refresh_cache(self):

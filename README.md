@@ -30,7 +30,7 @@
 - 账户仪表板：可用资金/持仓市值/总资产/当日盈亏四卡片，点击可展开账户持仓明细
 - 订单监控：按日期/策略/状态筛选；实时订单时间列展示完整年/月/日 时:分:秒，跨天订单可直接区分日期；价格列展示委托价（市价单显示"市价"）；信号日志"股票"列展示 股票名(代码)（查询时实时补充名称，历史日志同样生效，名称缺失时只显示代码），默认展示异常信号（含 max_buyable 封顶的部分下单），状态列错误信息以【报错时间】前缀标注报错发生时刻（精确到挂起超时等延迟报错场景，历史数据回退用接收时间），超出打点省略、hover 通过 tooltip 展示完整内容，便于排查问题
 - Bark 手机推送：配置页绑定 iOS Bark Key 后，订单发起/成交/失败/超时未成交（分钟数可配，每笔仅提醒一次）自动推送到手机；失败与超时未成交为 critical 级别（静音/勿扰也提醒），失败带铃声；可按策略单独关闭推送
-- 盈亏分析：交易时段（工作日 09:00–15:35）每 60 秒自动采集账户与启用策略的资产快照（总资产/可用资金/持仓市值/当日盈亏），按分钟落库 `asset_snapshots` 表；`GET /api/pnl/overview` 提供日/月/年收益曲线、每日收益（日历热力图数据）与汇总指标（最新总资产/当日盈亏/累计收益率/区间收益率，月/年收益率由日收益率复合）；注意：出入金会直接影响总资产从而扭曲收益率（未做时间加权调整），且需先执行 `alembic upgrade head` 创建快照表
+- 盈亏分析：交易时段（工作日 09:00–15:35）每 60 秒自动采集账户与启用策略的资产快照（总资产/可用资金/持仓市值/当日盈亏），按分钟落库 `asset_snapshots` 表；`GET /api/pnl/overview` 提供日/月/年收益曲线、每日收益（日历热力图数据）、月/年聚合收益（月视图返回当年各月 `monthly_returns`、年视图返回所有年份 `yearly_returns`，pnl 为日盈亏求和、收益率为日收益率连乘复合）与汇总指标（最新总资产/当日盈亏/累计收益率/区间收益率，月/年收益率由日收益率复合）；注意：出入金会直接影响总资产从而扭曲收益率（未做时间加权调整），且需先执行 `alembic upgrade head` 创建快照表
 - 数据持久化：策略、持仓、订单、信号日志、应用设置（Bark 配置）默认落库 SQLite，重启不丢失
 
 **连接与安全**
@@ -190,7 +190,7 @@ CORS_ALLOW_ORIGINS=https://example.com
 | POST | `/api/orders/{order_id}/cancel` | 主 Token | 撤销待成交/部分成交订单，标记 failed 并回滚策略持仓 |
 | POST | `/api/orders/{order_id}/resend` | 主 Token | 重发失败订单（限 failed 且未重发过）；可选请求体 `{"quantity": int, "price": float}` 覆盖原参数（price=0 为市价），买入数量须为整手（股票 100 股、可转债 10 张） |
 | GET | `/api/signal-logs` | 主 Token | 信号日志（`?status=&strategy_name=&start_date=&end_date=`） |
-| GET | `/api/pnl/overview` | 主 Token | 盈亏分析（`?scope=account\|strategy&strategy_id=&period=day\|month\|year&date=YYYY-MM-DD`），返回 `summary`（total_asset/today_pnl/cum_return/period_return）、`curve`（day 为分钟点、month/year 为每日点）、`daily_returns`（day/month 返回当月、year 返回当年每日收益） |
+| GET | `/api/pnl/overview` | 主 Token | 盈亏分析（`?scope=account\|strategy&strategy_id=&period=day\|month\|year&date=YYYY-MM-DD`），返回 `summary`（total_asset/today_pnl/cum_return/period_return）、`curve`（day 为分钟点、month/year 为每日点）、`daily_returns`（day/month 返回当月、year 返回当年每日收益）、`monthly_returns`（仅 period=month，当年各月聚合，否则 null）、`yearly_returns`（仅 period=year，所有年份聚合，否则 null） |
 | POST | `/api/convert/jq-to-qmt` | 主 Token | 聚宽→QMT 转换 |
 | POST | `/api/convert/qmt-to-jq` | 主 Token | QMT→聚宽 转换 |
 | POST | `/api/jukuan_order` | 策略 Token | 聚宽风格按数量下单；资金不足被挂起时返回 `deferred: true` |

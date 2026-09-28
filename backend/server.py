@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, QMTInteractionError, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit, is_trading_time, compute_daily_returns, compute_curve, compound_returns
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, QMTInteractionError, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit, is_trading_time, compute_daily_returns, compute_curve, compound_returns, compute_monthly_returns, compute_yearly_returns
 from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -520,6 +520,13 @@ class QMTServer:
 
         curve = compute_curve(snapshots, period, anchor_date)
 
+        monthly_returns = None
+        yearly_returns = None
+        if period == "month":
+            monthly_returns = compute_monthly_returns(snapshots, anchor_date.year)
+        elif period == "year":
+            yearly_returns = compute_yearly_returns(snapshots)
+
         summary = {
             "total_asset": None,
             "today_pnl": None,
@@ -554,6 +561,8 @@ class QMTServer:
             "summary": summary,
             "curve": curve,
             "daily_returns": daily_returns,
+            "monthly_returns": monthly_returns,
+            "yearly_returns": yearly_returns,
         }
 
     def convert_to_dict(self, obj):

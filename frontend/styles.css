@@ -891,13 +891,115 @@ a:hover { text-decoration: underline; }
   height: 320px;
 }
 
-.pnl-chart-calendar {
+/* --- 收益日历（DOM 网格） --- */
+.pnl-cal-container {
   width: 100%;
-  height: 280px;
 }
 
-.pnl-chart-calendar.year-view {
-  height: 720px;
+.pnl-cal-grid {
+  display: grid;
+  gap: var(--spacing-xs);
+}
+
+.pnl-cal-weekdays {
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: var(--spacing-xxs);
+}
+
+.pnl-cal-weekday {
+  text-align: center;
+  font-size: var(--text-caption);
+  color: var(--color-muted);
+}
+
+.pnl-cal-days {
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.pnl-cal-months {
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-sm);
+}
+
+.pnl-cal-years {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.pnl-cal-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xxs);
+  min-height: 64px;
+  padding: var(--spacing-xs);
+  border: 1px solid transparent;
+  border-radius: var(--rounded-md);
+}
+
+.pnl-cal-cell.blank {
+  visibility: hidden;
+}
+
+.pnl-cal-cell.has-data {
+  background-color: color-mix(in srgb, var(--pnl-cell-color) calc(var(--pnl-pct, 20) * 1%), transparent);
+}
+
+.pnl-cal-cell.up { --pnl-cell-color: var(--color-pnl-up); }
+.pnl-cal-cell.down { --pnl-cell-color: var(--color-pnl-down); }
+
+.pnl-cal-cell.current {
+  border-color: var(--color-primary);
+}
+
+.pnl-cal-label {
+  font-size: var(--text-body-sm);
+  color: var(--color-ink);
+  line-height: 1.2;
+}
+
+.pnl-cal-cell.muted .pnl-cal-label {
+  color: var(--color-muted-soft);
+}
+
+.pnl-cal-pnl {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption-strong);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pnl-cal-cell.up .pnl-cal-pnl { color: var(--color-pnl-up); }
+.pnl-cal-cell.down .pnl-cal-pnl { color: var(--color-pnl-down); }
+
+.pnl-cal-months .pnl-cal-cell,
+.pnl-cal-years .pnl-cal-cell {
+  min-height: 72px;
+  padding: var(--spacing-sm) var(--spacing-base);
+  background-color: var(--color-surface-soft);
+}
+
+.pnl-cal-months .pnl-cal-cell.has-data,
+.pnl-cal-years .pnl-cal-cell.has-data {
+  background-color: color-mix(in srgb, var(--pnl-cell-color) calc(var(--pnl-pct, 20) * 1%), var(--color-surface-soft));
+}
+
+.pnl-cal-years .pnl-cal-cell {
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+
+@media (max-width: 768px) {
+  .pnl-cal-cell {
+    min-height: 48px;
+    padding: var(--spacing-xxs);
+  }
+  .pnl-cal-label { font-size: var(--text-caption); }
+  .pnl-cal-pnl { font-size: 10px; }
+  .pnl-cal-months { grid-template-columns: repeat(3, 1fr); }
 }
 
 @media (max-width: 640px) {

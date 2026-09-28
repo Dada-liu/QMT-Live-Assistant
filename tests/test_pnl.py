@@ -24,6 +24,8 @@ from backend.utils import (
     compute_daily_returns,
     compute_curve,
     compound_returns,
+    compute_monthly_returns,
+    compute_yearly_returns,
 )
 
 
@@ -73,8 +75,10 @@ def server():
         port=8011,
         asset_snapshot_repository=InMemoryAssetSnapshotRepository(),
     )
-    loop, thread = _start_server(srv)
-    # 取消后台快照采集任务，避免交易时段测试期间自动写入快照干扰断言
+    # 快照 loop 启动后立即执行首次采集，与任务取消存在竞态；
+    # 启动期间强制为非交易时段，确保不会自动写入快照干扰断言
+    with patch("backend.server.is_trading_time", return_value=False):
+        loop, thread = _start_server(srv)
     if srv._snapshot_task is not None:
         loop.call_soon_threadsafe(srv._snapshot_task.cancel)
         for _ in range(100):
@@ -179,6 +183,61 @@ class TestComputeCurve:
     def test_invalid_period(self):
         with pytest.raises(ValueError):
             compute_curve(self.snaps, "week", datetime(2026, 9, 28).date())
+
+
+class TestComputeMonthlyReturns:
+    def setup_method(self):
+        # 08-31 为首个有快照日（无基准，pnl/return 为 None）；
+        # 09 月两日各 +1%，10-09 再 +1%
+        self.snaps = [
+            (datetime(2026, 8, 31, 15, 0), 100000.0),
+            (datetime(2026, 9, 1, 15, 0), 101000.0),
+            (datetime(2026, 9, 28, 15, 0), 102010.0),
+            (datetime(2026, 10, 9, 15, 0), 103030.1),
+        ]
+
+    def test_monthly_aggregation(self):
+        result = compute_monthly_returns(self.snaps, 2026)
+        assert [m["month"] for m in result] == ["2026-08", "2026-09", "2026-10"]
+        # 08 月仅首日，无基准可计
+        assert result[0] == {"month": "2026-08", "pnl": None, "return": None}
+        # 09 月：pnl = 1000 + 1010，return = 1.01² - 1
+        assert result[1]["pnl"] == 2010.0
+        assert result[1]["return"] == round(1.01 * 1.01 - 1, 6)
+        # 10 月：单日 +1%
+        assert result[2]["pnl"] == 1020.1
+        assert result[2]["return"] == 0.01
+
+    def test_months_without_data_absent(self):
+        snaps = [
+            (datetime(2026, 9, 1, 15, 0), 101000.0),
+            (datetime(2026, 10, 9, 15, 0), 102010.0),
+        ]
+        result = compute_monthly_returns(snaps, 2026)
+        assert [m["month"] for m in result] == ["2026-09", "2026-10"]
+
+    def test_year_filter(self):
+        assert compute_monthly_returns(self.snaps, 2025) == []
+
+    def test_empty(self):
+        assert compute_monthly_returns([], 2026) == []
+
+
+class TestComputeYearlyReturns:
+    def test_yearly_aggregation(self):
+        snaps = [
+            (datetime(2025, 12, 31, 15, 0), 100000.0),
+            (datetime(2026, 1, 5, 15, 0), 101000.0),
+            (datetime(2026, 9, 28, 15, 0), 102010.0),
+        ]
+        result = compute_yearly_returns(snaps)
+        assert [y["year"] for y in result] == ["2025", "2026"]
+        assert result[0] == {"year": "2025", "pnl": None, "return": None}
+        assert result[1]["pnl"] == 2010.0
+        assert result[1]["return"] == round(1.01 * 1.01 - 1, 6)
+
+    def test_empty(self):
+        assert compute_yearly_returns([]) == []
 
 
 class TestAssetSnapshotRepository:
@@ -294,6 +353,8 @@ class TestPnlOverviewApi:
         }
         assert data["curve"] == []
         assert data["daily_returns"] == []
+        assert data["monthly_returns"] is None
+        assert data["yearly_returns"] is None
 
     def test_day_overview_values(self, client, server):
         self._seed_account_snapshots(server)
@@ -319,6 +380,10 @@ class TestPnlOverviewApi:
         assert daily[0]["pnl"] is None
         assert daily[1] == {"date": "2026-09-28", "pnl": 300.0, "return": 0.003}
 
+        # 日视图不做月/年聚合，字段固定为 null 以保持响应结构一致
+        assert data["monthly_returns"] is None
+        assert data["yearly_returns"] is None
+
     def test_month_overview_values(self, client, server):
         self._seed_account_snapshots(server)
         response = client.get(
@@ -333,6 +398,10 @@ class TestPnlOverviewApi:
         assert data["curve"][1]["return"] == 0.003
         assert data["summary"]["period_return"] == 0.003
         assert len(data["daily_returns"]) == 2
+        assert data["monthly_returns"] == [
+            {"month": "2026-09", "pnl": 300.0, "return": 0.003}
+        ]
+        assert data["yearly_returns"] is None
 
     def test_year_overview_values(self, client, server):
         self._seed_account_snapshots(server)
@@ -345,6 +414,10 @@ class TestPnlOverviewApi:
         assert [p["t"] for p in data["curve"]] == ["2026-09-25", "2026-09-28"]
         assert data["summary"]["period_return"] == 0.003
         assert len(data["daily_returns"]) == 2
+        assert data["yearly_returns"] == [
+            {"year": "2026", "pnl": 300.0, "return": 0.003}
+        ]
+        assert data["monthly_returns"] is None
 
     def test_strategy_scope(self, client, server):
         create_resp = client.post(

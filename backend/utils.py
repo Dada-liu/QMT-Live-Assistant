@@ -704,3 +704,42 @@ def compound_returns(returns: List[Optional[float]]) -> Optional[float]:
     if count == 0:
         return None
     return round(value - 1, 6)
+
+
+def _aggregate_period_returns(daily_returns: List[dict]) -> Tuple[Optional[float], Optional[float]]:
+    """聚合一组日收益：pnl 为各日 pnl 之和（None 跳过，全 None 时为 None），
+    return 为各日收益率连乘复合。"""
+    pnls = [d["pnl"] for d in daily_returns if d["pnl"] is not None]
+    pnl = round(sum(pnls), 2) if pnls else None
+    return pnl, compound_returns([d["return"] for d in daily_returns])
+
+
+def compute_monthly_returns(snapshots: List[Tuple[datetime, float]], year: int) -> List[dict]:
+    """按月聚合收益：返回指定年份内有快照数据的月份列表，按月份升序。
+
+    每日 pnl/return 沿用 compute_daily_returns 口径（当日最后总资产相对
+    前一有快照日最后总资产，首日 None）；月 pnl 为该月每日 pnl 之和
+    （None 跳过），月 return 为该月各日收益率连乘复合。
+    """
+    prefix = f"{year:04d}"
+    daily = [d for d in compute_daily_returns(snapshots) if d["date"][:4] == prefix]
+    by_month = {}
+    for d in daily:
+        by_month.setdefault(d["date"][:7], []).append(d)
+    result = []
+    for month in sorted(by_month):
+        pnl, ret = _aggregate_period_returns(by_month[month])
+        result.append({"month": month, "pnl": pnl, "return": ret})
+    return result
+
+
+def compute_yearly_returns(snapshots: List[Tuple[datetime, float]]) -> List[dict]:
+    """按年聚合收益：返回所有有快照数据的年份列表，按年份升序。口径同 compute_monthly_returns。"""
+    by_year = {}
+    for d in compute_daily_returns(snapshots):
+        by_year.setdefault(d["date"][:4], []).append(d)
+    result = []
+    for year in sorted(by_year):
+        pnl, ret = _aggregate_period_returns(by_year[year])
+        result.append({"year": year, "pnl": pnl, "return": ret})
+    return result

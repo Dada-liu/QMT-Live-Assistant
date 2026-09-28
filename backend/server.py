@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
-from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, QMTInteractionError, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit
+from backend.utils import fetch_preclose_from_xtdata, fetch_stock_names_from_xtdata, normalize_to_qmt, seconds_until_market_open, qmt_to_jq, qmt_call, run_blocking, QMTInteractionError, BLOCKING_CALL_TIMEOUT_LONG, is_future, get_lot_size, get_quantity_unit, is_trading_time, compute_daily_returns, compute_curve, compound_returns
 from backend.jukuan_orders import JukuanOrderHandler, InsufficientFundsError
 import uvicorn
 from backend.order_tracker import OrderTracker, OrderState
@@ -42,6 +42,7 @@ from backend.source_platform_notifier import (
 from backend.bark_service import BarkService, BarkConfig
 from backend.pending_buy_manager import PendingBuyManager
 from backend.db.repositories.settings import SettingsRepository
+from backend.db.repositories.asset_snapshot import AssetSnapshotRepository, InMemoryAssetSnapshotRepository
 from config.settings import settings
 import threading
 
@@ -122,6 +123,7 @@ class QMTServer:
                  account_repository: Optional[AccountRepository] = None,
                  settings_repository: Optional[SettingsRepository] = None,
                  pending_buy_repository=None,
+                 asset_snapshot_repository: Optional[AssetSnapshotRepository] = None,
                  db_session=None):
         global _current_server
         _current_server = self
@@ -136,9 +138,11 @@ class QMTServer:
         self._db_session = db_session
         self._account_repository = account_repository
         self._signal_log_repository = signal_log_repository
+        self._asset_snapshot_repository = asset_snapshot_repository
         self.order_tracker = OrderTracker(repository=order_repository)
         self._poll_task: Optional[asyncio.Task] = None
         self._market_open_poll_task: Optional[asyncio.Task] = None
+        self._snapshot_task: Optional[asyncio.Task] = None
         self.running = False
         self.strategy_manager = StrategyManager(repository=strategy_repository)
         self.bark_service = BarkService(
@@ -439,6 +443,118 @@ class QMTServer:
                     pass
         except asyncio.CancelledError:
             pass
+
+    async def _snapshot_loop(self):
+        """交易时段内每 60 秒采集一次账户与策略资产快照，按分钟 upsert。"""
+        try:
+            while self.running:
+                try:
+                    if (
+                        self._watchdog is not None
+                        and self._watchdog.connected
+                        and self.trader is not None
+                        and self.account is not None
+                        and is_trading_time()
+                    ):
+                        await run_blocking(
+                            self._collect_asset_snapshots,
+                            timeout=BLOCKING_CALL_TIMEOUT_LONG,
+                        )
+                except Exception:
+                    # 采集失败不应影响主服务
+                    pass
+                await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            pass
+
+    def _collect_asset_snapshots(self):
+        """采集账户与启用策略的资产快照并落库（同步方法，经 run_blocking 调用）。"""
+        repo = self._asset_snapshot_repository
+        if repo is None:
+            return
+        ts = datetime.now().replace(second=0, microsecond=0)
+
+        asset = qmt_call(
+            self.trader,
+            "query_stock_asset",
+            self.account,
+            context={"account_id": getattr(self.account, 'account_id', self.account)},
+        )
+        positions = self._query_account_positions()
+        daily_profit = round(sum(p.get('daily_pnl', 0) for p in positions), 2)
+        repo.upsert_snapshot(
+            scope="account",
+            strategy_id=None,
+            ts=ts,
+            total_asset=float(getattr(asset, 'total_asset', 0.0) or 0.0),
+            cash=float(getattr(asset, 'cash', 0.0) or 0.0),
+            market_value=float(getattr(asset, 'market_value', 0.0) or 0.0),
+            daily_pnl=daily_profit,
+        )
+
+        for s in self.strategy_manager.list_all_enriched(self.trader, self.account):
+            repo.upsert_snapshot(
+                scope="strategy",
+                strategy_id=s["id"],
+                ts=ts,
+                total_asset=float(s.get("total_asset", 0.0) or 0.0),
+                cash=float(s.get("available_cash", 0.0) or 0.0),
+                market_value=round(sum(
+                    float(p.get("market_value", 0.0) or 0.0)
+                    for p in s.get("positions", [])
+                ), 2),
+                daily_pnl=float(s.get("daily_pnl", 0.0) or 0.0),
+            )
+
+    def _build_pnl_overview(self, scope: str, period: str, anchor_date,
+                            snapshots: list) -> dict:
+        """由快照序列构建盈亏分析响应（纯计算，便于测试）。"""
+        all_daily_returns = compute_daily_returns(snapshots)
+        returns_by_date = {d["date"]: d for d in all_daily_returns}
+        if period == "year":
+            prefix = f"{anchor_date.year:04d}"
+            daily_returns = [d for d in all_daily_returns if d["date"][:4] == prefix]
+        else:
+            prefix = anchor_date.strftime("%Y-%m")
+            daily_returns = [d for d in all_daily_returns if d["date"][:7] == prefix]
+
+        curve = compute_curve(snapshots, period, anchor_date)
+
+        summary = {
+            "total_asset": None,
+            "today_pnl": None,
+            "cum_return": None,
+            "period_return": None,
+        }
+        if snapshots:
+            latest_asset = snapshots[-1][1]
+            first_asset = snapshots[0][1]
+            summary["total_asset"] = round(latest_asset, 2)
+            if first_asset:
+                summary["cum_return"] = round(latest_asset / first_asset - 1, 6)
+
+            anchor_key = anchor_date.isoformat()
+            anchor_daily = returns_by_date.get(anchor_key)
+            if anchor_daily is not None:
+                summary["today_pnl"] = anchor_daily["pnl"]
+
+            if period == "day":
+                summary["period_return"] = (
+                    anchor_daily["return"] if anchor_daily is not None else None
+                )
+            else:
+                summary["period_return"] = compound_returns(
+                    [d["return"] for d in daily_returns]
+                )
+
+        return {
+            "scope": scope,
+            "period": period,
+            "date": anchor_date.isoformat(),
+            "summary": summary,
+            "curve": curve,
+            "daily_returns": daily_returns,
+        }
 
     def convert_to_dict(self, obj):
         if isinstance(obj, (int, float, str, bool, type(None))):
@@ -860,6 +976,48 @@ class QMTServer:
                 return {'success': True, 'data': positions}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
+
+        @app.get('/api/pnl/overview')
+        async def pnl_overview(
+            scope: str = "account",
+            strategy_id: Optional[str] = None,
+            period: str = "day",
+            date: Optional[str] = None,
+            token: str = Depends(_verify_token),
+        ):
+            if scope not in ("account", "strategy"):
+                raise HTTPException(status_code=400, detail="scope 仅支持 account 或 strategy")
+            if period not in ("day", "month", "year"):
+                raise HTTPException(status_code=400, detail="period 仅支持 day、month 或 year")
+            if date is None:
+                anchor_date = datetime.now().date()
+            else:
+                try:
+                    anchor_date = datetime.strptime(date, "%Y-%m-%d").date()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="date 格式须为 YYYY-MM-DD")
+
+            snapshot_strategy_id = None
+            if scope == "strategy":
+                if not strategy_id:
+                    raise HTTPException(status_code=400, detail="scope=strategy 时 strategy_id 必填")
+                strategy = await run_blocking(
+                    _current_server.strategy_manager.get, strategy_id
+                )
+                if strategy is None:
+                    raise HTTPException(status_code=404, detail="策略不存在")
+                snapshot_strategy_id = strategy_id
+
+            repo = _current_server._asset_snapshot_repository
+            if repo is None:
+                rows = []
+            else:
+                rows = await run_blocking(
+                    repo.list_range, scope, snapshot_strategy_id, None, None
+                )
+            snapshots = [(r.ts, float(r.total_asset)) for r in rows]
+            data = _current_server._build_pnl_overview(scope, period, anchor_date, snapshots)
+            return {'success': True, 'data': data}
 
         @app.post('/api/convert/jq-to-qmt')
         async def convert_jq_to_qmt(request: dict):
@@ -1493,6 +1651,7 @@ class QMTServer:
         self.running = True
         self._poll_task = asyncio.create_task(self._poll_orders_loop())
         self._market_open_poll_task = asyncio.create_task(self._market_open_poll_loop())
+        self._snapshot_task = asyncio.create_task(self._snapshot_loop())
 
     def _bump_mock_order_counter(self):
         """将 MockTrader 的订单号计数器抬升到历史最大订单号之上。
@@ -1543,7 +1702,7 @@ class QMTServer:
         """异步停止：取消轮询任务、停止看门狗、关闭数据库会话。"""
         global _current_server
         self.running = False
-        for task_attr in ('_poll_task', '_market_open_poll_task'):
+        for task_attr in ('_poll_task', '_market_open_poll_task', '_snapshot_task'):
             task = getattr(self, task_attr, None)
             if task is not None and not task.done():
                 task.cancel()

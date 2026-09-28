@@ -8,6 +8,7 @@ import { initStrategyPanel, loadStrategies, getStrategies, populateStrategyDropd
 import { Toast } from './toast.js';
 import { Docs } from './docs.js';
 import { Tooltip } from './tooltip.js';
+import { initPnl, loadPnl } from './pnl.js';
 
 async function initApp() {
     UI.initTheme();
@@ -17,7 +18,7 @@ async function initApp() {
     try { initMonitor(); } catch (e) { console.error('[init] initMonitor failed:', e); }
     try { initDashboard(); } catch (e) { console.error('[init] initDashboard failed:', e); }
     try { initStrategyPanel(); } catch (e) { console.error('[init] initStrategyPanel failed:', e); }
-    try { initJqConverter(); } catch (e) { console.error('[init] initJqConverter failed:', e); }
+    try { initPnl(); } catch (e) { console.error('[init] initPnl failed:', e); }
 
     Docs.init();
 
@@ -180,6 +181,9 @@ function initTabNavigation() {
                 fetchOrders();
                 fetchSignalLogs();
             }
+            if (targetId === 'pnl') {
+                loadPnl();
+            }
         });
     });
 
@@ -189,46 +193,6 @@ function initTabNavigation() {
         if (!navLinks.contains(target) && !menuToggle.contains(target)) {
             setMobileMenuOpen(false);
         }
-    });
-}
-
-function initJqConverter() {
-    function jqToQmt(code) {
-        if (code.endsWith('.XSHE')) return code.replace('.XSHE', '.SZ');
-        if (code.endsWith('.XSHG')) return code.replace('.XSHG', '.SH');
-        if (code.endsWith('.XBJ')) return code.replace('.XBJ', '.BJ');
-        return code;
-    }
-
-    function qmtToJq(code) {
-        if (code.endsWith('.SZ')) return code.replace('.SZ', '.XSHE');
-        if (code.endsWith('.SH')) return code.replace('.SH', '.XSHG');
-        if (code.endsWith('.BJ')) return code.replace('.BJ', '.XBJ');
-        return code;
-    }
-
-    const jqInput = document.getElementById('jq-code');
-    const qmtInput = document.getElementById('qmt-code');
-    if (!jqInput || !qmtInput) return;
-
-    let debounceTimer;
-
-    jqInput.addEventListener('input', () => {
-        clearTimeout(debounceTimer);
-        const code = jqInput.value.trim();
-        if (!code) { qmtInput.value = ''; return; }
-        debounceTimer = setTimeout(() => {
-            qmtInput.value = jqToQmt(code);
-        }, 200);
-    });
-
-    qmtInput.addEventListener('input', () => {
-        clearTimeout(debounceTimer);
-        const code = qmtInput.value.trim();
-        if (!code) { jqInput.value = ''; return; }
-        debounceTimer = setTimeout(() => {
-            jqInput.value = qmtToJq(code);
-        }, 200);
     });
 }
 

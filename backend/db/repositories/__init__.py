@@ -29,6 +29,11 @@ from backend.db.repositories.pending_buy import (
     InMemoryPendingBuyRepository,
     SQLAlchemyPendingBuyRepository,
 )
+from backend.db.repositories.asset_snapshot import (
+    AssetSnapshotRepository,
+    InMemoryAssetSnapshotRepository,
+    SQLAlchemyAssetSnapshotRepository,
+)
 
 __all__ = [
     "Repository",
@@ -51,4 +56,7 @@ __all__ = [
     "PendingBuyRepository",
     "InMemoryPendingBuyRepository",
     "SQLAlchemyPendingBuyRepository",
+    "AssetSnapshotRepository",
+    "InMemoryAssetSnapshotRepository",
+    "SQLAlchemyAssetSnapshotRepository",
 ]

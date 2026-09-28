@@ -76,17 +76,15 @@ class APIClient {
         });
     }
 
-    async convertJqToQmt(code) {
-        return this.request('api/convert/jq-to-qmt', {
-            method: 'POST',
-            body: JSON.stringify({ code }),
-        });
-    }
-
-    async convertQmtToJq(code) {
-        return this.request('api/convert/qmt-to-jq', {
-            method: 'POST',
-            body: JSON.stringify({ code }),
+    async getPnlOverview(token, params = {}) {
+        const search = new URLSearchParams();
+        if (params.scope) search.append('scope', params.scope);
+        if (params.strategy_id) search.append('strategy_id', params.strategy_id);
+        if (params.period) search.append('period', params.period);
+        if (params.date) search.append('date', params.date);
+        const query = search.toString();
+        return this.request(`api/pnl/overview${query ? '?' + query : ''}`, {
+            headers: { 'X-Token': token },
         });
     }
 

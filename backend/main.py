@@ -22,6 +22,7 @@ from backend.db.repositories import (
     SQLAlchemySignalLogRepository,
     SQLAlchemySettingsRepository,
     SQLAlchemyPendingBuyRepository,
+    SQLAlchemyAssetSnapshotRepository,
 )
 from config.settings import settings
 
@@ -58,7 +59,7 @@ app.add_middleware(
 def _create_repositories(session):
     """根据配置创建 Repository。若 PERSISTENCE_MODE=memory 返回 None，使用内存实现。"""
     if settings.PERSISTENCE_MODE == "memory":
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
     return (
         session,
         SQLAlchemyStrategyRepository(session),
@@ -67,6 +68,7 @@ def _create_repositories(session):
         SQLAlchemySignalLogRepository(session),
         SQLAlchemySettingsRepository(session),
         SQLAlchemyPendingBuyRepository(session),
+        SQLAlchemyAssetSnapshotRepository(session),
     )
 
 
@@ -193,6 +195,7 @@ async def start_server(data: dict):
         signal_log_repository,
         settings_repository,
         pending_buy_repository,
+        asset_snapshot_repository,
     ) = _create_repositories(db_session)
 
     server = QMTServer(
@@ -206,6 +209,7 @@ async def start_server(data: dict):
         signal_log_repository=signal_log_repository,
         settings_repository=settings_repository,
         pending_buy_repository=pending_buy_repository,
+        asset_snapshot_repository=asset_snapshot_repository,
         db_session=db_session,
     )
 
@@ -303,6 +307,7 @@ if __name__ == "__main__":
             signal_log_repository,
             settings_repository,
             pending_buy_repository,
+            asset_snapshot_repository,
         ) = _create_repositories(db_session)
         server = QMTServer(
             account_id=args.account,
@@ -316,6 +321,7 @@ if __name__ == "__main__":
             signal_log_repository=signal_log_repository,
             settings_repository=settings_repository,
             pending_buy_repository=pending_buy_repository,
+            asset_snapshot_repository=asset_snapshot_repository,
             db_session=db_session,
         )
 

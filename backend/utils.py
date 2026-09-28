@@ -8,7 +8,7 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional
+from typing import List, Optional, Tuple
 from backend.constants import (
     RED, GREEN, RESET, STOCK_BUY, STOCK_SELL,
     SECURITY_TYPE_STOCK, SECURITY_TYPE_CONVERTIBLE_BOND, SECURITY_TYPE_NAMES,
@@ -605,3 +605,102 @@ def build_server_url(host: str, port: int, root_path: str = "") -> str:
     if root_path:
         base = f"{base}/{root_path.lstrip('/')}"
     return base
+
+
+def is_trading_time(now: Optional[datetime] = None) -> bool:
+    """判断当前是否处于交易采集时段（工作日 09:00–15:35）。"""
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return time(9, 0) <= now.time() <= time(15, 35)
+
+
+# ---- 盈亏分析：收益计算纯函数 ----
+
+def _daily_last_snapshots(snapshots: List[Tuple[datetime, float]]) -> List[Tuple[datetime, float]]:
+    """按日聚合快照序列，返回每日最后一条，按日期升序。"""
+    daily_last = {}
+    for ts, total_asset in snapshots:
+        daily_last[ts.date()] = (ts, total_asset)
+    return [daily_last[day] for day in sorted(daily_last)]
+
+
+def compute_daily_returns(snapshots: List[Tuple[datetime, float]]) -> List[dict]:
+    """按日计算收益：当日最后总资产相对前一有快照日最后总资产的差值与收益率。
+
+    首个有快照的日期没有前一日基准，pnl 与 return 为 None。
+    """
+    result = []
+    prev_asset = None
+    for ts, total_asset in _daily_last_snapshots(snapshots):
+        if prev_asset is None:
+            pnl, ret = None, None
+        else:
+            pnl = round(total_asset - prev_asset, 2)
+            ret = round((total_asset - prev_asset) / prev_asset, 6) if prev_asset else None
+        result.append({"date": ts.date().isoformat(), "pnl": pnl, "return": ret})
+        prev_asset = total_asset
+    return result
+
+
+def compute_curve(snapshots: List[Tuple[datetime, float]], period: str,
+                  anchor_date) -> List[dict]:
+    """按周期截取收益曲线。
+
+    - day：anchor_date 当日全部快照点（t 格式 "YYYY-MM-DD HH:MM"）；
+    - month/year：窗口内每日最后一条（t 格式 "YYYY-MM-DD"）。
+    每点 return 为相对窗口基准（窗口前最近一条快照的总资产；无则窗口内
+    第一点，其 return 为 0）的累计收益率。
+    """
+    if period == "day":
+        window = [(ts, a) for ts, a in snapshots if ts.date() == anchor_date]
+        fmt = "%Y-%m-%d %H:%M"
+    elif period == "month":
+        window = _daily_last_snapshots([
+            (ts, a) for ts, a in snapshots
+            if ts.year == anchor_date.year and ts.month == anchor_date.month
+        ])
+        fmt = "%Y-%m-%d"
+    elif period == "year":
+        window = _daily_last_snapshots([
+            (ts, a) for ts, a in snapshots if ts.year == anchor_date.year
+        ])
+        fmt = "%Y-%m-%d"
+    else:
+        raise ValueError(f"不支持的 period: {period}")
+
+    if not window:
+        return []
+
+    prior = [a for ts, a in snapshots if ts < window[0][0]]
+    if prior:
+        base = prior[-1]
+        base_is_window = False
+    else:
+        base = window[0][1]
+        base_is_window = True
+
+    curve = []
+    for i, (ts, total_asset) in enumerate(window):
+        if base_is_window and i == 0:
+            ret = 0.0
+        elif base:
+            ret = round(total_asset / base - 1, 6)
+        else:
+            ret = None
+        curve.append({"t": ts.strftime(fmt), "total_asset": total_asset, "return": ret})
+    return curve
+
+
+def compound_returns(returns: List[Optional[float]]) -> Optional[float]:
+    """将日收益率序列复合（连乘）为区间收益率；全为空时返回 None。"""
+    value = 1.0
+    count = 0
+    for r in returns:
+        if r is None:
+            continue
+        value *= 1 + r
+        count += 1
+    if count == 0:
+        return None
+    return round(value - 1, 6)

@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from backend.db.base import Base
-from backend.db.models import account, strategy, strategy_token, position, order, order_event, signal_log, settings  # noqa
+from backend.db.models import account, strategy, strategy_token, position, order, order_event, signal_log, settings, asset_snapshot  # noqa
 
 # this is the Alembic Config object, which provides access to the values within the .ini file in use.
 config = context.config

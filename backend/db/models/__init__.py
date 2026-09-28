@@ -8,6 +8,7 @@ from backend.db.models.order_event import OrderEventModel
 from backend.db.models.signal_log import SignalLogModel
 from backend.db.models.settings import AppSettingsModel
 from backend.db.models.pending_buy_order import PendingBuyOrderModel
+from backend.db.models.asset_snapshot import AssetSnapshotModel
 
 __all__ = [
     "AccountModel",
@@ -19,4 +20,5 @@ __all__ = [
     "SignalLogModel",
     "AppSettingsModel",
     "PendingBuyOrderModel",
+    "AssetSnapshotModel",
 ]

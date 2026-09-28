@@ -25,7 +25,7 @@
       <li><a href="#account" class="active">QMT账号</a></li>
       <li><a href="#trade">买卖监控</a></li>
       <li><a href="#config">配置</a></li>
-      <li><a href="#converter">工具</a></li>
+      <li><a href="#pnl">盈亏分析</a></li>
       <li><a href="#docs">文档</a></li>
     </ul>
     <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="切换导航" aria-expanded="false">☰</button>
@@ -341,25 +341,71 @@
       </div>
     </section>
 
-    <!-- 聚宽代码转换 -->
-    <section id="converter" class="section hidden">
+    <!-- 盈亏分析 -->
+    <section id="pnl" class="section hidden">
       <div class="section-header">
-        <span class="section-label">代码转换</span>
-        <h2 class="section-title">聚宽 ↔ QMT 格式转换</h2>
-        <p class="section-desc">在聚宽代码格式（000001.XSHE）和 QMT 格式（000001.SZ）之间互相转换。</p>
+        <span class="section-label">盈亏分析</span>
+        <h2 class="section-title">收益概览</h2>
+        <p class="section-desc">查看账号或单策略的收益曲线与每日盈亏分布。</p>
       </div>
       <div class="card">
-        <div class="converter-layout">
-          <div class="form-group" style="margin-bottom:0;">
-            <label class="form-label">聚宽格式</label>
-            <input class="form-input" type="text" id="jq-code" placeholder="000001.XSHE">
+        <div class="signal-filter-bar" id="pnl-filter-bar">
+          <div class="filter-group">
+            <label class="filter-label">范围</label>
+            <div class="seg-group" id="pnl-scope-group">
+              <button type="button" class="seg-btn active" data-scope="account">账号收益</button>
+              <button type="button" class="seg-btn" data-scope="strategy">策略收益</button>
+            </div>
           </div>
-          <div class="converter-arrow">⇄</div>
-          <div class="form-group" style="margin-bottom:0;">
-            <label class="form-label">QMT 格式</label>
-            <input class="form-input" type="text" id="qmt-code" placeholder="000001.SZ">
+          <div class="filter-group hidden" id="pnl-strategy-group">
+            <label class="filter-label">策略</label>
+            <select class="form-input filter-select" id="pnl-strategy-select"></select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">周期</label>
+            <div class="seg-group" id="pnl-period-group">
+              <button type="button" class="seg-btn active" data-period="day">日</button>
+              <button type="button" class="seg-btn" data-period="month">月</button>
+              <button type="button" class="seg-btn" data-period="year">年</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">日期</label>
+            <div class="pnl-date-nav">
+              <button type="button" class="btn btn-secondary pnl-date-arrow" id="pnl-date-prev" title="上一个周期">←</button>
+              <span class="pnl-date-label" id="pnl-date-label">--</span>
+              <button type="button" class="btn btn-secondary pnl-date-arrow" id="pnl-date-next" title="下一个周期">→</button>
+            </div>
           </div>
         </div>
+        <div class="card-grid card-grid-4 pnl-summary-grid">
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">最新总资产</div>
+            <div class="dashboard-card-value" id="pnl-total-asset">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">今日盈亏</div>
+            <div class="dashboard-card-value" id="pnl-today-pnl">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">累计收益率</div>
+            <div class="dashboard-card-value" id="pnl-cum-return">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">本周期收益率</div>
+            <div class="dashboard-card-value" id="pnl-period-return">--</div>
+          </div>
+        </div>
+      </div>
+      <div class="card pnl-chart-card">
+        <h3 class="pnl-chart-title">收益率曲线</h3>
+        <div class="pnl-chart pnl-chart-curve" id="pnl-curve-chart"></div>
+        <div class="signal-empty hidden" id="pnl-curve-empty">暂无收益数据，服务器运行后将自动采集资产快照</div>
+      </div>
+      <div class="card pnl-chart-card">
+        <h3 class="pnl-chart-title">收益日历</h3>
+        <div class="pnl-chart pnl-chart-calendar" id="pnl-calendar-chart"></div>
+        <div class="signal-empty hidden" id="pnl-calendar-empty">暂无收益数据，服务器运行后将自动采集资产快照</div>
       </div>
     </section>
 
@@ -569,6 +615,7 @@
 
   <div id="toast-container"></div>
   <script src="./static/vendor/marked.min.js"></script>
+  <script src="./static/vendor/echarts.min.js"></script>
   <script type="module" src="./static/js/app.js"></script>
 </body>
 </html>

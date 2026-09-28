@@ -601,7 +601,7 @@ export const UI = {
     },
 
     switchTab(tabName) {
-        const sections = ['account-empty', 'config', 'msg-config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'converter','docs'];
+        const sections = ['account-empty', 'config', 'msg-config', 'server-info', 'dashboard', 'strategy-overview', 'strategy-management', 'monitor', 'pnl', 'docs'];
 
         sections.forEach(id => this.hideSection(id));
 
@@ -634,8 +634,8 @@ export const UI = {
                     }
                 }
                 break;
-            case 'converter':
-                this.showSection('converter');
+            case 'pnl':
+                this.showSection('pnl');
                 break;
             case 'docs':
                 this.showSection('docs');

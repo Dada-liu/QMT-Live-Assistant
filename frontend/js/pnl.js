@@ -42,6 +42,31 @@ function pnlClass(value) {
     return num > 0 ? 'up' : 'down';
 }
 
+let _emptyRetryTimer = null;
+
+function isTradingTimeNow() {
+    const now = new Date();
+    const day = now.getDay();
+    if (day === 0 || day === 6) return false;
+    const mins = now.getHours() * 60 + now.getMinutes();
+    return mins >= 9 * 60 && mins <= 15 * 60 + 35;
+}
+
+function getEmptyMessage() {
+    if (!getState('serverRunning')) {
+        return '服务器未启动。请先在「配置」tab 启动服务器，启动后将在交易时段自动采集资产快照。';
+    }
+    if (!getState('qmtConnected')) {
+        return 'QMT 未连接。连接成功后，将在交易时段自动开始采集资产快照。';
+    }
+    if (isTradingTimeNow()) {
+        return _scope === 'strategy'
+            ? '该策略暂无收益数据。策略资产快照在交易时段每分钟采集一次，首个数据点约 1 分钟后出现，请稍候。'
+            : '资产快照采集中：交易时段每分钟采集一次，首个数据点约 1 分钟后出现；日收益需积累至少两个交易日的数据。请稍候。';
+    }
+    return '当前为非交易时段。资产快照仅在工作日 9:00–15:35 采集，下一交易时段开始后将自动更新。';
+}
+
 function getThemeColors() {
     const style = getComputedStyle(document.documentElement);
     const pick = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
@@ -165,6 +190,7 @@ function renderCurve(payload) {
         disposeChart('pnl-curve-chart');
         _curveChart = null;
         chartEl.classList.add('hidden');
+        emptyEl.textContent = getEmptyMessage();
         emptyEl.classList.remove('hidden');
         return;
     }
@@ -380,6 +406,7 @@ function renderCalendar(payload) {
 
     if (!list || list.length === 0) {
         container.classList.add('hidden');
+        emptyEl.textContent = getEmptyMessage();
         emptyEl.classList.remove('hidden');
         return;
     }
@@ -396,6 +423,10 @@ function renderAll(payload) {
 }
 
 export async function loadPnl() {
+    if (_emptyRetryTimer) {
+        clearTimeout(_emptyRetryTimer);
+        _emptyRetryTimer = null;
+    }
     const token = getState('token');
     if (!token) {
         renderAll(null);
@@ -423,7 +454,16 @@ export async function loadPnl() {
 
     try {
         const result = await api.getPnlOverview(token, params);
-        renderAll(result && result.data !== undefined ? result.data : result);
+        const payload = result && result.data !== undefined ? result.data : result;
+        renderAll(payload);
+        const curve = (payload && payload.curve) || [];
+        const daily = (payload && payload.daily_returns) || [];
+        const monthly = (payload && payload.monthly_returns) || [];
+        const yearly = (payload && payload.yearly_returns) || [];
+        const empty = curve.length === 0 && daily.length === 0 && monthly.length === 0 && yearly.length === 0;
+        if (empty && getState('serverRunning') && getState('qmtConnected') && isTradingTimeNow()) {
+            _emptyRetryTimer = setTimeout(() => loadPnl(), 60000);
+        }
     } catch (error) {
         renderAll(null);
         Toast.error(`收益数据加载失败: ${error.message}`);

@@ -527,3 +527,21 @@ class TestSnapshotLoop:
             assert not srv._snapshot_task.done()
         finally:
             _stop_server(srv, loop, thread)
+
+
+class TestSnapshotCollectReentry:
+    def test_collect_skips_when_lock_held(self, server):
+        """上一轮采集未结束（锁被占）时，本轮直接返回不落库。"""
+        assert server._snapshot_collect_lock.acquire(blocking=False)
+        try:
+            server._collect_asset_snapshots()
+        finally:
+            server._snapshot_collect_lock.release()
+        assert _snapshots_repo(server).list_range("account") == []
+
+    def test_collect_releases_lock_for_next_round(self, server):
+        """正常采集后锁应释放，下一轮可再次采集（同分钟 upsert 覆盖）。"""
+        server._collect_asset_snapshots()
+        server._collect_asset_snapshots()
+        rows = _snapshots_repo(server).list_range("account")
+        assert len(rows) == 1

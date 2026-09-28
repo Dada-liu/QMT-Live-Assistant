@@ -8,8 +8,10 @@ from pydantic import BaseModel
 import inspect
 import secrets
 import asyncio
+import time
 from typing import Any, Optional
 from datetime import datetime, timezone
+from backend.logger import logger
 from backend.connection_watchdog import QMTConnectionWatchdog, ConnectionState
 from backend.qmt_client import create_trader
 from backend.strategy_manager import StrategyManager, StrategyCreate, StrategyUpdate, PositionAssignment
@@ -139,6 +141,7 @@ class QMTServer:
         self._account_repository = account_repository
         self._signal_log_repository = signal_log_repository
         self._asset_snapshot_repository = asset_snapshot_repository
+        self._snapshot_collect_lock = threading.Lock()
         self.order_tracker = OrderTracker(repository=order_repository)
         self._poll_task: Optional[asyncio.Task] = None
         self._market_open_poll_task: Optional[asyncio.Task] = None
@@ -468,43 +471,64 @@ class QMTServer:
             pass
 
     def _collect_asset_snapshots(self):
-        """采集账户与启用策略的资产快照并落库（同步方法，经 run_blocking 调用）。"""
-        repo = self._asset_snapshot_repository
-        if repo is None:
+        """采集账户与启用策略的资产快照并落库（同步方法，经 run_blocking 调用）。
+
+        防重入：上一轮未跑完时本轮直接跳过，避免 QMT hang 导致超时线程
+        在专用线程池中堆积耗尽 worker。
+        """
+        if not self._snapshot_collect_lock.acquire(blocking=False):
+            logger.debug("【快照采集】上一轮尚未完成，跳过本轮")
             return
-        ts = datetime.now().replace(second=0, microsecond=0)
+        try:
+            repo = self._asset_snapshot_repository
+            if repo is None:
+                return
+            ts = datetime.now().replace(second=0, microsecond=0)
 
-        asset = qmt_call(
-            self.trader,
-            "query_stock_asset",
-            self.account,
-            context={"account_id": getattr(self.account, 'account_id', self.account)},
-        )
-        positions = self._query_account_positions()
-        daily_profit = round(sum(p.get('daily_pnl', 0) for p in positions), 2)
-        repo.upsert_snapshot(
-            scope="account",
-            strategy_id=None,
-            ts=ts,
-            total_asset=float(getattr(asset, 'total_asset', 0.0) or 0.0),
-            cash=float(getattr(asset, 'cash', 0.0) or 0.0),
-            market_value=float(getattr(asset, 'market_value', 0.0) or 0.0),
-            daily_pnl=daily_profit,
-        )
-
-        for s in self.strategy_manager.list_all_enriched(self.trader, self.account):
-            repo.upsert_snapshot(
-                scope="strategy",
-                strategy_id=s["id"],
-                ts=ts,
-                total_asset=float(s.get("total_asset", 0.0) or 0.0),
-                cash=float(s.get("available_cash", 0.0) or 0.0),
-                market_value=round(sum(
-                    float(p.get("market_value", 0.0) or 0.0)
-                    for p in s.get("positions", [])
-                ), 2),
-                daily_pnl=float(s.get("daily_pnl", 0.0) or 0.0),
+            stage_start = time.monotonic()
+            asset = qmt_call(
+                self.trader,
+                "query_stock_asset",
+                self.account,
+                context={"account_id": getattr(self.account, 'account_id', self.account)},
             )
+            logger.debug(f"【快照采集】query_stock_asset 耗时 {time.monotonic() - stage_start:.2f}s")
+
+            stage_start = time.monotonic()
+            positions = self._query_account_positions()
+            logger.debug(f"【快照采集】_query_account_positions 耗时 {time.monotonic() - stage_start:.2f}s")
+            daily_profit = round(sum(p.get('daily_pnl', 0) for p in positions), 2)
+            repo.upsert_snapshot(
+                scope="account",
+                strategy_id=None,
+                ts=ts,
+                total_asset=float(getattr(asset, 'total_asset', 0.0) or 0.0),
+                cash=float(getattr(asset, 'cash', 0.0) or 0.0),
+                market_value=float(getattr(asset, 'market_value', 0.0) or 0.0),
+                daily_pnl=daily_profit,
+            )
+
+            stage_start = time.monotonic()
+            strategies = self.strategy_manager.list_all_enriched(self.trader, self.account)
+            logger.debug(f"【快照采集】list_all_enriched 耗时 {time.monotonic() - stage_start:.2f}s")
+
+            stage_start = time.monotonic()
+            for s in strategies:
+                repo.upsert_snapshot(
+                    scope="strategy",
+                    strategy_id=s["id"],
+                    ts=ts,
+                    total_asset=float(s.get("total_asset", 0.0) or 0.0),
+                    cash=float(s.get("available_cash", 0.0) or 0.0),
+                    market_value=round(sum(
+                        float(p.get("market_value", 0.0) or 0.0)
+                        for p in s.get("positions", [])
+                    ), 2),
+                    daily_pnl=float(s.get("daily_pnl", 0.0) or 0.0),
+                )
+            logger.debug(f"【快照采集】upsert 耗时 {time.monotonic() - stage_start:.2f}s")
+        finally:
+            self._snapshot_collect_lock.release()
 
     def _build_pnl_overview(self, scope: str, period: str, anchor_date,
                             snapshots: list) -> dict:

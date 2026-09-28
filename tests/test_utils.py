@@ -556,3 +556,183 @@ class TestRoundPriceToTick:
 
     def test_future_price_unchanged(self):
         assert round_price_to_tick(3512.345678, "RB8888.XSGE") == 3512.345678
+
+
+# ---- 行情数据缓存（preclose/open 按日缓存、名称永久缓存） ----
+
+import pandas as pd
+from unittest.mock import MagicMock
+import backend.utils as utils_module
+from backend.utils import (
+    fetch_preclose_from_xtdata,
+    fetch_open_prices_from_xtdata,
+    fetch_stock_names_from_xtdata,
+)
+
+
+def _make_fake_xtdata(field_values=None, names=None, download_calls=None, detail_calls=None):
+    """构造假 xtdata：field_values={field: {code: value}}，names={code: name}。"""
+    field_values = field_values or {}
+    names = names or {}
+    download_calls = download_calls if download_calls is not None else []
+    detail_calls = detail_calls if detail_calls is not None else []
+
+    fake = MagicMock(name="xtdata")
+
+    def download(codes, period, **kwargs):
+        download_calls.append(list(codes))
+    fake.download_history_data2.side_effect = download
+
+    def get_market_data(field_list=None, stock_list=None, **kwargs):
+        result = {}
+        for field in field_list:
+            values = field_values.get(field, {})
+            data = {c: values[c] for c in stock_list if c in values}
+            if data:
+                result[field] = pd.DataFrame({"20260928": data})
+        return result
+    fake.get_market_data.side_effect = get_market_data
+
+    def get_instrument_detail(code):
+        detail_calls.append(code)
+        return {"InstrumentName": names.get(code, "")}
+    fake.get_instrument_detail.side_effect = get_instrument_detail
+
+    return fake
+
+
+@pytest.fixture
+def fake_xtquant():
+    """注入假 xtquant 模块并清空行情缓存。"""
+    utils_module._PRECLOSE_CACHE.clear()
+    utils_module._OPEN_PRICE_CACHE.clear()
+    utils_module._STOCK_NAME_CACHE.clear()
+    with patch.dict(sys.modules, {"xtquant": MagicMock(xtdata=None)}):
+        yield
+    utils_module._PRECLOSE_CACHE.clear()
+    utils_module._OPEN_PRICE_CACHE.clear()
+    utils_module._STOCK_NAME_CACHE.clear()
+
+
+def _install_fake_xtdata(download_calls=None, detail_calls=None, **kwargs):
+    fake = _make_fake_xtdata(download_calls=download_calls, detail_calls=detail_calls, **kwargs)
+    sys.modules["xtquant"].xtdata = fake
+    return fake
+
+
+class TestPrecloseDailyCache:
+    def test_full_hit_skips_download(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"preClose": {"000001.SZ": 12.5, "600519.SH": 1800.0}},
+            download_calls=downloads,
+        )
+        first = fetch_preclose_from_xtdata(["000001.SZ", "600519.SH"])
+        assert first == {"000001.SZ": 12.5, "600519.SH": 1800.0}
+        assert downloads == [["000001.SZ", "600519.SH"]]
+
+        second = fetch_preclose_from_xtdata(["000001.SZ", "600519.SH"])
+        assert second == first
+        assert len(downloads) == 1
+
+    def test_partial_hit_downloads_only_missing(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"preClose": {"000001.SZ": 12.5, "600519.SH": 1800.0}},
+            download_calls=downloads,
+        )
+        fetch_preclose_from_xtdata(["000001.SZ"])
+        result = fetch_preclose_from_xtdata(["000001.SZ", "600519.SH"])
+        assert result == {"000001.SZ": 12.5, "600519.SH": 1800.0}
+        assert downloads == [["000001.SZ"], ["600519.SH"]]
+
+    def test_cross_day_refetches(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"preClose": {"000001.SZ": 12.5}},
+            download_calls=downloads,
+        )
+        fetch_preclose_from_xtdata(["000001.SZ"])
+        assert len(downloads) == 1
+
+        from datetime import datetime
+        with patch("backend.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 29, 10, 0)
+            mock_dt.combine = datetime.combine
+            result = fetch_preclose_from_xtdata(["000001.SZ"])
+        assert result == {"000001.SZ": 12.5}
+        assert len(downloads) == 2
+
+    def test_missing_value_not_cached(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"preClose": {"000001.SZ": 12.5}},
+            download_calls=downloads,
+        )
+        result = fetch_preclose_from_xtdata(["000001.SZ", "999999.SZ"])
+        assert result == {"000001.SZ": 12.5}
+
+        # 取不到值的 code 不缓存，下次仅重试缺失 code
+        fetch_preclose_from_xtdata(["000001.SZ", "999999.SZ"])
+        assert downloads == [
+            ["000001.SZ", "999999.SZ"],
+            ["999999.SZ"],
+        ]
+
+
+class TestOpenPriceDailyCache:
+    def test_full_hit_skips_download(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"open": {"000001.SZ": 12.45}},
+            download_calls=downloads,
+        )
+        first = fetch_open_prices_from_xtdata(["000001.SZ"])
+        assert first == {"000001.SZ": 12.45}
+
+        second = fetch_open_prices_from_xtdata(["000001.SZ"])
+        assert second == first
+        assert len(downloads) == 1
+
+    def test_preclose_and_open_caches_isolated(self, fake_xtquant):
+        downloads = []
+        _install_fake_xtdata(
+            field_values={"preClose": {"000001.SZ": 12.5}, "open": {"000001.SZ": 12.45}},
+            download_calls=downloads,
+        )
+        fetch_preclose_from_xtdata(["000001.SZ"])
+        fetch_open_prices_from_xtdata(["000001.SZ"])
+        assert len(downloads) == 2
+
+
+class TestStockNamePermanentCache:
+    def test_full_hit_skips_detail_query(self, fake_xtquant):
+        detail_calls = []
+        _install_fake_xtdata(names={"000001.SZ": "平安银行"}, detail_calls=detail_calls)
+        first = fetch_stock_names_from_xtdata(["000001.SZ"])
+        assert first == {"000001.SZ": "平安银行"}
+        assert detail_calls == ["000001.SZ"]
+
+        second = fetch_stock_names_from_xtdata(["000001.SZ"])
+        assert second == first
+        assert len(detail_calls) == 1
+
+    def test_partial_hit_queries_only_missing(self, fake_xtquant):
+        detail_calls = []
+        _install_fake_xtdata(
+            names={"000001.SZ": "平安银行", "600519.SH": "贵州茅台"},
+            detail_calls=detail_calls,
+        )
+        fetch_stock_names_from_xtdata(["000001.SZ"])
+        result = fetch_stock_names_from_xtdata(["000001.SZ", "600519.SH"])
+        assert result == {"000001.SZ": "平安银行", "600519.SH": "贵州茅台"}
+        assert detail_calls == ["000001.SZ", "600519.SH"]
+
+    def test_empty_name_not_cached(self, fake_xtquant):
+        detail_calls = []
+        _install_fake_xtdata(names={}, detail_calls=detail_calls)
+        result = fetch_stock_names_from_xtdata(["999999.SZ"])
+        assert result == {"999999.SZ": ""}
+
+        fetch_stock_names_from_xtdata(["999999.SZ"])
+        assert detail_calls == ["999999.SZ", "999999.SZ"]

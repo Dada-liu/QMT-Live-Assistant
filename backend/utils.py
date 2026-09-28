@@ -5,6 +5,7 @@
 """
 import asyncio
 import functools
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -324,16 +325,23 @@ def seconds_until_market_open(target_hour: int = 9, target_minute: int = 30) -> 
     return (target - now).total_seconds()
 
 
-def fetch_preclose_from_xtdata(stock_codes):
-    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock"""
-    if not stock_codes:
-        return {}
-    codes = list(stock_codes)
+# ---- 行情数据缓存 ----
+# preClose/open 当日内不变：按 (code, 日期) 缓存；股票名称永久按 code 缓存。
+# Windows 真实 QMT 下 download_history_data2 可耗时数十秒甚至 hang，
+# 快照采集每分钟调用一次，必须避免重复下载耗尽线程池。
+_PRECLOSE_CACHE: dict = {}
+_OPEN_PRICE_CACHE: dict = {}
+_STOCK_NAME_CACHE: dict = {}
+_MARKET_DATA_CACHE_LOCK = threading.Lock()
+
+
+def _fetch_daily_field_uncached(codes, field):
+    """从 xtdata 下载并读取日线字段，无真实 xtquant 时 fallback 到 mock。"""
     try:
         from xtquant import xtdata
         xtdata.download_history_data2(codes, '1d')
         result = xtdata.get_market_data(
-            field_list=['preClose'],
+            field_list=[field],
             stock_list=codes,
             period='1d',
             start_time='',
@@ -341,43 +349,82 @@ def fetch_preclose_from_xtdata(stock_codes):
             count=1,
             dividend_type='none',
         )
-        if not result or 'preClose' not in result:
+        if not result or field not in result:
             return {}
-        df = result['preClose']
-        preclose_map = {}
+        df = result[field]
+        price_map = {}
         for code in codes:
             if code in df.index:
                 vals = df.loc[code].dropna()
                 if len(vals) > 0:
-                    preclose_map[code] = float(vals.iloc[-1])
-        return preclose_map
+                    price_map[code] = float(vals.iloc[-1])
+        return price_map
     except ImportError:
         from backend.mock_xtquant import MockData
         result = MockData.get_market_data(
-            field_list=['preClose'],
+            field_list=[field],
             stock_list=codes,
             period='1d',
             count=1,
         )
-        df = result.get('preClose')
+        df = result.get(field)
         if df is None:
             return {}
-        preclose_map = {}
+        price_map = {}
         for code in codes:
             if code in df.index:
                 vals = df.loc[code].dropna()
                 if len(vals) > 0:
-                    preclose_map[code] = float(vals.iloc[-1])
-        return preclose_map
+                    price_map[code] = float(vals.iloc[-1])
+        return price_map
     except Exception as e:
-        logger.error(f"【行情获取失败】fetch_preclose_from_xtdata 异常: {e} | codes={codes}", exc_info=True)
+        logger.error(f"【行情获取失败】日线字段 {field} 获取异常: {e} | codes={codes}", exc_info=True)
         return {}
 
 
-def fetch_stock_names_from_xtdata(stock_codes):
-    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典，无真实 xtquant 时 fallback 到 mock"""
+def _cached_daily_field(stock_codes, field, cache):
+    """按日缓存日线字段：全部命中时跳过下载，部分命中只补取缺失 code。
+
+    仅缓存成功取到的正值；未取到的 code 不缓存，下次调用重新下载。
+    每次调用清理非当日的旧条目。
+    """
     if not stock_codes:
         return {}
+    codes = list(stock_codes)
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _MARKET_DATA_CACHE_LOCK:
+        for key in [k for k in cache if k[1] != today]:
+            del cache[key]
+        result = {}
+        missing = []
+        for code in codes:
+            value = cache.get((code, today))
+            if value is not None:
+                result[code] = value
+            else:
+                missing.append(code)
+    if not missing:
+        logger.debug(f"【行情缓存】{field} 全部命中缓存跳过下载 | codes={len(codes)}")
+        return result
+    fetched = _fetch_daily_field_uncached(missing, field)
+    with _MARKET_DATA_CACHE_LOCK:
+        for code, value in fetched.items():
+            if value and value > 0:
+                cache[(code, today)] = value
+    result.update(fetched)
+    return result
+
+
+def fetch_preclose_from_xtdata(stock_codes):
+    """从 xtdata 获取前收盘价，返回 {stock_code: preClose} 字典，无真实 xtquant 时 fallback 到 mock。
+
+    preClose 当日内不变，按 (code, 日期) 缓存，避免每分钟重复下载日线数据。
+    """
+    return _cached_daily_field(stock_codes, 'preClose', _PRECLOSE_CACHE)
+
+
+def _fetch_stock_names_uncached(stock_codes):
+    """逐 code 查询股票名称，无真实 xtquant 时 fallback 到 mock。"""
     try:
         from xtquant import xtdata
         name_map = {}
@@ -405,54 +452,40 @@ def fetch_stock_names_from_xtdata(stock_codes):
         return {}
 
 
-def fetch_open_prices_from_xtdata(stock_codes):
-    """从 xtdata 获取开盘价，返回 {stock_code: open} 字典，无真实 xtquant 时 fallback 到 mock"""
+def fetch_stock_names_from_xtdata(stock_codes):
+    """从 xtdata 获取股票名称，返回 {stock_code: name} 字典，无真实 xtquant 时 fallback 到 mock。
+
+    名称基本不变，按 code 永久缓存（空名称不缓存），只查询未缓存的 code。
+    """
     if not stock_codes:
         return {}
-    codes = list(stock_codes)
-    try:
-        from xtquant import xtdata
-        xtdata.download_history_data2(codes, '1d')
-        result = xtdata.get_market_data(
-            field_list=['open'],
-            stock_list=codes,
-            period='1d',
-            start_time='',
-            end_time='',
-            count=1,
-            dividend_type='none',
-        )
-        if not result or 'open' not in result:
-            return {}
-        df = result['open']
-        price_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    price_map[code] = float(vals.iloc[-1])
-        return price_map
-    except ImportError:
-        from backend.mock_xtquant import MockData
-        result = MockData.get_market_data(
-            field_list=['open'],
-            stock_list=codes,
-            period='1d',
-            count=1,
-        )
-        df = result.get('open')
-        if df is None:
-            return {}
-        price_map = {}
-        for code in codes:
-            if code in df.index:
-                vals = df.loc[code].dropna()
-                if len(vals) > 0:
-                    price_map[code] = float(vals.iloc[-1])
-        return price_map
-    except Exception as e:
-        logger.error(f"【行情获取失败】fetch_open_prices_from_xtdata 异常: {e} | codes={codes}", exc_info=True)
-        return {}
+    with _MARKET_DATA_CACHE_LOCK:
+        result = {}
+        missing = []
+        for code in stock_codes:
+            name = _STOCK_NAME_CACHE.get(code)
+            if name is not None:
+                result[code] = name
+            else:
+                missing.append(code)
+    if not missing:
+        logger.debug(f"【行情缓存】股票名称全部命中缓存 | codes={len(result)}")
+        return result
+    fetched = _fetch_stock_names_uncached(missing)
+    with _MARKET_DATA_CACHE_LOCK:
+        for code, name in fetched.items():
+            if name:
+                _STOCK_NAME_CACHE[code] = name
+    result.update(fetched)
+    return result
+
+
+def fetch_open_prices_from_xtdata(stock_codes):
+    """从 xtdata 获取开盘价，返回 {stock_code: open} 字典，无真实 xtquant 时 fallback 到 mock。
+
+    open 当日内不变，按 (code, 日期) 缓存，避免每分钟重复下载日线数据。
+    """
+    return _cached_daily_field(stock_codes, 'open', _OPEN_PRICE_CACHE)
 
 
 def fetch_latest_prices_from_xtdata(stock_codes):

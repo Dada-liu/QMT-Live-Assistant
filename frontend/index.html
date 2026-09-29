@@ -180,7 +180,9 @@
           <div class="dashboard-card-loading" id="dash-total-asset-loading">加载中...</div>
         </div>
         <div class="card dashboard-card">
-          <div class="dashboard-card-label">当日盈亏</div>
+          <div class="dashboard-card-label">当日盈亏
+            <span class="help-icon" data-tooltip="账号全部持仓市值相对昨收的浮动盈亏之和（今日买入也按昨收计量），与各策略卡片的当日盈亏之和可能略有差异">?</span>
+          </div>
           <div class="dashboard-card-value" id="dash-daily-profit">--</div>
           <div class="dashboard-card-loading" id="dash-daily-profit-loading">加载中...</div>
         </div>
@@ -197,7 +199,7 @@
             <span>成本/现价</span>
             <span>市值</span>
             <span>盈亏</span>
-            <span>当日盈亏</span>
+            <span>当日盈亏<span class="help-icon" data-tooltip="实时浮动盈亏：(现价−昨收)×持仓数量；仅统计当前持仓，不含已卖出部分的已实现盈亏">?</span></span>
           </div>
           <div class="position-list" id="position-list"></div>
         </div>
@@ -233,7 +235,7 @@
             <span>成本/现价</span>
             <span>市值</span>
             <span>盈亏</span>
-            <span>当日盈亏</span>
+            <span>当日盈亏<span class="help-icon" data-tooltip="实时浮动盈亏：(现价−昨收)×昨日持仓 + 现价×今日买入数量−买入成本；仅统计当前持仓，不含已卖出部分的已实现盈亏，与「盈亏分析」的今日盈亏口径不同">?</span></span>
           </div>
           <div class="position-list" id="strategy-position-list"></div>
         </div>
@@ -384,7 +386,9 @@
             <div class="dashboard-card-value" id="pnl-total-asset">--</div>
           </div>
           <div class="card dashboard-card">
-            <div class="dashboard-card-label">今日盈亏</div>
+            <div class="dashboard-card-label">今日盈亏
+              <span class="help-icon" data-tooltip="快照差值口径：所选日期最后一条资产快照 − 前一有快照日最后一条快照，含已实现盈亏与现金变动；与「QMT账号」策略卡片的当日盈亏（仅实时浮动盈亏、不含已实现）口径不同，两者数值不一致属正常">?</span>
+            </div>
             <div class="dashboard-card-value" id="pnl-today-pnl">--</div>
           </div>
           <div class="card dashboard-card">

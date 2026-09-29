@@ -717,7 +717,7 @@ export const UI = {
                             <span class="strategy-metric-value">${formatCurrency(s.total_asset)}</span>
                         </div>
                         <div class="strategy-metric">
-                            <span class="strategy-metric-label">当日盈亏</span>
+                            <span class="strategy-metric-label">当日盈亏<span class="help-icon" data-tooltip="实时浮动盈亏：(现价−昨收)×昨日持仓 + 现价×今日买入数量−买入成本；仅统计当前持仓，不含已卖出部分的已实现盈亏，与「盈亏分析」的今日盈亏口径不同">?</span></span>
                             <span class="strategy-metric-value ${pnlClass}">${formatPnl(s.daily_pnl)}</span>
                         </div>
                     </div>

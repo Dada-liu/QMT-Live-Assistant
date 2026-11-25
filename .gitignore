@@ -8,6 +8,8 @@ build/
 .venv/
 venv/
 env/
+.coverage
+htmlcov/
 
 # IDE
 .vscode/
@@ -31,6 +33,11 @@ logs/
 
 # Claude Code
 .claude/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
 
 # QMT
 *.dat

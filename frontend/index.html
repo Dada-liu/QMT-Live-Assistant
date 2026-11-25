@@ -4,24 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QMT Live Assistant</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./static/styles.css">
+  <link href="./static/vendor/fonts/fonts.css" rel="stylesheet" media="print" onload="this.media='all'">
+  <noscript>
+    <link href="./static/vendor/fonts/fonts.css" rel="stylesheet">
+  </noscript>
 </head>
 <body>
+  <div id="page-loading" class="page-loading">
+    <div class="page-loading-spinner"></div>
+    <div class="page-loading-text">加载中...</div>
+  </div>
+
   <header class="top-nav">
     <div class="top-nav-logo">
-      <span class="logo-dot"></span>
+      <span id="logo-status-dot" class="logo-dot disconnected"></span>
       QMT Live Assistant
     </div>
     <ul class="top-nav-links">
       <li><a href="#account" class="active">QMT账号</a></li>
       <li><a href="#trade">买卖监控</a></li>
       <li><a href="#config">配置</a></li>
-      <li><a href="#converter">工具</a></li>
+      <li><a href="#pnl">盈亏分析</a></li>
       <li><a href="#docs">文档</a></li>
     </ul>
+    <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="切换导航" aria-expanded="false">☰</button>
     <button class="theme-toggle" id="theme-toggle" title="切换主题">🌙</button>
   </header>
 
@@ -70,16 +77,56 @@
           <div class="form-row">
             <div class="form-group">
               <label class="form-label" for="host">服务器地址</label>
-              <input class="form-input" type="text" id="host" name="host" value="0.0.0.0" required>
+              <input class="form-input" type="text" id="host" name="host" placeholder="127.0.0.1">
             </div>
             <div class="form-group">
               <label class="form-label" for="port">服务器端口</label>
-              <input class="form-input" type="number" id="port" name="port" value="8000" required>
+              <input class="form-input" type="number" id="port" name="port" placeholder="8000">
             </div>
           </div>
           <div class="btn-group">
             <button class="btn btn-primary" type="submit" id="btn-start">启动服务器</button>
             <button class="btn btn-secondary" type="button" id="btn-stop" disabled>停止服务器</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+
+    <!-- Bark 推送设置 -->
+    <section id="msg-config" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">消息推送配置</span>
+        <h2 class="section-title">Bark</h2>
+        <p class="section-desc">绑定 iOS Bark App 后，订单发起、成交、失败、超时未成交时将推送消息到手机。</p>
+      </div>
+      <div class="card" style="margin-top: var(--spacing-base);">
+        <form id="bark-config-form" novalidate>
+          <div class="connection-result info" id="bark-config-hint" style="display:none;margin-top:0;margin-bottom:var(--spacing-base);">启动服务器并连接后，可配置 Bark 推送</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="bark-key">Bark Key</label>
+              <input class="form-input" type="text" id="bark-key" placeholder="Bark App 中的设备 Key">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bark-server">服务器地址</label>
+              <input class="form-input" type="text" id="bark-server" placeholder="https://api.day.app">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group form-checkbox">
+              <label class="form-label">
+                <input type="checkbox" id="bark-enabled"> 启用订单消息推送
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="bark-stale-minutes">未成交提醒（分钟）</label>
+              <input class="form-input" type="number" id="bark-stale-minutes" min="1" step="1" placeholder="5">
+            </div>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" type="submit" id="btn-bark-save">保存推送设置</button>
+            <button class="btn btn-secondary" type="button" id="btn-bark-test">发送测试推送</button>
           </div>
         </form>
       </div>
@@ -101,7 +148,7 @@
           <button class="btn btn-secondary" id="btn-copy-token" style="padding:6px 14px;height:32px;font-size:13px;">复制</button>
           <button class="btn btn-secondary" id="btn-docs-tutorial" style="padding:6px 14px;height:32px;font-size:13px;">
             <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid currentColor;font-size:11px;font-weight:700;line-height:1;">?</span>
-            聚宽如何发送信号到QMT教程
+            聚宽如何发送信号到QMT-Live-Assistant
           </button>
         </div>
         <div class="btn-group" style="margin-top: var(--spacing-base);">
@@ -120,58 +167,249 @@
         <div class="card dashboard-card">
           <div class="dashboard-card-label">可用资金</div>
           <div class="dashboard-card-value" id="dash-cash">--</div>
+          <div class="dashboard-card-loading" id="dash-cash-loading">加载中...</div>
         </div>
         <div class="card dashboard-card">
           <div class="dashboard-card-label">持仓市值</div>
           <div class="dashboard-card-value" id="dash-market-value">--</div>
+          <div class="dashboard-card-loading" id="dash-market-value-loading">加载中...</div>
         </div>
         <div class="card dashboard-card">
           <div class="dashboard-card-label">总资产</div>
           <div class="dashboard-card-value" id="dash-total-asset">--</div>
+          <div class="dashboard-card-loading" id="dash-total-asset-loading">加载中...</div>
         </div>
         <div class="card dashboard-card">
-          <div class="dashboard-card-label">当日盈亏</div>
+          <div class="dashboard-card-label">当日盈亏
+            <span class="help-icon" data-tooltip="账号全部持仓市值相对昨收的浮动盈亏之和（今日买入也按昨收计量），与各策略卡片的当日盈亏之和可能略有差异">?</span>
+          </div>
           <div class="dashboard-card-value" id="dash-daily-profit">--</div>
+          <div class="dashboard-card-loading" id="dash-daily-profit-loading">加载中...</div>
+        </div>
+      </div>
+      <div class="position-list-container hidden" id="position-list-container">
+        <div class="position-list-header">
+          <h3>持仓明细</h3>
+          <span class="position-sort-hint" id="position-sort-hint"></span>
+        </div>
+        <div class="position-table">
+          <div class="position-table-header">
+            <span>持仓</span>
+            <span>持仓/可用</span>
+            <span>成本/现价</span>
+            <span>市值</span>
+            <span>盈亏</span>
+            <span>当日盈亏<span class="help-icon" data-tooltip="实时浮动盈亏：(现价−昨收)×持仓数量；仅统计当前持仓，不含已卖出部分的已实现盈亏">?</span></span>
+          </div>
+          <div class="position-list" id="position-list"></div>
         </div>
       </div>
     </section>
 
-    <!-- 信号监控 -->
+    <!-- 策略概览 -->
+    <section id="strategy-overview" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">策略概览</span>
+        <h2 class="section-title">各策略资产</h2>
+      </div>
+      <div class="btn-group" style="margin-bottom: var(--spacing-base);">
+        <button class="btn btn-secondary" id="btn-refresh-strategies">刷新行情</button>
+      </div>
+      <div class="card-grid card-grid-3" id="strategy-overview-grid">
+        <div class="card strategy-overview-card">
+          <div class="strategy-empty" style="padding:var(--spacing-xl);">暂无策略，请先在「<a href="#" class="js-goto-config-strategy">配置</a>」tab 中添加策略。</div>
+        </div>
+      </div>
+      <div class="position-list-container hidden" id="strategy-position-list-container">
+        <div class="position-list-header">
+          <h3 id="strategy-position-title">持仓明细</h3>
+          <div class="btn-group">
+            <button class="btn-sm btn-sm-buy" id="btn-strategy-buy" type="button">买入</button>
+            <button class="btn-sm btn-sm-sell" id="btn-strategy-sell" type="button">卖出</button>
+          </div>
+        </div>
+        <div class="position-table">
+          <div class="position-table-header">
+            <span>持仓</span>
+            <span>持仓/可用</span>
+            <span>成本/现价</span>
+            <span>市值</span>
+            <span>盈亏</span>
+            <span>当日盈亏<span class="help-icon" data-tooltip="实时浮动盈亏：(现价−昨收)×昨日持仓 + 现价×今日买入数量−买入成本；仅统计当前持仓，不含已卖出部分的已实现盈亏，与「盈亏分析」的今日盈亏口径不同">?</span></span>
+          </div>
+          <div class="position-list" id="strategy-position-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 订单监控 -->
     <section id="monitor" class="section hidden">
       <div class="section-header">
-        <span class="section-label">信号监控</span>
-        <h2 class="section-title">实时信号</h2>
-        <p class="section-desc">监控远程策略服务器发送的交易信号和 miniQMT 回调事件。</p>
+        <span class="section-label">订单监控</span>
+        <h2 class="section-title">实时订单</h2>
+        <p class="section-desc">监控所有委托订单的状态变化和成交情况。</p>
+      </div>
+      <div class="card">
+        <div class="signal-filter-bar" id="order-filter-bar">
+          <div class="filter-group">
+            <label class="filter-label">开始日期</label>
+            <input type="date" class="form-input filter-date" id="filter-start-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">结束日期</label>
+            <input type="date" class="form-input filter-date" id="filter-end-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">策略</label>
+            <select class="form-input filter-select" id="filter-strategy">
+              <option value="">全部策略</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">状态</label>
+            <select class="form-input filter-select" id="filter-status">
+              <option value="">全部状态</option>
+              <option value="pending">待成交</option>
+              <option value="partial">部分成交</option>
+              <option value="filled">已成交</option>
+              <option value="failed">失败</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-filter" id="btn-apply-filters">筛选</button>
+          <button class="btn btn-secondary btn-filter" id="btn-reset-filters">重置</button>
+        </div>
+        <div class="btn-group" style="margin-bottom: var(--spacing-base);">
+          <button class="btn btn-secondary" id="btn-clear-orders">清空记录</button>
+        </div>
+        <div class="signal-list" id="order-list">
+          <div class="signal-empty">暂无订单记录，下单后将在此显示。</div>
+        </div>
+        <div class="order-list-footer" id="order-list-footer">共 0 条订单</div>
+      </div>
+
+      <div class="section-header" style="margin-top: var(--spacing-xl);">
+        <span class="section-label">信号日志</span>
+        <h2 class="section-title">接收日志</h2>
+        <p class="section-desc">记录远程策略服务器发送到本地下单接口的请求与处理结果，默认展示异常信号。</p>
+      </div>
+      <div class="card">
+        <div class="signal-filter-bar" id="signal-log-filter-bar">
+          <div class="filter-group">
+            <label class="filter-label">开始日期</label>
+            <input type="date" class="form-input filter-date" id="signal-log-start-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">结束日期</label>
+            <input type="date" class="form-input filter-date" id="signal-log-end-date">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">策略</label>
+            <select class="form-input filter-select" id="signal-log-strategy">
+              <option value="">全部策略</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">状态</label>
+            <select class="form-input filter-select" id="signal-log-status">
+              <option value="error">异常</option>
+              <option value="">全部</option>
+              <option value="success">正常</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-filter" id="btn-apply-signal-log-filters">筛选</button>
+          <button class="btn btn-secondary btn-filter" id="btn-reset-signal-log-filters">重置</button>
+        </div>
+        <div class="signal-log-list" id="signal-log-list">
+          <div class="signal-empty">暂无信号日志。</div>
+        </div>
+        <div class="order-list-footer" id="signal-log-footer">共 0 条信号</div>
+      </div>
+    </section>
+
+    <!-- 策略管理 -->
+    <section id="strategy-management" class="section hidden">
+      <div class="section-header">
+        <span class="section-label">策略管理</span>
+        <h2 class="section-title">管理策略</h2>
+        <p class="section-desc" id="strategy-total">共 0 个策略</p>
       </div>
       <div class="card">
         <div class="btn-group" style="margin-bottom: var(--spacing-base);">
-          <button class="btn btn-secondary" id="btn-clear-signals">清空记录</button>
+          <button class="btn btn-primary" id="btn-add-strategy">添加策略</button>
         </div>
-        <div class="signal-list" id="signal-list">
-          <div class="signal-empty">暂无信号记录，启动服务器并测试连接后将在此显示。</div>
+        <div id="strategy-list">
+          <div class="strategy-empty">暂无策略，点击「添加策略」创建第一个策略。</div>
         </div>
       </div>
     </section>
 
-    <!-- 聚宽代码转换 -->
-    <section id="converter" class="section hidden">
+    <!-- 盈亏分析 -->
+    <section id="pnl" class="section hidden">
       <div class="section-header">
-        <span class="section-label">代码转换</span>
-        <h2 class="section-title">聚宽 ↔ QMT 格式转换</h2>
-        <p class="section-desc">在聚宽代码格式（000001.XSHE）和 QMT 格式（000001.SZ）之间互相转换。</p>
+        <span class="section-label">盈亏分析</span>
+        <h2 class="section-title">收益概览</h2>
+        <p class="section-desc">查看账号或单策略的收益曲线与每日盈亏分布。</p>
       </div>
       <div class="card">
-        <div class="converter-layout">
-          <div class="form-group" style="margin-bottom:0;">
-            <label class="form-label">聚宽格式</label>
-            <input class="form-input" type="text" id="jq-code" placeholder="000001.XSHE">
+        <div class="signal-filter-bar" id="pnl-filter-bar">
+          <div class="filter-group">
+            <label class="filter-label">范围</label>
+            <div class="seg-group" id="pnl-scope-group">
+              <button type="button" class="seg-btn active" data-scope="account">账号收益</button>
+              <button type="button" class="seg-btn" data-scope="strategy">策略收益</button>
+            </div>
           </div>
-          <div class="converter-arrow">⇄</div>
-          <div class="form-group" style="margin-bottom:0;">
-            <label class="form-label">QMT 格式</label>
-            <input class="form-input" type="text" id="qmt-code" placeholder="000001.SZ">
+          <div class="filter-group hidden" id="pnl-strategy-group">
+            <label class="filter-label">策略</label>
+            <select class="form-input filter-select" id="pnl-strategy-select"></select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">周期</label>
+            <div class="seg-group" id="pnl-period-group">
+              <button type="button" class="seg-btn active" data-period="day">日</button>
+              <button type="button" class="seg-btn" data-period="month">月</button>
+              <button type="button" class="seg-btn" data-period="year">年</button>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">日期</label>
+            <div class="pnl-date-nav">
+              <button type="button" class="btn btn-secondary pnl-date-arrow" id="pnl-date-prev" title="上一个周期">←</button>
+              <span class="pnl-date-label" id="pnl-date-label">--</span>
+              <button type="button" class="btn btn-secondary pnl-date-arrow" id="pnl-date-next" title="下一个周期">→</button>
+            </div>
           </div>
         </div>
+        <div class="card-grid card-grid-4 pnl-summary-grid">
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">最新总资产</div>
+            <div class="dashboard-card-value" id="pnl-total-asset">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">今日盈亏
+              <span class="help-icon" data-tooltip="快照差值口径：所选日期最后一条资产快照 − 前一有快照日最后一条快照，含已实现盈亏与现金变动；与「QMT账号」策略卡片的当日盈亏（仅实时浮动盈亏、不含已实现）口径不同，两者数值不一致属正常">?</span>
+            </div>
+            <div class="dashboard-card-value" id="pnl-today-pnl">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">累计收益率</div>
+            <div class="dashboard-card-value" id="pnl-cum-return">--</div>
+          </div>
+          <div class="card dashboard-card">
+            <div class="dashboard-card-label">本周期收益率</div>
+            <div class="dashboard-card-value" id="pnl-period-return">--</div>
+          </div>
+        </div>
+      </div>
+      <div class="card pnl-chart-card">
+        <h3 class="pnl-chart-title">收益率曲线</h3>
+        <div class="pnl-chart pnl-chart-curve" id="pnl-curve-chart"></div>
+        <div class="signal-empty hidden" id="pnl-curve-empty">暂无收益数据，服务器运行后将自动采集资产快照</div>
+      </div>
+      <div class="card pnl-chart-card">
+        <h3 class="pnl-chart-title">收益日历</h3>
+        <div class="pnl-cal-container" id="pnl-calendar-chart"></div>
+        <div class="signal-empty hidden" id="pnl-calendar-empty">暂无收益数据，服务器运行后将自动采集资产快照</div>
       </div>
     </section>
 
@@ -195,8 +433,193 @@
     <p class="footer-text">QMT Live Assistant &copy; 2026</p>
   </footer>
 
+  <!-- 策略编辑模态框 -->
+  <div id="strategy-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+	        <h3 class="modal-title" id="strategy-modal-title">添加策略</h3>
+          <button class="modal-close" type="button" id="btn-strategy-modal-close" title="关闭">&times;</button>
+	      </div>
+      <form id="strategy-form" novalidate>
+        <input type="hidden" id="strategy-edit-id">
+        <div class="modal-form-body">
+        <div class="form-group">
+          <label class="form-label required-label" for="strategy-name">策略名称</label>
+          <input class="form-input" type="text" id="strategy-name" placeholder="例如：动量策略v1" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="strategy-desc">策略描述</label>
+          <input class="form-input" type="text" id="strategy-desc" placeholder="可选描述">
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="strategy-security-type">策略种类</label>
+          <select class="form-input" id="strategy-security-type" required>
+            <option value="stock" selected>股票</option>
+            <option value="convertible_bond">可转债</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="strategy-funds">分配金额 (元)</label>
+          <input class="form-input" type="number" id="strategy-funds" placeholder="例如：50000" min="0" step="0.01" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="strategy-funds-policy">策略可用资金不足时</label>
+          <select class="form-input" id="strategy-funds-policy">
+            <option value="reject">放弃本次下单（默认）</option>
+            <option value="max_buyable">按最大可买数量下单</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="strategy-market-price-type">市价单下单方式
+            <span id="market-price-type-help" class="help-icon hidden"
+                  data-tooltip="QMT限制，可转债只能用最新价下单">?</span>
+          </label>
+          <select class="form-input" id="strategy-market-price-type">
+            <option value="5">最新价</option>
+            <option value="44">对手方最优</option>
+            <option value="45">本方最优</option>
+          </select>
+        </div>
+        <div class="form-group" id="strategy-positions-group" style="display:none;">
+          <label class="form-label">添加持仓（可选）</label>
+          <div class="position-assign-hint">选择账户现有持仓并分配数量到该策略</div>
+          <div id="strategy-positions-loading" class="position-assign-loading">加载账户持仓中…</div>
+          <div id="strategy-positions-empty" class="position-assign-empty" style="display:none;">当前账户无持仓</div>
+          <div class="position-assign-table-wrapper" id="strategy-positions-table-wrapper" style="display:none;">
+            <table class="position-assign-table">
+              <thead>
+                <tr>
+                  <th>股票</th>
+                  <th>可用数量</th>
+                  <th>分配数量</th>
+                </tr>
+              </thead>
+              <tbody id="strategy-positions-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="form-group form-checkbox">
+          <label class="form-label">
+            <input type="checkbox" id="strategy-defer-buy"> 资金不足时挂起等待卖出成交（调仓场景）
+          </label>
+        </div>
+        <div class="form-group form-checkbox">
+          <label class="form-label">
+            <input type="checkbox" id="strategy-bark-notify" checked> 开启订单消息推送（Bark）
+          </label>
+        </div>
+        </div>
+        <div id="strategy-token-result" class="connection-result success hidden" style="margin-bottom:var(--spacing-base);"></div>
+        <div class="btn-group">
+          <button class="btn btn-primary" type="submit" id="btn-strategy-submit">保存</button>
+          <button class="btn btn-secondary" type="button" id="btn-strategy-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 重发订单模态框 -->
+  <div id="resend-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title">重发订单</h3>
+        <button class="modal-close" type="button" id="btn-resend-modal-close" title="关闭">&times;</button>
+      </div>
+      <form id="resend-form" novalidate>
+        <input type="hidden" id="resend-order-id">
+        <div class="form-group">
+          <label class="form-label">股票</label>
+          <input class="form-input" type="text" id="resend-stock" disabled>
+        </div>
+        <div class="form-group">
+          <label class="form-label">方向</label>
+          <input class="form-input" type="text" id="resend-direction" disabled>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="resend-quantity">数量</label>
+          <input class="form-input" type="number" id="resend-quantity" min="1" step="100" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="resend-price-type">价格类型</label>
+          <select class="form-input" id="resend-price-type">
+            <option value="5">市价单（最新价）</option>
+            <option value="11">限价单</option>
+            <option value="44">市价单（对手方最优）</option>
+            <option value="45">市价单（我方最优）</option>
+          </select>
+        </div>
+        <div class="form-group" id="resend-price-group" style="display:none;">
+          <label class="form-label required-label" for="resend-price">价格</label>
+          <input class="form-input" type="number" id="resend-price" min="0" step="0.01">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" type="submit" id="btn-resend-submit">确认重发</button>
+          <button class="btn btn-secondary" type="button" id="btn-resend-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 手动下单模态框（买入/卖出共用） -->
+  <div id="order-modal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="order-modal-title">买入</h3>
+        <button class="modal-close" type="button" id="btn-order-modal-close" title="关闭">&times;</button>
+      </div>
+      <form id="order-form" novalidate>
+        <div class="form-group" id="order-stock-input-group">
+          <label class="form-label required-label" for="order-stock-code">股票代码</label>
+          <input class="form-input" type="text" id="order-stock-code" placeholder="000001.SZ 或 000001.XSHE">
+        </div>
+        <div class="form-group" id="order-stock-select-group" style="display:none;">
+          <label class="form-label required-label" for="order-stock-select">股票</label>
+          <select class="form-input" id="order-stock-select"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="order-quantity">数量</label>
+          <input class="form-input" type="number" id="order-quantity" min="100" step="100">
+          <div class="order-form-hint" id="order-quantity-hint" style="display:none;"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label required-label" for="order-price-type">价格类型</label>
+          <select class="form-input" id="order-price-type">
+            <option value="5">市价单（最新价）</option>
+            <option value="11">限价单</option>
+            <option value="44">市价单（对手方最优）</option>
+            <option value="45">市价单（我方最优）</option>
+          </select>
+        </div>
+        <div class="form-group" id="order-price-group" style="display:none;">
+          <label class="form-label required-label" for="order-price">价格</label>
+          <input class="form-input" type="number" id="order-price" min="0" step="0.01">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" type="submit" id="btn-order-submit">确认</button>
+          <button class="btn btn-secondary" type="button" id="btn-order-cancel">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 全局确认弹窗 -->
+  <div id="confirm-modal" class="modal-overlay" style="display:none;">
+    <div class="modal confirm-modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="confirm-title">确认</h3>
+        <button class="modal-close" id="btn-confirm-close" type="button" title="关闭">&times;</button>
+      </div>
+      <div class="confirm-body" id="confirm-message"></div>
+      <div class="btn-group confirm-actions">
+        <button class="btn btn-secondary" type="button" id="btn-confirm-cancel">取消</button>
+        <button class="btn btn-primary" type="button" id="btn-confirm-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast-container"></div>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script type="module" src="/static/js/app.js"></script>
+  <script src="./static/vendor/marked.min.js"></script>
+  <script src="./static/vendor/echarts.min.js"></script>
+  <script type="module" src="./static/js/app.js"></script>
 </body>
 </html>

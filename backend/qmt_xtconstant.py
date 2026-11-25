@@ -1,8 +1,10 @@
 #coding=utf-8
 
 
-"""
-常量定义模块
+"""QMT xtconstant 数值常量映射。
+
+定义账号类型、委托类型、报价类型、市场类型、委托状态、账号状态等
+与 xtquant SDK 对应的数值常量，供交易相关模块复用。
 """
 
 
@@ -131,6 +133,18 @@ MARKET_SZ_INSTBUSI_RESTCANCEL = 46
 MARKET_SZ_CONVERT_5_CANCEL = 47
 # 全额成交或撤销委托[深交所][股票][期权]
 MARKET_SZ_FULL_OR_CANCEL = 48
+
+PRICE_TYPE_SET = {
+    LATEST_PRICE,
+    FIX_PRICE,
+    MARKET_SH_CONVERT_5_CANCEL,
+    MARKET_SH_CONVERT_5_LIMIT,
+    MARKET_PEER_PRICE_FIRST,
+    MARKET_MINE_PRICE_FIRST,
+    MARKET_SZ_INSTBUSI_RESTCANCEL,
+    MARKET_SZ_CONVERT_5_CANCEL,
+    MARKET_SZ_FULL_OR_CANCEL,
+}
 
 
 """
